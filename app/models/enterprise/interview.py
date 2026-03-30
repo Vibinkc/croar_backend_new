@@ -9,7 +9,7 @@ from .candidate import CandidateApplication
 from .user_role import EnterpriseUser
 
 # Enums
-INTERVIEW_TYPE = ENUM('HR', 'TECHNICAL', 'VIDEO', 'LIVE', name='interview_type', create_type=False)
+INTERVIEW_TYPE = ENUM('HR', 'TECHNICAL', 'VIDEO', 'LIVE', name='interview_type', create_type=True)
 
 class Interview(EnterpriseBase):
     __tablename__ = "interviews"
