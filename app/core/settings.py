@@ -51,6 +51,9 @@ class Settings(BaseSettings):
 
     # Frontend URL
     frontend_url: str = Field("http://localhost:3000", validation_alias="FRONTEND_URL")
+    
+    # CORS Settings
+    cors_origins: list[str] = Field(["http://localhost:3000", "http://3.94.202.48:3000"], validation_alias="CORS_ORIGINS")
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
