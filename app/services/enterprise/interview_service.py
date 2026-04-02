@@ -234,7 +234,7 @@ async def schedule_candidate_interview(db: AsyncSession, application: CandidateA
             recruiter_email = agent_found.email
             
     if automation.interview_type == "AI":
-        base_url = getattr(_settings, "frontend_url", "http://localhost:3000")
+        base_url = _settings.frontend_url
         meet_link = f"{base_url}/interview/ai/{application.id}"
     elif automation.google_meet_link:
         meet_link = automation.google_meet_link
