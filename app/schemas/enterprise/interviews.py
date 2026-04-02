@@ -41,6 +41,7 @@ class InterviewAutomationBase(BaseModel):
     
     start_time: str = "09:00"
     end_time: str = "17:00"
+    duration: int = 30
     daily_limit: int = 5
     
     email_template_id: UUID | None = None
@@ -71,6 +72,7 @@ class InterviewAutomationUpdate(BaseModel):
     
     start_time: str | None = None
     end_time: str | None = None
+    duration: int | None = None
     daily_limit: int | None = None
     
     email_template_id: UUID | None = None
