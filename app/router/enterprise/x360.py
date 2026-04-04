@@ -340,8 +340,7 @@ async def get_assessment_details(
 async def submit_assessment(
     assignment_id: UUID,
     request: X360AssessmentSubmit,
-    db: DBSessionDep,
-    current_agent: Optional[HiringAgent] = Depends(get_current_agent) # Optional for portal
+    db: DBSessionDep
 ):
     assign_stmt = select(X360AssessmentAssignment).where(X360AssessmentAssignment.id == assignment_id)
     res = await db.execute(assign_stmt)
