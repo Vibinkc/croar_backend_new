@@ -38,8 +38,12 @@ async def create_question(
     db: DBSessionDep,
     current_agent: HiringAgent = Depends(get_current_agent)
 ):
-    # Determine company_id from agent or context
-    # Assuming current_agent has company_id (based on model check)
+    if not current_agent.company_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your user account is not associated with a company. Please contact support."
+        )
+        
     new_q = X360Question(**request.model_dump(), company_id=current_agent.company_id)
     db.add(new_q)
     await db.commit()
