@@ -1,5 +1,5 @@
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     
     # CORS Settings
     cors_origins: list[str] = Field(["http://localhost:3000", "http://3.94.202.48", "http://3.94.202.48:3000"], validation_alias="CORS_ORIGINS")
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        elif isinstance(v, str) and v.startswith("["):
+            import json
+            return json.loads(v)
+        return v
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy import select, func, update
 from sqlalchemy.orm import selectinload
 from typing import List
@@ -152,6 +152,7 @@ async def list_templates(
 async def launch_survey(
     request: SurveyInstanceCreate,
     db: DBSessionDep,
+    background_tasks: BackgroundTasks,
     current_agent: HiringAgent = Depends(get_current_agent)
 ):
     new_instance = SurveyInstanceModel(
@@ -186,11 +187,17 @@ async def launch_survey(
     
     
     await db.commit()
+    
+    # Notify in background
+    background_tasks.add_task(survey_service.notify_participants, db, new_instance.id)
 
-    # Automatically notify participants
-    await survey_service.notify_participants(db, new_instance.id)
-
-    return new_instance
+    # Reload with relationships
+    stmt = select(SurveyInstanceModel).where(SurveyInstanceModel.id == new_instance.id).options(
+        selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.survey_type),
+        selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.questions)
+    )
+    res = await db.execute(stmt)
+    return res.scalar_one()
 
 @router.get("/invites", response_model=List[SurveyInviteFull])
 async def list_my_invites(
