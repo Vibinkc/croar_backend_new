@@ -422,10 +422,35 @@ async def get_portal_assessment_details(
     tpl_res = await db.execute(tpl_stmt)
     template = tpl_res.scalar_one_or_none()
     
-    return {
-        "assignment": assignment,
-        "template": template
-    }
+@router.post("/portal/assessments/{assignment_id}/submit")
+async def portal_submit_assessment(
+    assignment_id: UUID,
+    request: X360AssessmentSubmit,
+    db: DBSessionDep,
+):
+    """
+    Publicly accessible endpoint for portal raters to submit feedback.
+    """
+    assign_stmt = select(X360AssessmentAssignment).where(X360AssessmentAssignment.id == assignment_id)
+    res = await db.execute(assign_stmt)
+    assignment = res.scalar_one_or_none()
+    
+    if not assignment or assignment.status == AssignmentStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Assignment already completed or not found")
+
+    for resp_data in request.responses:
+        resp = X360AssessmentResponse(
+            assignment_id=assignment_id,
+            question_id=resp_data.question_id,
+            answer_value=resp_data.answer_value,
+            answer_text=resp_data.answer_text
+        )
+        db.add(resp)
+    
+    assignment.status = AssignmentStatus.COMPLETED
+    assignment.completed_at = datetime.now()
+    await db.commit()
+    return {"status": "success"}
 
 # Reports
 @router.get("/reports/{employee_id}/{cycle_id}", response_model=X360Report)
