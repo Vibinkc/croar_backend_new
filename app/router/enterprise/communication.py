@@ -67,7 +67,8 @@ async def get_communication_context(
 
 def wrap_with_layout(body: str, company_name: str, logo_url: Optional[str] = None) -> str:
     """Wraps email body in a standard branded HTML layout."""
-    logo_html = f'<img src="{logo_url}" alt="{company_name}" style="max-height: 50px; margin-bottom: 20px;">' if logo_url else f'<h2 style="color: #4f46e5; margin-bottom: 20px;">{company_name}</h2>'
+    actual_logo = logo_url or _settings.default_logo_url
+    logo_html = f'<img src="{actual_logo}" alt="{company_name}" style="max-height: 50px; margin-bottom: 20px;">' if actual_logo else f'<h2 style="color: #4f46e5; margin-bottom: 20px;">{company_name}</h2>'
     
     return f"""
     <!DOCTYPE html>
@@ -98,9 +99,11 @@ def wrap_with_layout(body: str, company_name: str, logo_url: Optional[str] = Non
     </html>
     """
 
-def send_smtp_email(to_email: str, subject: str, body: str, company_name: str = "Croar", logo_url: Optional[str] = None) -> tuple[bool, str]:
+def send_smtp_email(to_email: str, subject: str, body: str, company_name: Optional[str] = None, logo_url: Optional[str] = None) -> tuple[bool, str]:
     try:
-        branded_body = wrap_with_layout(body, company_name, logo_url)
+        actual_company = company_name or _settings.app_name
+        actual_logo = logo_url or _settings.default_logo_url
+        branded_body = wrap_with_layout(body, actual_company, actual_logo)
         msg = MIMEMultipart()
         msg['From'] = _settings.mailer_sender_email
         msg['To'] = to_email

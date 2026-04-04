@@ -5,9 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # App Settings
-    app_name: str = "Croar"
+    app_name: str = Field("Croar", validation_alias="APP_NAME")
     debug: bool = False
     app_env: str = "development"
+    default_logo_url: str = Field("https://croar-app.com/logo.png", validation_alias="DEFAULT_LOGO_URL")
 
     # Database Settings
     db_name: str = Field(..., validation_alias="DB_NAME")

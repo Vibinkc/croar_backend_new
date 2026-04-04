@@ -185,15 +185,16 @@ async def initiate_onboarding_process(
         onboarding_url = f"{frontend_url}/onboarding/{onboarding.id}"
 
         # Default content
+        # Note: onboarding_url placeholder is replaced by _prepare_onboarding_email
         subject = "Welcome! Your Onboarding Process has Started"
         body = f"""
         <html>
             <body>
                 <h2>Welcome to the Team!</h2>
-                <p>Hello {candidate.full_name},</p>
+                <p>Hello {{{{candidate_name}}}},</p>
                 <p>We are excited to start your onboarding process. Please click the link below to complete your profile and upload necessary documents:</p>
-                <p><a href="{onboarding_url}" style="padding: 10px 20px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 8px;">Complete Onboarding</a></p>
-                <p>Or copy and paste this link: {{onboarding_url}}</p>
+                <p><a href="{{{{onboarding_url}}}}" style="padding: 10px 20px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 8px;">Complete Onboarding</a></p>
+                <p>Or copy and paste this link: {{{{onboarding_url}}}}</p>
                 <p>Best regards,<br>HR Team</p>
             </body>
         </html>
