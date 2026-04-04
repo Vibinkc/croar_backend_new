@@ -340,7 +340,7 @@ async def get_assessment_details(
 async def submit_assessment(
     assignment_id: UUID,
     request: X360AssessmentSubmit,
-    db: DBSessionDep
+    db: DBSessionDep,
 ):
     assign_stmt = select(X360AssessmentAssignment).where(X360AssessmentAssignment.id == assignment_id)
     res = await db.execute(assign_stmt)
