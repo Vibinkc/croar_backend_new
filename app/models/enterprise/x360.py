@@ -21,6 +21,10 @@ class QuestionCategory(str, enum.Enum):
     COMMUNICATION = "COMMUNICATION"
     TEAMWORK = "TEAMWORK"
     ADAPTABILITY = "ADAPTABILITY"
+    CULTURE = "CULTURE"
+    STRATEGY = "STRATEGY"
+    INNOVATION = "INNOVATION"
+    PROBLEM_SOLVING = "PROBLEM_SOLVING"
 
 class RelationType(str, enum.Enum):
     SELF = "SELF"

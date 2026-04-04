@@ -60,7 +60,7 @@ async def generate_questions_ai(
     request: X360AIGenerateRequest,
     current_agent: HiringAgent = Depends(get_current_agent)
 ):
-    categories_str = ", ".join([c.value for c in request.categories])
+    categories_str = ", ".join(request.categories)
     if request.custom_category:
         categories_str += f", {request.custom_category}"
         

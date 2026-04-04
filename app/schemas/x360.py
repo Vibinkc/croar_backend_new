@@ -31,15 +31,15 @@ class X360Question(X360QuestionBase):
 
 # AI Generation
 class X360AIGenerateRequest(BaseModel):
-    categories: List[QuestionCategory]
+    categories: List[str]
     count: int = 5
     additional_context: Optional[str] = None
     custom_category: Optional[str] = None
 
 class X360AIGeneratedQuestion(BaseModel):
     text: str
-    type: QuestionType = QuestionType.RATING
-    category: QuestionCategory
+    type: str = "RATING"
+    category: str
 class X360TemplateQuestionBase(BaseModel):
     question_id: UUID
     order: int = 0
