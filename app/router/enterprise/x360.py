@@ -422,6 +422,11 @@ async def get_portal_assessment_details(
     tpl_res = await db.execute(tpl_stmt)
     template = tpl_res.scalar_one_or_none()
     
+    return {
+        "assignment": assignment,
+        "template": template
+    }
+
 @router.post("/portal/assessments/{assignment_id}/submit")
 async def portal_submit_assessment(
     assignment_id: UUID,
