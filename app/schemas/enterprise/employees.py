@@ -113,10 +113,18 @@ class EmployeeUpdate(BaseModel):
     skills: Optional[List[str]] = None
     documents: Optional[List[Dict[str, Any]]] = None
 
+    @field_validator('*', mode='before')
+    @classmethod
+    def empty_string_to_none(cls, v: Any) -> Any:
+        if v == "":
+            return None
+        return v
+
 class EmployeeOut(EmployeeBase):
     id: UUID
     company_id: UUID
     candidate_id: Optional[UUID] = None
+    department: Optional[DepartmentOut] = None
     created_at: datetime
     updated_at: datetime
 
