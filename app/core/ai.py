@@ -289,7 +289,9 @@ async def generate_interview_questions(
     """
     prompt = f"""You are an elite technical interviewer. Generate {count} high-quality interview questions for the topic: {topic}.
 
-Difficulty Level: {difficulty}
+**STRICT REQUIREMENT:** The Difficulty Level of the questions MUST strictly be: {difficulty}. 
+Adjust the technical depth, complexity, and expected knowledge strictly in alignment with a '{difficulty}' level candidate. Beginner questions should be fundamental, while Expert questions should explore deep systemic knowledge, edge cases, and complex architecture.
+
 Context: {context}
 
 Requirements for the questions:
