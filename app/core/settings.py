@@ -54,19 +54,20 @@ class Settings(BaseSettings):
     frontend_url: str = Field("http://localhost:3000", validation_alias="FRONTEND_URL")
     
     # CORS Settings
-    cors_origins: str | list[str] = Field(["http://localhost:3000", "http://3.94.202.48", "http://3.94.202.48:3000", "https://app.croar.co", "https://api.croar.co"], validation_alias="CORS_ORIGINS")
+    cors_origins: str = Field("http://localhost:3000,http://3.94.202.48,http://3.94.202.48:3000,https://app.croar.co,https://api.croar.co", validation_alias="CORS_ORIGINS")
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def assemble_cors_origins(cls, v: str | list[str]) -> list[str]:
-        if isinstance(v, str):
-            if v == "*":
-                return ["*"]
-            if not v.startswith("["):
-                return [i.strip() for i in v.split(",")]
+    @property
+    def parsed_cors_origins(self) -> list[str]:
+        v = self.cors_origins
+        if v == "*":
+            return ["*"]
+        if v.startswith("["):
             import json
-            return json.loads(v)
-        return v
+            try:
+                return json.loads(v)
+            except Exception:
+                pass
+        return [i.strip() for i in v.split(",") if i.strip()]
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
