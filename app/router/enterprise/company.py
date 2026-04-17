@@ -7,52 +7,58 @@ from sqlalchemy import func, select
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.company import Company
 from app.models.shared.constants import ModuleScope, PermissionAction
+from app.models.shared.super_admin import SuperAdmin
 from app.schemas.enterprise.company import CompanyCreate, CompanyResponse, CompanyUpdate
 
 router = APIRouter(prefix="/company", tags=["Enterprise Company"])
-
-# Removed get_enterprise_agent helper as it's redundant with get_current_user
 
 
 @router.get("/stats")
 async def get_global_stats(
     session: DBSessionDep,
     current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
-):
+) -> dict:
     """Get global consultancy stats for the dashboard."""
     from sqlalchemy import or_
 
     from app.models.enterprise.job import JobRequirement
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company = getattr(current_user, "company", None)
+    is_consultancy = getattr(company, "is_consultancy", False) if company else False
 
-    # Base filter: either the company itself or its partners
-    company_filter = Company.id == current_user.company_id
-    job_filter = JobRequirement.company_id == current_user.company_id
+    # Base filter
+    company_filter = Company.deleted_at.is_(None)
+    job_filter = JobRequirement.deleted_at.is_(None)
 
-    if is_consultancy:
-        company_filter = or_(
-            Company.id == current_user.company_id, Company.parent_id == current_user.company_id
-        )
-        # Fetch all partner IDs
-        partner_stmt = select(Company.id).where(
-            Company.parent_id == current_user.company_id, Company.deleted_at.is_(None)
-        )
-        partner_ids = (await session.execute(partner_stmt)).scalars().all()
-        job_filter = or_(
-            JobRequirement.company_id == current_user.company_id, JobRequirement.company_id.in_(partner_ids)
-        )
+    if not is_super_admin:
+        if is_consultancy:
+            company_filter = or_(
+                Company.id == current_user.company_id, Company.parent_id == current_user.company_id
+            )
+            # Fetch all partner IDs
+            partner_stmt = select(Company.id).where(
+                Company.parent_id == current_user.company_id, Company.deleted_at.is_(None)
+            )
+            partner_ids = (await session.execute(partner_stmt)).scalars().all()
+            job_filter = or_(
+                JobRequirement.company_id == current_user.company_id,
+                JobRequirement.company_id.in_(partner_ids),
+            )
+        else:
+            company_filter = Company.id == current_user.company_id
+            job_filter = JobRequirement.company_id == current_user.company_id
 
     # Total Managed Companies
-    comp_stmt = select(func.count(Company.id)).where(company_filter, Company.deleted_at.is_(None))
+    comp_stmt = select(func.count(Company.id)).where(company_filter)
     total_companies = (await session.execute(comp_stmt)).scalar() or 0
 
     # Total Active Jobs
-    jobs_stmt = select(func.count(JobRequirement.id)).where(job_filter, JobRequirement.deleted_at.is_(None))
+    jobs_stmt = select(func.count(JobRequirement.id)).where(job_filter)
     total_jobs = (await session.execute(jobs_stmt)).scalar() or 0
 
     return {
-        "total_companies": total_companies if is_consultancy else 1,
+        "total_companies": total_companies if (is_consultancy or is_super_admin) else 1,
         "total_jobs": total_jobs,
         "active_nodes": total_companies,
     }
@@ -62,21 +68,24 @@ async def get_global_stats(
 async def list_companies(
     session: DBSessionDep,
     current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
-):
+) -> list[CompanyResponse]:
     """List companies (restricted to current user's organization or partners)."""
     from sqlalchemy import or_
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company = getattr(current_user, "company", None)
+    is_consultancy = getattr(company, "is_consultancy", False) if company else False
 
     stmt = select(Company).where(Company.deleted_at.is_(None))
 
-    if is_consultancy:
-        # Show both the consultancy itself and its partners
-        stmt = stmt.where(
-            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
-        )
-    else:
-        stmt = stmt.where(Company.id == current_user.company_id)
+    if not is_super_admin:
+        if is_consultancy:
+            # Show both the consultancy itself and its partners
+            stmt = stmt.where(
+                or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+            )
+        else:
+            stmt = stmt.where(Company.id == current_user.company_id)
 
     result = await session.execute(stmt)
     companies = result.scalars().all()
@@ -90,7 +99,7 @@ async def create_company(
         Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.create))
     ],
     company_data: CompanyCreate,
-):
+) -> CompanyResponse:
     """Create a new company to be managed by this tenant (Consultancy Partner)."""
     import re
 
@@ -98,10 +107,19 @@ async def create_company(
     slug = re.sub(r"[^a-zA-Z0-9]", "-", company_data.name.lower())
     slug = re.sub(r"-+", "-", slug).strip("-")
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
-    parent_id = current_user.company_id if is_consultancy else None
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company = getattr(current_user, "company", None)
+    is_consultancy = getattr(company, "is_consultancy", False) if company else False
 
-    new_company = Company(slug=slug, parent_id=parent_id, **company_data.model_dump(exclude={"parent_id"}))
+    # For super admin, we take parent_id from data if provided
+    # For consultancy, we force parent_id to current_user.company_id
+    parent_id = (
+        company_data.parent_id if is_super_admin else (current_user.company_id if is_consultancy else None)
+    )
+
+    new_company = Company(
+        slug=slug, parent_id=parent_id, **company_data.model_dump(exclude={"parent_id", "slug"})
+    )
     session.add(new_company)
     await session.commit()
     await session.refresh(new_company)
@@ -113,28 +131,31 @@ async def get_company(
     company_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
-):
+) -> CompanyResponse:
     """Get a specific company profile."""
     from sqlalchemy import or_
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company = getattr(current_user, "company", None)
+    is_consultancy = getattr(company, "is_consultancy", False) if company else False
 
-    stmt = select(Company).where(Company.id == company_id, Company.deleted_at == None)
+    stmt = select(Company).where(Company.id == company_id, Company.deleted_at.is_(None))
 
-    if is_consultancy:
-        stmt = stmt.where(
-            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
-        )
-    else:
-        stmt = stmt.where(Company.id == current_user.company_id)
+    if not is_super_admin:
+        if is_consultancy:
+            stmt = stmt.where(
+                or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+            )
+        else:
+            stmt = stmt.where(Company.id == current_user.company_id)
 
     result = await session.execute(stmt)
-    company = result.scalar_one_or_none()
+    company_res = result.scalar_one_or_none()
 
-    if not company:
+    if not company_res:
         raise HTTPException(status_code=404, detail="Company not found.")
 
-    return company
+    return company_res
 
 
 @router.patch("/{company_id}", response_model=CompanyResponse)
@@ -144,20 +165,24 @@ async def update_company(
     current_user: Annotated[
         Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
     ],
-    update_data: CompanyUpdate = Body(...),
-):
+    update_data: Annotated[CompanyUpdate, Body(...)],
+) -> CompanyResponse:
+    """Update a specific company profile."""
     from sqlalchemy import or_
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company_context = getattr(current_user, "company", None)
+    is_consultancy = getattr(company_context, "is_consultancy", False) if company_context else False
 
-    stmt = select(Company).where(Company.id == company_id, Company.deleted_at == None)
+    stmt = select(Company).where(Company.id == company_id, Company.deleted_at.is_(None))
 
-    if is_consultancy:
-        stmt = stmt.where(
-            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
-        )
-    else:
-        stmt = stmt.where(Company.id == current_user.company_id)
+    if not is_super_admin:
+        if is_consultancy:
+            stmt = stmt.where(
+                or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+            )
+        else:
+            stmt = stmt.where(Company.id == current_user.company_id)
 
     result = await session.execute(stmt)
     company = result.scalar_one_or_none()
@@ -181,20 +206,25 @@ async def delete_company(
     current_user: Annotated[
         Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.delete))
     ],
-):
+) -> dict:
     """Soft delete a company."""
+    from datetime import datetime
+
     from sqlalchemy import or_
 
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    is_super_admin = isinstance(current_user, SuperAdmin)
+    company_context = getattr(current_user, "company", None)
+    is_consultancy = getattr(company_context, "is_consultancy", False) if company_context else False
 
-    stmt = select(Company).where(Company.id == company_id, Company.deleted_at == None)
+    stmt = select(Company).where(Company.id == company_id, Company.deleted_at.is_(None))
 
-    if is_consultancy:
-        stmt = stmt.where(
-            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
-        )
-    else:
-        stmt = stmt.where(Company.id == current_user.company_id)
+    if not is_super_admin:
+        if is_consultancy:
+            stmt = stmt.where(
+                or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+            )
+        else:
+            stmt = stmt.where(Company.id == current_user.company_id)
 
     result = await session.execute(stmt)
     company = result.scalar_one_or_none()
@@ -212,25 +242,16 @@ async def get_company_analytics(
     company_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
-):
+) -> dict:
     """Get hiring analytics for a specific company."""
-    is_consultancy = getattr(current_user.company, "is_consultancy", False)
-    
     if company_id != current_user.company_id:
-        if is_consultancy:
-            # Check if this company is a partner
-            stmt = select(Company.id).where(Company.id == company_id, Company.parent_id == current_user.company_id)
-            is_partner = (await session.execute(stmt)).scalar()
-            if not is_partner:
-                raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
-        else:
-            raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
+        raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
     from app.models.enterprise.candidate import CandidateApplication
     from app.models.enterprise.job import JobRequirement
 
     # Active Jobs
     jobs_stmt = select(JobRequirement).where(
-        JobRequirement.company_id == company_id, JobRequirement.deleted_at == None
+        JobRequirement.company_id == company_id, JobRequirement.deleted_at.is_(None)
     )
     jobs = (await session.execute(jobs_stmt)).scalars().all()
     jobs_count = len(jobs)
