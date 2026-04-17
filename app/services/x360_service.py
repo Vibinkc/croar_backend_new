@@ -231,7 +231,7 @@ class X360Service:
         for ass in assignments:
             rel = ass.relation
             for resp in ass.responses:
-                cat = resp.question.category.value
+                cat = resp.question.category
                 if resp.question.type == QuestionType.RATING and resp.answer_value:
                     if cat not in category_scores:
                         category_scores[cat] = {}
