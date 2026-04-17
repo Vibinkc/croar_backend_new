@@ -362,7 +362,7 @@ async def _send_assessment_email_logic(
 
     # Internal test link
     # In production, use the actual frontend domain
-    test_link = f"http://localhost:3000/assessment/take/{source_id}"
+    test_link = f"{_settings.frontend_url}/assessment/take/{source_id}"
 
     # Clean up test type string (remove Enum class name if present)
     clean_type = str(test_type).split(".")[-1].replace("_", " ").title()
