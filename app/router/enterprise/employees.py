@@ -1,134 +1,212 @@
-from typing import Annotated, List, Optional
-from uuid import UUID
 from datetime import datetime
+from typing import Annotated, Any
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select, update, delete
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.core.dependencies import DBSessionDep, get_current_agent
-from app.models.enterprise.user_role import EnterpriseUser as HiringAgent
-from app.models.enterprise.employee import Employee, Department
+from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.models.enterprise.employee import Department, Employee
+from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.employees import (
-    EmployeeOut, EmployeeCreate, EmployeeUpdate,
-    DepartmentOut, DepartmentCreate, DepartmentUpdate
+    DepartmentCreate,
+    DepartmentOut,
+    EmployeeCreate,
+    EmployeeOut,
+    EmployeeUpdate,
 )
 from app.services.enterprise.employee_service import employee_service
 
 router = APIRouter(prefix="/employees", tags=["Enterprise Employees"])
+
 
 # Department CRUD
 @router.post("/departments", response_model=DepartmentOut, status_code=201)
 async def create_department(
     request: DepartmentCreate,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.create))
+    ],
 ):
-    department = Department(**request.model_dump())
+    # Check for duplicate name in the same company
+    existing_stmt = select(Department).where(
+        Department.name == request.name, Department.company_id == current_user.company_id
+    )
+    existing = await session.execute(existing_stmt)
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Department with name '{request.name}' already exists.",
+        )
+
+    data = request.model_dump()
+    data["company_id"] = current_user.company_id
+    department = Department(**data)
     session.add(department)
     await session.commit()
     await session.refresh(department)
     return department
 
-@router.get("/departments", response_model=List[DepartmentOut])
+
+@router.get("/departments", response_model=list[DepartmentOut])
 async def list_departments(
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
 ):
-    stmt = select(Department).where(Department.company_id != None) # Simple filter for now
+    stmt = select(Department).where(Department.company_id == current_user.company_id)
     result = await session.execute(stmt)
     return result.scalars().all()
+
 
 # Employee CRUD
 @router.post("/", response_model=EmployeeOut, status_code=201)
 async def create_employee(
     request: EmployeeCreate,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.create))],
 ):
-    employee = Employee(**request.model_dump())
+    # Check for duplicate email (Global uniqueness as per schema)
+    email_stmt = select(Employee).where(Employee.email == request.email)
+    existing_email = await session.execute(email_stmt)
+    if existing_email.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Employee with email '{request.email}' already exists.",
+        )
+
+    # Check for duplicate employee_id (Global uniqueness as per schema)
+    id_stmt = select(Employee).where(Employee.employee_id == request.employee_id)
+    existing_id = await session.execute(id_stmt)
+    if existing_id.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Employee with ID '{request.employee_id}' already exists.",
+        )
+
+    data = request.model_dump()
+    data["company_id"] = current_user.company_id
+    employee = Employee(**data)
     session.add(employee)
     await session.commit()
-    await session.refresh(employee)
-    return employee
 
-@router.get("/", response_model=List[EmployeeOut])
+    # Eager load relationships for the response model to avoid MissingGreenlet
+    stmt = (
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
+        .where(Employee.id == employee.id)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
+
+@router.get("/", response_model=list[EmployeeOut])
 async def list_employees(
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
 ):
-    stmt = select(Employee).options(
-        selectinload(Employee.department),
-        selectinload(Employee.reporting_to)
-    ).where(Employee.deleted_at == None)
-    
+    stmt = (
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
+        .where(Employee.company_id == current_user.company_id, Employee.deleted_at == None)
+    )
+
     result = await session.execute(stmt)
     return result.scalars().all()
+
 
 @router.get("/{id}", response_model=EmployeeOut)
 async def get_employee(
     id: UUID,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
 ):
-    stmt = select(Employee).options(
-        selectinload(Employee.department),
-        selectinload(Employee.reporting_to)
-    ).where(Employee.id == id, Employee.deleted_at == None)
-    
+    stmt = (
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
+        .where(Employee.id == id, Employee.company_id == current_user.company_id, Employee.deleted_at == None)
+    )
+
     result = await session.execute(stmt)
     employee = result.scalar_one_or_none()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
     return employee
 
+
 @router.patch("/{id}", response_model=EmployeeOut)
 async def update_employee(
     id: UUID,
     request: EmployeeUpdate,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.update))],
 ):
-    employee = await session.get(Employee, id)
-    if not employee or employee.deleted_at:
+    stmt = select(Employee).where(
+        Employee.id == id, Employee.company_id == current_user.company_id, Employee.deleted_at == None
+    )
+    res = await session.execute(stmt)
+    employee = res.scalar_one_or_none()
+    if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    
+
     update_data = request.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(employee, key, value)
-    
+
     employee.updated_at = datetime.now()
     await session.commit()
-    await session.refresh(employee)
-    return employee
+
+    # Eager load relationships for the response model
+    stmt = (
+        select(Employee)
+        .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
+        .where(Employee.id == employee.id)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one()
+
 
 @router.delete("/{id}", status_code=204)
 async def delete_employee(
     id: UUID,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.delete))],
 ):
-    employee = await session.get(Employee, id)
+    stmt = select(Employee).where(Employee.id == id, Employee.company_id == current_user.company_id)
+    res = await session.execute(stmt)
+    employee = res.scalar_one_or_none()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
-    
+
     employee.deleted_at = datetime.now()
     await session.commit()
     return
+
 
 # Conversion
 @router.post("/convert-candidate/{candidate_id}", response_model=EmployeeOut)
 async def convert_candidate(
     candidate_id: UUID,
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)]
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.moderate))
+    ],
 ):
     try:
-        agent_name = f"{current_agent.first_name} {current_agent.last_name or ''}".strip()
+        agent_name = f"{current_user.first_name} {current_user.last_name or ''}".strip()
         employee = await employee_service.convert_candidate_to_employee(session, candidate_id, agent_name)
         await session.commit()
-        await session.refresh(employee)
-        return employee
+
+        # Eager load relationships for the response model
+        stmt = (
+            select(Employee)
+            .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
+            .where(Employee.id == employee.id)
+        )
+        result = await session.execute(stmt)
+        return result.scalar_one()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}")

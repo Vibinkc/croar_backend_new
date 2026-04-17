@@ -12,14 +12,14 @@ from app.models.enterprise import (
     Company, JobRequirement, JobPosting, JobStatus, 
     Candidate, CandidateApplication, HiringAgent, 
     EmailTemplate, EmailLog, EnterpriseUser, 
-    Role as EnterpriseRole, Student, Interview, 
+    Student, Interview, 
     InterviewSchedule, InterviewAttempt,
     AssessmentAutomation, AssessmentAttempt,
     OnboardingAutomation, Onboarding,
     Employee, Department
 )
 from app.models.shared.super_admin import SuperAdmin
-from app.models.shared.global_role import GlobalRole
+from app.models.shared.auth import Role, Permission, role_permissions, user_roles
 from app.models.user import User as DefaultUser
 
 

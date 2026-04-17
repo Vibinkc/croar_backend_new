@@ -1,20 +1,18 @@
 import json
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Any
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from sqlalchemy.orm import selectinload, Session
 from sqlalchemy.orm.attributes import flag_modified
-from app.models.enterprise.interview import InterviewAttempt, InterviewSchedule, Interview
+
 from app.core.ai import analyze_text_with_llm
+from app.models.enterprise.interview import Interview, InterviewAttempt, InterviewSchedule
 
 logger = logging.getLogger(__name__)
 
-async def process_interview_turn(
-    db: AsyncSession,
-    attempt_id: str,
-    user_text: str
-) -> Dict[str, Any]:
+
+async def process_interview_turn(db: AsyncSession, attempt_id: str, user_text: str) -> dict[str, Any]:
     """
     Processes a single turn of the AI interview.
     Analyzes user response, updates transcript, and generates next question or completes.
@@ -29,7 +27,7 @@ async def process_interview_turn(
     stmt = select(InterviewSchedule).where(InterviewSchedule.id == attempt.schedule_id)
     result = await db.execute(stmt)
     schedule = result.scalar_one_or_none()
-    
+
     stmt = select(Interview).where(Interview.id == schedule.interview_id)
     result = await db.execute(stmt)
     template = result.scalar_one_or_none()
@@ -38,17 +36,19 @@ async def process_interview_turn(
         raise ValueError("Interview template not found")
 
     # 2. Get current state from transcript
-    transcript_data: Dict[str, Any] = attempt.transcript if attempt.transcript else {"history": [], "current_question_index": 0}
-    history: List[Dict[str, str]] = transcript_data.get("history", [])
+    transcript_data: dict[str, Any] = (
+        attempt.transcript if attempt.transcript else {"history": [], "current_question_index": 0}
+    )
+    history: list[dict[str, str]] = transcript_data.get("history", [])
     current_index: int = int(transcript_data.get("current_question_index", 0))
-    
-    plan_data: Dict[str, Any] = template.plan if template.plan else {}
-    questions: List[Dict[str, Any]] = plan_data.get("questions", [])
+
+    plan_data: dict[str, Any] = template.plan if template.plan else {}
+    questions: list[dict[str, Any]] = plan_data.get("questions", [])
 
     if current_index >= len(questions):
         return {"status": "FINISHED", "message": "Interview is already completed."}
 
-    current_q: Dict[str, Any] = questions[current_index] if current_index < len(questions) else {}
+    current_q: dict[str, Any] = questions[current_index] if current_index < len(questions) else {}
     email_verified = transcript_data.get("email_verified", False)
     candidate_email = transcript_data.get("candidate_email", "")
 
@@ -62,7 +62,7 @@ async def process_interview_turn(
     INTERVIEW CONTEXT:
     Topic: {template.topic}
     Difficulty: {template.difficulty}
-    Current Question: {current_q.get('question') if current_q else "All technical questions completed"}
+    Current Question: {current_q.get("question") if current_q else "All technical questions completed"}
     Candidate Email for Verification: {candidate_email}
     Email Verified: {email_verified}
     
@@ -99,10 +99,10 @@ async def process_interview_turn(
     try:
         ai_response_str = await analyze_text_with_llm(prompt)
         ai_decision = json.loads(ai_response_str)
-        
+
         action = ai_decision.get("action", "FOLLOW_UP")
         ai_text = ai_decision.get("ai_response", "Can you tell me more about that?")
-        
+
         # 5. Handle Actions
         if action == "NEXT_QUESTION":
             current_index += 1
@@ -112,40 +112,40 @@ async def process_interview_turn(
                     ai_text = f"Got it. {ai_text}. Before we conclude, could you please confirm your email address for our records?"
             else:
                 next_q = questions[current_index]
-                q_text = next_q.get('question', '')
+                q_text = next_q.get("question", "")
                 if q_text.lower() not in ai_text.lower():
                     ai_text = f"Got it. {ai_text}. Now, let's move to the next topic: {q_text}"
         elif action == "EMAIL_VERIFICATION" and not ai_decision.get("email_matched", False):
             # Keep asking if not matched or just started verification
             if "email" not in user_text.lower() and "@" not in user_text:
                 ai_text = "Before we wrap up, I just need you to confirm your email address for verification purposes."
-        
+
         if ai_decision.get("email_matched", False):
             action = "END"
             ai_text = "Thank you! Your email has been verified. That covers all my questions for today. We will get back to you soon."
 
         # Update history
         history.append({"role": "ai", "text": ai_text})
-        
+
         # Save state - Create a fresh dict to ensure SA detects change
         new_transcript = dict(transcript_data)
         new_transcript["history"] = history
         new_transcript["current_question_index"] = current_index
         new_transcript["email_verified"] = ai_decision.get("email_matched", False)
-        
+
         attempt.transcript = new_transcript
         flag_modified(attempt, "transcript")
-        
+
         if action == "END":
-            attempt.overall_score = 100 # Placeholder
-            
+            attempt.overall_score = 100  # Placeholder
+
         await db.commit()
-        
+
         return {
             "status": "INTERVIEWING" if action != "END" else "FINISHED",
             "ai_response": ai_text,
             "action": action,
-            "current_index": current_index
+            "current_index": current_index,
         }
 
     except Exception as e:
@@ -153,44 +153,48 @@ async def process_interview_turn(
         return {
             "status": "ERROR",
             "ai_response": "I'm sorry, I'm having trouble processing that. Could you please repeat it?",
-            "action": "FOLLOW_UP"
+            "action": "FOLLOW_UP",
         }
 
+
 async def initialize_interview(
-    db: AsyncSession,
-    schedule_id: str,
-    user_id: str,
-    candidate_email: str = ""
-) -> Dict[str, Any]:
+    db: AsyncSession, schedule_id: str, user_id: str, candidate_email: str = ""
+) -> dict[str, Any]:
     """
     Initializes or resumes an interview attempt.
     """
     # Check for existing attempt
-    stmt = select(InterviewAttempt).where(
-        InterviewAttempt.schedule_id == schedule_id
-    )
+    stmt = select(InterviewAttempt).where(InterviewAttempt.schedule_id == schedule_id)
     result = await db.execute(stmt)
     attempt = result.scalar_one_or_none()
 
     if not attempt:
+        # Get company_id from schedule
+        stmt = select(InterviewSchedule).where(InterviewSchedule.id == schedule_id)
+        res = await db.execute(stmt)
+        sched = res.scalar_one_or_none()
+
         attempt = InterviewAttempt(
             schedule_id=schedule_id,
             user_id=user_id,
+            company_id=sched.company_id if sched else None,
             transcript={
-                "history": [], 
+                "history": [],
                 "current_question_index": 0,
                 "candidate_email": candidate_email,
-                "email_verified": False
-            }
+                "email_verified": False,
+            },
         )
         db.add(attempt)
         await db.commit()
         await db.refresh(attempt)
 
     # Get first question if history is empty
-    transcript_data: Dict[str, Any] = attempt.transcript if attempt.transcript else {"history": [], "current_question_index": 0}
-    history: List[Dict[str, Any]] = transcript_data.get("history", [])
-    
+    transcript_data: dict[str, Any] = (
+        attempt.transcript if attempt.transcript else {"history": [], "current_question_index": 0}
+    )
+    history: list[dict[str, Any]] = transcript_data.get("history", [])
+
     # Ensure candidate_email is in transcript (for existing attempts)
     if "candidate_email" not in transcript_data or not transcript_data["candidate_email"]:
         transcript_data["candidate_email"] = candidate_email
@@ -201,14 +205,14 @@ async def initialize_interview(
         stmt = select(InterviewSchedule).where(InterviewSchedule.id == schedule_id)
         result = await db.execute(stmt)
         schedule = result.scalar_one_or_none()
-        
+
         stmt = select(Interview).where(Interview.id == schedule.interview_id)
         result = await db.execute(stmt)
         template = result.scalar_one_or_none()
-        
-        plan_data: Dict[str, Any] = template.plan if template and template.plan else {}
-        questions: List[Dict[str, Any]] = plan_data.get("questions", [])
-        
+
+        plan_data: dict[str, Any] = template.plan if template and template.plan else {}
+        questions: list[dict[str, Any]] = plan_data.get("questions", [])
+
         if questions:
             initial_text = f"Hello! I am your AI interviewer. Let's start with our first topic: {questions[0].get('question')}"
             history.append({"role": "ai", "text": initial_text})
@@ -216,6 +220,6 @@ async def initialize_interview(
             attempt.transcript = transcript_data
             await db.commit()
             return {"attempt_id": str(attempt.id), "ai_response": initial_text, "status": "STARTED"}
-    
+
     last_ai_msg = next((m["text"] for m in reversed(history) if m["role"] == "ai"), "Shall we continue?")
     return {"attempt_id": str(attempt.id), "ai_response": last_ai_msg, "status": "RESUMED"}

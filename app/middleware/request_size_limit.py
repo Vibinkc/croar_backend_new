@@ -16,6 +16,6 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
                     logger.warning(f"Request body too large: {content_length} bytes (Limit: {self.max_size})")
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"Request body too large. Maximum allowed size is {self.max_size} bytes."
+                        detail=f"Request body too large. Maximum allowed size is {self.max_size} bytes.",
                     )
         return await call_next(request)

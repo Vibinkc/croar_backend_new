@@ -1,22 +1,26 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Annotated, Optional
-from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from app.core.dependencies import DBSessionDep, get_current_agent
-from app.models.enterprise.user_role import EnterpriseUser as HiringAgent
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.models.shared.constants import ModuleScope, PermissionAction
 
 router = APIRouter(prefix="/upload", tags=["Enterprise Upload"])
 
 UPLOAD_DIR = "uploads/branding"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+
 @router.post("/logo")
 async def upload_company_logo(
     session: DBSessionDep,
-    current_agent: Annotated[HiringAgent, Depends(get_current_agent)],
-    file: UploadFile = File(...)
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
+    ],
+    file: UploadFile = File(...),
 ):
     """
     Upload an organization logo.
@@ -33,7 +37,7 @@ async def upload_company_logo(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e!s}")
 
     # Return the relative URL
     return {"url": f"/uploads/branding/{filename}"}

@@ -1,5 +1,4 @@
-from app.core.database import Base
-
+from app.core.database import Base as Base
 
 # Register the models for Migration
-from . import user  # noqa: E402, F401
+from . import user  # noqa: F401

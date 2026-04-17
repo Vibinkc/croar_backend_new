@@ -1,11 +1,13 @@
-from pydantic import BaseModel, ConfigDict
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime
+from typing import Any
 from uuid import UUID
-from datetime import datetime, date
+
+from pydantic import BaseModel, ConfigDict
+
 
 class SimulationScenarioBase(BaseModel):
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     category: str = "General"
     character_name: str
     character_role: str
@@ -13,18 +15,21 @@ class SimulationScenarioBase(BaseModel):
     initial_message: str
     difficulty: str = "Intermediate"
 
+
 class SimulationScenarioCreate(SimulationScenarioBase):
     pass
 
+
 class SimulationScenarioUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    category: Optional[str] = None
-    character_name: Optional[str] = None
-    character_role: Optional[str] = None
-    system_prompt: Optional[str] = None
-    initial_message: Optional[str] = None
-    difficulty: Optional[str] = None
+    title: str | None = None
+    description: str | None = None
+    category: str | None = None
+    character_name: str | None = None
+    character_role: str | None = None
+    system_prompt: str | None = None
+    initial_message: str | None = None
+    difficulty: str | None = None
+
 
 class SimulationScenarioSchema(SimulationScenarioBase):
     model_config = ConfigDict(from_attributes=True)
@@ -33,10 +38,12 @@ class SimulationScenarioSchema(SimulationScenarioBase):
     created_at: datetime
     updated_at: datetime
 
+
 class SimulationAssignmentCreate(BaseModel):
     scenario_id: UUID
-    employee_ids: List[UUID]
-    due_date: Optional[date] = None
+    employee_ids: list[UUID]
+    due_date: date | None = None
+
 
 class SimulationAssignmentSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -44,43 +51,50 @@ class SimulationAssignmentSchema(BaseModel):
     scenario_id: UUID
     employee_id: UUID
     status: str
-    due_date: Optional[date] = None
+    due_date: date | None = None
     created_at: datetime
-    completed_at: Optional[datetime] = None
-    scenario: Optional[SimulationScenarioSchema] = None
+    completed_at: datetime | None = None
+    scenario: SimulationScenarioSchema | None = None
+
 
 class SimulationSessionBase(BaseModel):
     scenario_id: UUID
-    assignment_id: Optional[UUID] = None
+    assignment_id: UUID | None = None
+
 
 class SimulationSessionCreate(SimulationSessionBase):
-    employee_id: Optional[UUID] = None
+    employee_id: UUID | None = None
+
 
 class SimulationSessionSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
-    employee_id: Optional[UUID] = None
-    hiring_agent_id: Optional[UUID] = None
+    employee_id: UUID | None = None
+    hiring_agent_id: UUID | None = None
     scenario_id: UUID
     status: str
-    conversation: List[Dict[str, str]]
-    report: Optional[Dict[str, Any]] = None
-    overall_score: Optional[float] = None
-    feedback: Optional[str] = None
+    conversation: list[dict[str, str]]
+    report: dict[str, Any] | None = None
+    overall_score: float | None = None
+    feedback: str | None = None
     created_at: datetime
-    completed_at: Optional[datetime] = None
-    scenario: Optional[SimulationScenarioSchema] = None
+    completed_at: datetime | None = None
+    scenario: SimulationScenarioSchema | None = None
+
 
 class SimulationChatMessage(BaseModel):
     message: str
 
+
 class SimulationChatResponse(BaseModel):
     reply: str
     status: str
-    feedback_hint: Optional[str] = None
+    feedback_hint: str | None = None
+
 
 class AIGenerateScenarioRequest(BaseModel):
     prompt: str
+
 
 class SimulationResultSchema(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -89,6 +103,6 @@ class SimulationResultSchema(BaseModel):
     scenario_title: str
     category: str
     status: str
-    overall_score: Optional[float] = None
+    overall_score: float | None = None
     created_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None

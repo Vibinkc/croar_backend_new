@@ -30,7 +30,7 @@ def setup_logging():
                 "rotation": "500 MB",
                 "retention": "10 days",
             },
-        ],
+        ]
     }
 
     logger.configure(**config)

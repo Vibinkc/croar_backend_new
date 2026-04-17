@@ -1,49 +1,50 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-from sqlalchemy.orm import selectinload
-from typing import List, Dict
+from typing import Annotated, Any
 from uuid import UUID
 
-from app.core.dependencies import get_db, get_current_agent
-from app.models.enterprise.assessment import AssessmentTemplate, AssessmentAttempt, AssessmentType
-from app.models.enterprise.candidate import CandidateApplication
-from app.services.enterprise.ai_service import generate_assessment_questions
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+
+from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.models.enterprise.assessment import AssessmentTemplate
+from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.assessment import (
     AssessmentTemplateCreate,
-    AssessmentTemplateUpdate,
     AssessmentTemplateResponse,
-    BulkSendAssessmentRequest
+    AssessmentTemplateUpdate,
 )
-from app.models.enterprise.job import JobRequirement
+from app.services.enterprise.ai_service import generate_assessment_questions
 
 router = APIRouter(prefix="/assessment-templates", tags=["Assessment Templates"])
 
-@router.get("/", response_model=List[AssessmentTemplateResponse])
-async def list_templates(
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
+
+@router.get("/", response_model=list[AssessmentTemplateResponse])
+async def list_assessment_templates(
+    db: DBSessionDep,
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
 ):
     stmt = (
         select(AssessmentTemplate)
+        .where(AssessmentTemplate.company_id == current_user.company_id)
         .options(selectinload(AssessmentTemplate.email_template))
-        .order_by(AssessmentTemplate.created_at.desc())
     )
     result = await db.execute(stmt)
     return result.scalars().all()
 
+
 @router.post("/", response_model=AssessmentTemplateResponse)
-async def create_template(
+async def create_assessment_template(
     template_in: AssessmentTemplateCreate,
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
+    db: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
+    ],
 ):
-    data = template_in.model_dump()
-    db_template = AssessmentTemplate(**data)
+    db_template = AssessmentTemplate(**template_in.model_dump(), company_id=current_user.company_id)
     db.add(db_template)
     await db.commit()
-    
-    # Reload with relation
+
+    # Refresh with relation
     stmt = (
         select(AssessmentTemplate)
         .where(AssessmentTemplate.id == db_template.id)
@@ -52,43 +53,50 @@ async def create_template(
     result = await db.execute(stmt)
     return result.scalar_one()
 
+
 @router.get("/{template_id}", response_model=AssessmentTemplateResponse)
-async def get_template(
+async def get_assessment_template(
     template_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
+    db: DBSessionDep,
+    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
 ):
     stmt = (
         select(AssessmentTemplate)
-        .where(AssessmentTemplate.id == template_id)
+        .where(AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id)
         .options(selectinload(AssessmentTemplate.email_template))
     )
     result = await db.execute(stmt)
     template = result.scalar_one_or_none()
+
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
 
+
 @router.patch("/{template_id}", response_model=AssessmentTemplateResponse)
-async def update_template(
+async def update_assessment_template(
     template_id: UUID,
     template_in: AssessmentTemplateUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
+    db: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.update))
+    ],
 ):
-    stmt = select(AssessmentTemplate).where(AssessmentTemplate.id == template_id)
+    stmt = select(AssessmentTemplate).where(
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
+    )
     result = await db.execute(stmt)
     db_template = result.scalar_one_or_none()
-    
+
     if not db_template:
         raise HTTPException(status_code=404, detail="Template not found")
-        
+
     update_data = template_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_template, key, value)
-        
+
     await db.commit()
-    
+
     # Reload with relation
     stmt = (
         select(AssessmentTemplate)
@@ -98,74 +106,58 @@ async def update_template(
     result = await db.execute(stmt)
     return result.scalar_one()
 
+
 @router.delete("/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_template(
+async def delete_assessment_template(
     template_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
+    db: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.delete))
+    ],
 ):
-    stmt = select(AssessmentTemplate).where(AssessmentTemplate.id == template_id)
-    result = await db.execute(stmt)
-    db_template = result.scalar_one_or_none()
-    
-    if not db_template:
-        raise HTTPException(status_code=404, detail="Template not found")
-        
-    await db.delete(db_template)
-    await db.commit()
-    return None
-
-@router.post("/bulk-send")
-async def bulk_send_assessment(
-    request: BulkSendAssessmentRequest,
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db),
-    current_agent = Depends(get_current_agent)
-):
-    """
-    Manually triggers an assessment for multiple candidates using a template.
-    """
-    # 1. Verify template exists
-    stmt = select(AssessmentTemplate).where(AssessmentTemplate.id == request.template_id)
-    result = await db.execute(stmt)
-    template = result.scalar_one_or_none()
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found")
-
-    # 2. Get applications and their jobs/candidates
-    stmt = (
-        select(CandidateApplication)
-        .where(CandidateApplication.id.in_(request.application_ids))
-        .options(selectinload(CandidateApplication.candidate), selectinload(CandidateApplication.job_requirement))
+    stmt = select(AssessmentTemplate).where(
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
     )
     result = await db.execute(stmt)
-    applications = result.scalars().all()
+    db_template = result.scalar_one_or_none()
 
-    # 3. Create attempts and send emails
-    from app.services.enterprise.automation_service import send_manual_assessment_invitation
-    attempts_created = 0
-    for app in applications:
-        # Create attempt
-        new_attempt = AssessmentAttempt(
-            template_id=template.id,
-            candidate_id=app.candidate_id,
-            application_id=app.id,
-            status="STARTED"
-        )
-        db.add(new_attempt)
-        
-        # Trigger email invitation
-        if app.candidate and app.job_requirement:
-            await send_manual_assessment_invitation(
-                template=template,
-                application=app,
-                candidate=app.candidate,
-                job=app.job_requirement,
-                session=db,
-                background_tasks=background_tasks
-            )
-        
-        attempts_created += 1
+    if not db_template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    await db.delete(db_template)
+    await db.commit()
+    return
+
+
+@router.post("/{template_id}/generate", response_model=AssessmentTemplateResponse)
+async def generate_template_questions(
+    template_id: UUID,
+    db: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
+    ],
+    count: int = 10,
+):
+    stmt = select(AssessmentTemplate).where(
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
+    )
+    result = await db.execute(stmt)
+    db_template = result.scalar_one_or_none()
+
+    if not db_template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    questions = await generate_assessment_questions(db_template.type, db_template.topic, count)
+    db_template.generated_questions = questions
+    db_template.question_count = count
 
     await db.commit()
-    return {"message": f"Successfully triggered assessment for {attempts_created} candidates."}
+
+    # Reload with relation
+    stmt = (
+        select(AssessmentTemplate)
+        .where(AssessmentTemplate.id == template_id)
+        .options(selectinload(AssessmentTemplate.email_template))
+    )
+    result = await db.execute(stmt)
+    return result.scalar_one()

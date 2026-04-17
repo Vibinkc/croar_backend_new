@@ -1,35 +1,43 @@
+from datetime import date
 from uuid import UUID
-from datetime import datetime, date
-from typing import Optional, List
-from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enterprise.employee import Employee, Department
-from app.models.enterprise.onboarding import Onboarding
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 from app.models.enterprise.candidate import Candidate, CandidateApplication
+from app.models.enterprise.employee import Employee
+from app.models.enterprise.onboarding import Onboarding
+
 
 class EmployeeService:
     @staticmethod
-    async def generate_employee_id(session: AsyncSession) -> str:
-        """Generate a unique employee ID like EMP-1001."""
-        stmt = select(Employee).order_by(Employee.employee_id.desc()).limit(1)
+    async def generate_employee_id(session: AsyncSession, company_id: UUID) -> str:
+        """Generate a unique employee ID like EMP-1001 for a specific company."""
+        stmt = (
+            select(Employee)
+            .where(Employee.company_id == company_id)
+            .order_by(Employee.employee_id.desc())
+            .limit(1)
+        )
         result = await session.execute(stmt)
         last_emp = result.scalar_one_or_none()
-        
+
         next_num = 1001
-        if last_emp and last_emp.employee_id.startswith("EMP-"):
+        if last_emp and last_emp.employee_id and last_emp.employee_id.startswith("EMP-"):
             try:
                 # Extract number from EMP-XXXX
                 curr_num = int(last_emp.employee_id.split("-")[1])
                 next_num = curr_num + 1
             except (IndexError, ValueError):
                 pass
-        
+
         return f"EMP-{next_num}"
 
     @staticmethod
-    async def convert_candidate_to_employee(session: AsyncSession, candidate_id: UUID, performed_by: str) -> Employee:
+    async def convert_candidate_to_employee(
+        session: AsyncSession, candidate_id: UUID, performed_by: str
+    ) -> Employee:
         """Convert an onboarded candidate to an employee."""
         # 1. Fetch Candidate with related data
         stmt = select(Candidate).where(Candidate.id == candidate_id)
@@ -39,38 +47,43 @@ class EmployeeService:
             raise ValueError("Candidate not found")
 
         # 2. Fetch the most recent completed onboarding for this candidate
-        onb_stmt = select(Onboarding).options(
-            selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement)
-        ).join(Onboarding.application).where(
-            CandidateApplication.candidate_id == candidate_id
-        ).order_by(Onboarding.created_at.desc()).limit(1)
-        
+        onb_stmt = (
+            select(Onboarding)
+            .options(selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement))
+            .join(Onboarding.application)
+            .where(CandidateApplication.candidate_id == candidate_id)
+            .order_by(Onboarding.created_at.desc())
+            .limit(1)
+        )
+
         onb_result = await session.execute(onb_stmt)
         onboarding = onb_result.scalar_one_or_none()
-        
+
         if not onboarding:
-             raise ValueError("No onboarding process found for this candidate")
+            raise ValueError("No onboarding process found for this candidate")
 
         # 3. Extract information
         job_info = onboarding.job_info or {}
         personal_info = onboarding.personal_info or {}
         form_data = onboarding.form_data or {}
-        
+
         # 4. Extract names safely
         full_name_parts = (candidate.full_name or "").split(" ")
         first_name = personal_info.get("first_name") or (full_name_parts[0] if full_name_parts else "Unknown")
-        last_name = personal_info.get("last_name") or (" ".join(full_name_parts[1:]) if len(full_name_parts) > 1 else "Unknown")
-        
+        last_name = personal_info.get("last_name") or (
+            " ".join(full_name_parts[1:]) if len(full_name_parts) > 1 else "Unknown"
+        )
+
         # 5. Get Company ID
         company_id = None
         if onboarding.application and onboarding.application.job_requirement:
             company_id = onboarding.application.job_requirement.company_id
-        
+
         if not company_id:
             raise ValueError("Could not determine company for candidate conversion")
 
         # 6. Generate Employee ID
-        employee_id = await EmployeeService.generate_employee_id(session)
+        employee_id = await EmployeeService.generate_employee_id(session, company_id)
 
         # 7. Create Employee Record
         employee = Employee(
@@ -81,7 +94,12 @@ class EmployeeService:
             email=candidate.email,
             mobile=candidate.phone,
             phone_number=personal_info.get("phone_number") or candidate.phone,
-            designation=job_info.get("designation") or (onboarding.application.job_requirement.title if onboarding.application and onboarding.application.job_requirement else None),
+            designation=job_info.get("designation")
+            or (
+                onboarding.application.job_requirement.title
+                if onboarding.application and onboarding.application.job_requirement
+                else None
+            ),
             status="Active",
             employment_type=job_info.get("employment_type") or "Full-time",
             hire_date=job_info.get("hire_date") or date.today(),
@@ -111,12 +129,13 @@ class EmployeeService:
             payment_information=form_data.get("payment_information", []),
             roles_responsibilities=form_data.get("roles_responsibilities"),
             skills=candidate.skills or [],
-            documents=form_data.get("documents", [])
+            documents=form_data.get("documents", []),
         )
-        
+
         session.add(employee)
         await session.flush()
-        
+
         return employee
+
 
 employee_service = EmployeeService()

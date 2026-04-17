@@ -1,27 +1,34 @@
-from pydantic import BaseModel, Field
+from datetime import date, datetime
 from uuid import UUID
-from datetime import datetime, date
-from typing import Optional, List
-from app.models.enterprise.survey import SurveyQuestionType, SurveyInstanceStatus, SurveyInviteStatus
+
+from pydantic import BaseModel
+
+from app.models.enterprise.survey import SurveyInstanceStatus, SurveyInviteStatus, SurveyQuestionType
+
 
 # Employee Info for Portal
 class EmployeePortalInfo(BaseModel):
     id: UUID
     first_name: str
-    last_name: Optional[str] = None
+    last_name: str | None = None
     email: str
+
     class Config:
         from_attributes = True
+
 
 # Type
 class SurveyTypeBase(BaseModel):
     name: str
-    description: Optional[str] = None
+    description: str | None = None
+
 
 class SurveyType(SurveyTypeBase):
     id: UUID
+
     class Config:
         from_attributes = True
+
 
 # Question
 class SurveyQuestionBase(BaseModel):
@@ -30,36 +37,43 @@ class SurveyQuestionBase(BaseModel):
     order: int = 0
     scale_min: int = 1
     scale_max: int = 5
-    options: Optional[str] = None
+    options: str | None = None
+
 
 class SurveyQuestionCreate(SurveyQuestionBase):
     pass
 
+
 class SurveyQuestion(SurveyQuestionBase):
     id: UUID
+
     class Config:
         from_attributes = True
+
 
 # Template
 class SurveyTemplateBase(BaseModel):
     survey_type_id: UUID
     title: str
-    description: Optional[str] = None
+    description: str | None = None
     is_active: bool = True
 
+
 class SurveyTemplateCreate(SurveyTemplateBase):
-    questions: List[SurveyQuestionCreate]
+    questions: list[SurveyQuestionCreate]
+
 
 class SurveyTemplate(SurveyTemplateBase):
     id: UUID
     company_id: UUID
     created_at: datetime
     updated_at: datetime
-    questions: List[SurveyQuestion]
+    questions: list[SurveyQuestion]
     survey_type: SurveyType
-    
+
     class Config:
         from_attributes = True
+
 
 # Instance
 class SurveyInstanceBase(BaseModel):
@@ -70,17 +84,20 @@ class SurveyInstanceBase(BaseModel):
     status: SurveyInstanceStatus = SurveyInstanceStatus.DRAFT
     target_group: str = "ALL"
 
+
 class SurveyInstanceCreate(SurveyInstanceBase):
-    employee_ids: Optional[List[UUID]] = None # for CUSTOM target_group
+    employee_ids: list[UUID] | None = None  # for CUSTOM target_group
+
 
 class SurveyInstance(SurveyInstanceBase):
     id: UUID
     company_id: UUID
     created_at: datetime
-    template: Optional[SurveyTemplate] = None
-    
+    template: SurveyTemplate | None = None
+
     class Config:
         from_attributes = True
+
 
 # Invite
 class SurveyInviteBase(BaseModel):
@@ -88,59 +105,70 @@ class SurveyInviteBase(BaseModel):
     employee_id: UUID
     token: str
     status: SurveyInviteStatus = SurveyInviteStatus.PENDING
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
+
 
 class SurveyInvite(SurveyInviteBase):
     id: UUID
+
     class Config:
         from_attributes = True
+
 
 class SurveyInviteFull(SurveyInvite):
     instance: SurveyInstance
     employee: EmployeePortalInfo
+
     class Config:
         from_attributes = True
+
 
 # Response
 class SurveyResponseSubmit(BaseModel):
     question_id: UUID
-    answer_value: Optional[int] = None
-    answer_text: Optional[str] = None
+    answer_value: int | None = None
+    answer_text: str | None = None
+
 
 class SurveySubmission(BaseModel):
-    responses: List[SurveyResponseSubmit]
+    responses: list[SurveyResponseSubmit]
+
 
 # Reporting
 class QuestionSummary(BaseModel):
     question_id: UUID
     question_text: str
     question_type: SurveyQuestionType
-    average_score: Optional[float] = None
+    average_score: float | None = None
     response_count: int
-    text_responses: List[str] = []
-    distribution: dict = {} # For MCQ or Rating distribution
+    text_responses: list[str] = []
+    distribution: dict = {}  # For MCQ or Rating distribution
+
 
 class SurveyAIAnalysis(BaseModel):
     summary: str
-    performance_score: float # 0-100
-    strengths: List[str]
-    weaknesses: List[str]
-    recommendations: List[str]
+    performance_score: float  # 0-100
+    strengths: list[str]
+    weaknesses: list[str]
+    recommendations: list[str]
+
 
 class SurveyAIGenerateRequest(BaseModel):
     survey_type_id: UUID
     industry_nature: str
     count: int = 5
 
+
 class SurveyAIGeneratedQuestion(BaseModel):
     text: str
     type: SurveyQuestionType
-    options: Optional[List[str]] = None
+    options: list[str] | None = None
+
 
 class SurveyReport(BaseModel):
     instance_id: UUID
     instance_name: str
     total_invites: int
     completed_invites: int
-    questions: List[QuestionSummary]
-    ai_analysis: Optional[SurveyAIAnalysis] = None
+    questions: list[QuestionSummary]
+    ai_analysis: SurveyAIAnalysis | None = None

@@ -1,34 +1,33 @@
 from fastapi import APIRouter
 
 from .applications import router as applications_router
-from .communication import router as communication_router
-from .dashboard import router as dashboard_router
-from .internal import router as internal_router
-from .public import router as public_router
-from .jobs import router as jobs_router
-from .company import router as company_router
-from .hiring_agent import router as hiring_agent_router
-from .automation import router as automation_router
 from .assessment import router as assessment_router
 from .assessment_templates import router as assessment_templates_router
+from .automation import router as automation_router
 from .candidate_assessment import router as candidate_assessment_router
-from .interview_automation import router as interview_automation_router
-from .onboarding import router as onboarding_router
-from .public_onboarding import router as public_onboarding_router
-from .onboarding_templates import router as onboarding_templates_router
-from .interview_templates import router as interview_templates_router
 from .candidate_interview import router as candidate_interview_router
-from .onboarding_automation import router as onboarding_automation_router
-from .upload import router as upload_router
-from .employees import router as employees_router
 from .candidates import router as candidates_router
+from .communication import router as communication_router
+from .company import router as company_router
+from .dashboard import router as dashboard_router
+from .employees import router as employees_router
+from .hiring_agent import router as hiring_agent_router
+from .interview_automation import router as interview_automation_router
+from .interview_templates import router as interview_templates_router
+from .jobs import router as jobs_router
+from .onboarding import router as onboarding_router
+from .onboarding_automation import router as onboarding_automation_router
+from .onboarding_templates import router as onboarding_templates_router
 from .projects import router as projects_router
-from .x360 import router as x360_router
-from .survey import router as survey_router
+from .public import router as public_router
+from .public_onboarding import router as public_onboarding_router
 from .simulation import router as simulation_router
+from .survey import router as survey_router
+from .team import router as team_router
+from .upload import router as upload_router
+from .x360 import router as x360_router
 
 router = APIRouter()
-router.include_router(internal_router)
 router.include_router(public_router)
 router.include_router(communication_router)
 router.include_router(applications_router)
@@ -54,3 +53,4 @@ router.include_router(projects_router)
 router.include_router(x360_router)
 router.include_router(survey_router)
 router.include_router(simulation_router, prefix="/simulations", tags=["Simulations"])
+router.include_router(team_router)

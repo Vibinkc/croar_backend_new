@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
@@ -38,26 +38,25 @@ class InterviewAutomationBase(BaseModel):
     stage_index: int
     stage_name: str | None = None
     criteria: str
-    
+
     start_time: str = "09:00"
     end_time: str = "17:00"
     duration: int = 30
     daily_limit: int = 5
-    
+
     email_template_id: UUID | None = None
     is_enabled: bool = True
     auto_move: bool = False
-    
+
     start_date: date | None = None
     end_date: date | None = None
-    
+
     interviewer_email: str | None = None
     google_meet_link: str | None = None
     time_slots: list[str] | None = None
-    
+
     interview_type: str = "GMEET"
     interview_template_id: UUID | None = None
-
 
 
 class InterviewAutomationCreate(InterviewAutomationBase):
@@ -69,19 +68,19 @@ class InterviewAutomationUpdate(BaseModel):
     stage_index: int | None = None
     stage_name: str | None = None
     criteria: str | None = None
-    
+
     start_time: str | None = None
     end_time: str | None = None
     duration: int | None = None
     daily_limit: int | None = None
-    
+
     email_template_id: UUID | None = None
     is_enabled: bool | None = None
     auto_move: bool | None = None
-    
+
     start_date: date | None = None
     end_date: date | None = None
-    
+
     interviewer_email: str | None = None
     google_meet_link: str | None = None
     time_slots: list[str] | None = None
@@ -93,7 +92,7 @@ class InterviewAutomationResponse(InterviewAutomationBase):
     id: UUID
     created_at: datetime
     email_template: EmailTemplateSimple | None = None
-    
+
     class Config:
         from_attributes = True
 

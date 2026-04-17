@@ -1,52 +1,90 @@
 from app.core.database import Base
 
+
 class EnterpriseBase(Base):
     __abstract__ = True
 
+
+from .assessment import AssessmentAttempt, AssessmentAutomation, AssessmentTemplate
+from .candidate import ApplicationStatus, Candidate, CandidateApplication
+from .communication import EmailLog, EmailTemplate, MailAutomation
 from .company import Company
-from .user_role import EnterpriseUser, Role
-from .job import JobRequirement, JobPosting, JobStatus
-from .candidate import Candidate, CandidateApplication, ApplicationStatus
-from .interview import Interview, InterviewSchedule, InterviewAttempt, InterviewAutomation
-from .communication import EmailTemplate, EmailLog, MailAutomation
+from .employee import Department, Employee
 from .hiring_agent import HiringAgent
-from .student import Student
-from .assessment import AssessmentAutomation, AssessmentAttempt, AssessmentTemplate
-from .onboarding import Onboarding, OnboardingStatus, OnboardingDocument, OnboardingActivity, OnboardingTask, OnboardingNote, OnboardingAutomation
-from .employee import Employee, Department
+from .interview import Interview, InterviewAttempt, InterviewAutomation, InterviewSchedule
+from .job import JobPosting, JobRequirement, JobStatus
+from .onboarding import (
+    Onboarding,
+    OnboardingActivity,
+    OnboardingAutomation,
+    OnboardingDocument,
+    OnboardingNote,
+    OnboardingStatus,
+    OnboardingTask,
+    OnboardingTemplate,
+)
 from .project import Project, project_members
-from .x360 import (
-    X360Question, 
-    X360AssessmentTemplate, 
-    X360TemplateQuestion, 
-    X360AssessmentCycle, 
-    X360AssessmentAssignment, 
-    X360AssessmentResponse,
-    X360EmployeeRaterMap
-)
-from .survey import (
-    SurveyType,
-    SurveyTemplate,
-    SurveyQuestion,
-    SurveyInstance,
-    SurveyInvite,
-    SurveyResponse
-)
 from .simulation import SimulationScenario, SimulationSession
+from .student import Student
+from .survey import SurveyInstance, SurveyInvite, SurveyQuestion, SurveyResponse, SurveyTemplate, SurveyType
+from .user_role import EnterpriseUser
+from .x360 import (
+    X360AssessmentAssignment,
+    X360AssessmentCycle,
+    X360AssessmentResponse,
+    X360AssessmentTemplate,
+    X360EmployeeRaterMap,
+    X360Question,
+    X360TemplateQuestion,
+)
 
 __all__ = [
-    "EnterpriseBase", "Company", "EnterpriseUser", "Role",
-    "JobRequirement", "JobPosting", "JobStatus",
-    "Candidate", "CandidateApplication", "ApplicationStatus",
-    "Interview", "InterviewSchedule", "InterviewAttempt", "InterviewAutomation",
-    "EmailTemplate", "EmailLog", "MailAutomation", "HiringAgent",
-    "Student", "AssessmentAutomation", "AssessmentAttempt", "AssessmentTemplate",
-    "Onboarding", "OnboardingStatus", "OnboardingDocument", "OnboardingActivity", "OnboardingTask", "OnboardingNote", "OnboardingAutomation",
-    "Employee", "Department", "Project", "project_members",
-    "X360Question", "X360AssessmentTemplate", "X360TemplateQuestion",
-    "X360AssessmentCycle", "X360AssessmentAssignment", "X360AssessmentResponse",
+    "ApplicationStatus",
+    "AssessmentAttempt",
+    "AssessmentAutomation",
+    "AssessmentTemplate",
+    "Candidate",
+    "CandidateApplication",
+    "Company",
+    "Department",
+    "EmailLog",
+    "EmailTemplate",
+    "Employee",
+    "EnterpriseBase",
+    "EnterpriseUser",
+    "HiringAgent",
+    "Interview",
+    "InterviewAttempt",
+    "InterviewAutomation",
+    "InterviewSchedule",
+    "JobPosting",
+    "JobRequirement",
+    "JobStatus",
+    "MailAutomation",
+    "Onboarding",
+    "OnboardingActivity",
+    "OnboardingAutomation",
+    "OnboardingDocument",
+    "OnboardingNote",
+    "OnboardingStatus",
+    "OnboardingTask",
+    "OnboardingTemplate",
+    "Project",
+    "SimulationScenario",
+    "SimulationSession",
+    "Student",
+    "SurveyInstance",
+    "SurveyInvite",
+    "SurveyQuestion",
+    "SurveyResponse",
+    "SurveyTemplate",
+    "SurveyType",
+    "X360AssessmentAssignment",
+    "X360AssessmentCycle",
+    "X360AssessmentResponse",
+    "X360AssessmentTemplate",
     "X360EmployeeRaterMap",
-    "SurveyType", "SurveyTemplate", "SurveyQuestion",
-    "SurveyInstance", "SurveyInvite", "SurveyResponse",
-    "SimulationScenario", "SimulationSession"
+    "X360Question",
+    "X360TemplateQuestion",
+    "project_members",
 ]

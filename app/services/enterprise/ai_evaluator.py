@@ -25,10 +25,13 @@ class AIEvaluatorService:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are an expert educational assessment creator. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are an expert educational assessment creator. Output valid JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             return json.loads(content)
@@ -59,9 +62,9 @@ class AIEvaluatorService:
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are an expert grader. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             return json.loads(content)
@@ -69,7 +72,9 @@ class AIEvaluatorService:
             print(f"Error evaluating response: {e}")
             return None
 
-    async def evaluate_code_response(self, question: str, test_cases: list[dict[str, str]], student_code: str):
+    async def evaluate_code_response(
+        self, question: str, test_cases: list[dict[str, str]], student_code: str
+    ):
         prompt = f"""
         Evaluate the following student code against the problem statement and test cases.
         
@@ -94,10 +99,13 @@ class AIEvaluatorService:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are an expert code reviewer and execution engine. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are an expert code reviewer and execution engine. Output valid JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             return json.loads(content)
@@ -129,10 +137,13 @@ class AIEvaluatorService:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are an expert technical recruiter. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {
+                        "role": "system",
+                        "content": "You are an expert technical recruiter. Output valid JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             return json.loads(content)
@@ -154,9 +165,9 @@ class AIEvaluatorService:
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "You are a puzzle game designer. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
             )
             content = response.choices[0].message.content
             return json.loads(content).get("levels", [])

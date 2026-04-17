@@ -1,18 +1,23 @@
-from pydantic import BaseModel, EmailStr, Field, field_validator
-from typing import Optional, List, Dict, Any
+from datetime import date, datetime
+from typing import Any
 from uuid import UUID
-from datetime import datetime, date
+
+from pydantic import BaseModel, EmailStr, field_validator
+
 
 class DepartmentBase(BaseModel):
     name: str
-    description: Optional[str] = None
+    description: str | None = None
+
 
 class DepartmentCreate(DepartmentBase):
     company_id: UUID
 
+
 class DepartmentUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
+
 
 class DepartmentOut(DepartmentBase):
     id: UUID
@@ -23,108 +28,112 @@ class DepartmentOut(DepartmentBase):
     class Config:
         from_attributes = True
 
+
 class EmployeeBase(BaseModel):
     employee_id: str
     first_name: str
-    middle_name: Optional[str] = None
+    middle_name: str | None = None
     last_name: str
     email: EmailStr
-    mobile: Optional[str] = None
-    phone_number: Optional[str] = None
-    designation: Optional[str] = None
+    mobile: str | None = None
+    phone_number: str | None = None
+    designation: str | None = None
     status: str = "Active"
-    employment_type: Optional[str] = None
-    hire_date: Optional[date] = None
-    original_hire_date: Optional[date] = None
-    probation_end_date: Optional[date] = None
-    source: Optional[str] = None
-    notice_period: Optional[int] = None
-    about_yourself: Optional[str] = None
-    pan_card_number: Optional[str] = None
-    aadhar_card_number: Optional[str] = None
-    passport_number: Optional[str] = None
-    date_of_birth: Optional[date] = None
-    gender: Optional[str] = None
-    marital_status: Optional[str] = None
-    blood_group: Optional[str] = None
-    address_line_1: Optional[str] = None
-    address_line_2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
+    employment_type: str | None = None
+    hire_date: date | None = None
+    original_hire_date: date | None = None
+    probation_end_date: date | None = None
+    source: str | None = None
+    notice_period: int | None = None
+    about_yourself: str | None = None
+    pan_card_number: str | None = None
+    aadhar_card_number: str | None = None
+    passport_number: str | None = None
+    date_of_birth: date | None = None
+    gender: str | None = None
+    marital_status: str | None = None
+    blood_group: str | None = None
+    address_line_1: str | None = None
+    address_line_2: str | None = None
+    city: str | None = None
+    state: str | None = None
     country: str = "India"
-    pincode: Optional[str] = None
-    department_id: Optional[UUID] = None
-    reporting_to_id: Optional[UUID] = None
-    dependents: Optional[List[Dict[str, Any]]] = []
-    educational_details: Optional[List[Dict[str, Any]]] = []
-    emergency_contacts: Optional[List[Dict[str, Any]]] = []
-    social_profiles: Optional[Dict[str, str]] = {}
-    payment_information: Optional[List[Dict[str, Any]]] = []
-    roles_responsibilities: Optional[str] = None
-    skills: Optional[List[str]] = []
-    documents: Optional[List[Dict[str, Any]]] = []
+    pincode: str | None = None
+    department_id: UUID | None = None
+    reporting_to_id: UUID | None = None
+    dependents: list[dict[str, Any]] | None = []
+    educational_details: list[dict[str, Any]] | None = []
+    emergency_contacts: list[dict[str, Any]] | None = []
+    social_profiles: dict[str, str] | None = {}
+    payment_information: list[dict[str, Any]] | None = []
+    roles_responsibilities: str | None = None
+    skills: list[str] | None = []
+    documents: list[dict[str, Any]] | None = []
 
-    @field_validator('*', mode='before')
+    @field_validator("*", mode="before")
     @classmethod
     def empty_string_to_none(cls, v: Any) -> Any:
         if v == "":
             return None
         return v
+
 
 class EmployeeCreate(EmployeeBase):
     company_id: UUID
-    candidate_id: Optional[UUID] = None
+    candidate_id: UUID | None = None
+
 
 class EmployeeUpdate(BaseModel):
-    first_name: Optional[str] = None
-    middle_name: Optional[str] = None
-    last_name: Optional[str] = None
-    mobile: Optional[str] = None
-    phone_number: Optional[str] = None
-    designation: Optional[str] = None
-    status: Optional[str] = None
-    employment_type: Optional[str] = None
-    hire_date: Optional[date] = None
-    original_hire_date: Optional[date] = None
-    probation_end_date: Optional[date] = None
-    source: Optional[str] = None
-    notice_period: Optional[int] = None
-    about_yourself: Optional[str] = None
-    pan_card_number: Optional[str] = None
-    aadhar_card_number: Optional[str] = None
-    passport_number: Optional[str] = None
-    date_of_birth: Optional[date] = None
-    gender: Optional[str] = None
-    marital_status: Optional[str] = None
-    blood_group: Optional[str] = None
-    address_line_1: Optional[str] = None
-    address_line_2: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
-    pincode: Optional[str] = None
-    department_id: Optional[UUID] = None
-    reporting_to_id: Optional[UUID] = None
-    dependents: Optional[List[Dict[str, Any]]] = None
-    educational_details: Optional[List[Dict[str, Any]]] = None
-    emergency_contacts: Optional[List[Dict[str, Any]]] = None
-    social_profiles: Optional[Dict[str, str]] = None
-    payment_information: Optional[List[Dict[str, Any]]] = None
-    roles_responsibilities: Optional[str] = None
-    skills: Optional[List[str]] = None
-    documents: Optional[List[Dict[str, Any]]] = None
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    mobile: str | None = None
+    phone_number: str | None = None
+    designation: str | None = None
+    status: str | None = None
+    employment_type: str | None = None
+    hire_date: date | None = None
+    original_hire_date: date | None = None
+    probation_end_date: date | None = None
+    source: str | None = None
+    notice_period: int | None = None
+    about_yourself: str | None = None
+    pan_card_number: str | None = None
+    aadhar_card_number: str | None = None
+    passport_number: str | None = None
+    date_of_birth: date | None = None
+    gender: str | None = None
+    marital_status: str | None = None
+    blood_group: str | None = None
+    address_line_1: str | None = None
+    address_line_2: str | None = None
+    city: str | None = None
+    state: str | None = None
+    pincode: str | None = None
+    department_id: UUID | None = None
+    reporting_to_id: UUID | None = None
+    dependents: list[dict[str, Any]] | None = None
+    educational_details: list[dict[str, Any]] | None = None
+    emergency_contacts: list[dict[str, Any]] | None = None
+    social_profiles: dict[str, str] | None = None
+    payment_information: list[dict[str, Any]] | None = None
+    roles_responsibilities: str | None = None
+    skills: list[str] | None = None
+    documents: list[dict[str, Any]] | None = None
 
-    @field_validator('*', mode='before')
+    @field_validator("*", mode="before")
     @classmethod
     def empty_string_to_none(cls, v: Any) -> Any:
         if v == "":
             return None
         return v
+
 
 class EmployeeOut(EmployeeBase):
     id: UUID
     company_id: UUID
-    candidate_id: Optional[UUID] = None
-    department: Optional[DepartmentOut] = None
+    candidate_id: UUID | None = None
+    department: DepartmentOut | None = None
     created_at: datetime
     updated_at: datetime
 

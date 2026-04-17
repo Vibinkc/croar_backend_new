@@ -1,5 +1,4 @@
-
-from pydantic import Field, field_validator
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,9 +51,12 @@ class Settings(BaseSettings):
 
     # Frontend URL
     frontend_url: str = Field("http://localhost:3000", validation_alias="FRONTEND_URL")
-    
+
     # CORS Settings
-    cors_origins: str = Field("http://localhost:3000,http://3.94.202.48,http://3.94.202.48:3000,https://app.croar.co,https://api.croar.co", validation_alias="CORS_ORIGINS")
+    cors_origins: str = Field(
+        "http://localhost:3000,http://3.94.202.48,http://3.94.202.48:3000,https://app.croar.co,https://api.croar.co",
+        validation_alias="CORS_ORIGINS",
+    )
 
     @property
     def parsed_cors_origins(self) -> list[str]:
@@ -63,6 +65,7 @@ class Settings(BaseSettings):
             return ["*"]
         if v.startswith("["):
             import json
+
             try:
                 return json.loads(v)
             except Exception:

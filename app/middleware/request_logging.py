@@ -19,7 +19,9 @@ async def request_logging_middleware(request: Request, call_next):
         response.headers["X-Process-Time"] = str(process_time)
         response.headers["X-Request-ID"] = request_id
 
-        logger.info(f"Request completed | ID: {request_id} | Status: {response.status_code} | Time: {process_time:.4f}s")
+        logger.info(
+            f"Request completed | ID: {request_id} | Status: {response.status_code} | Time: {process_time:.4f}s"
+        )
         return response
     except Exception as e:
         process_time = time.time() - start_time

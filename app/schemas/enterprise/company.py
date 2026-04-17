@@ -1,28 +1,38 @@
-from typing import Optional
-from pydantic import BaseModel
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import BaseModel
+
+
 class CompanyBase(BaseModel):
     name: str
-    industry: Optional[str] = None
-    location: Optional[str] = None
-    logo_url: Optional[str] = None
-    config: Optional[dict] = {}
+    industry: str | None = None
+    location: str | None = None
+    logo_url: str | None = None
+    config: dict | None = {}
+    is_consultancy: bool | None = False
+    parent_id: UUID | None = None
+
 
 class CompanyCreate(CompanyBase):
     pass
 
+
 class CompanyUpdate(BaseModel):
-    name: Optional[str] = None
-    industry: Optional[str] = None
-    location: Optional[str] = None
-    logo_url: Optional[str] = None
-    config: Optional[dict] = None
+    name: str | None = None
+    industry: str | None = None
+    location: str | None = None
+    logo_url: str | None = None
+    config: dict | None = None
+    is_consultancy: bool | None = None
+    parent_id: UUID | None = None
+
 
 class CompanyResponse(CompanyBase):
     id: UUID
     slug: str
+    is_consultancy: bool
+    parent_id: UUID | None
     created_at: datetime
     updated_at: datetime
 

@@ -10,24 +10,14 @@ from app.core.exceptions import AppException
 async def app_exception_handler(request: Request, exc: AppException):
     logger.error(f"AppException: {exc.message} | Detail: {exc.detail} | Path: {request.url.path}")
     return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "message": exc.message,
-            "detail": exc.detail
-        }
+        status_code=exc.status_code, content={"success": False, "message": exc.message, "detail": exc.detail}
     )
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.warning(f"Validation Error | Path: {request.url.path} | Errors: {exc.errors()}")
     return JSONResponse(
-        status_code=422,
-        content={
-            "success": False,
-            "message": "Validation Failed",
-            "detail": exc.errors()
-        }
+        status_code=422, content={"success": False, "message": "Validation Failed", "detail": exc.errors()}
     )
 
 
@@ -38,8 +28,8 @@ async def database_exception_handler(request: Request, exc: SQLAlchemyError):
         content={
             "success": False,
             "message": "A database error occurred",
-            "detail": str(exc) if request.app.debug else None
-        }
+            "detail": str(exc) if request.app.debug else None,
+        },
     )
 
 
@@ -50,6 +40,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
         content={
             "success": False,
             "message": "An internal server error occurred",
-            "detail": str(exc) if request.app.debug else None
-        }
+            "detail": str(exc) if request.app.debug else None,
+        },
     )

@@ -1,14 +1,17 @@
-from pydantic import BaseModel, EmailStr
-from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, EmailStr
+
 
 class StudentBase(BaseModel):
     full_name: str
     email: EmailStr
 
+
 class StudentCreate(StudentBase):
     password: str
+
 
 class StudentResponse(StudentBase):
     id: UUID
@@ -18,6 +21,7 @@ class StudentResponse(StudentBase):
 
     class Config:
         from_attributes = True
+
 
 class StudentLogin(BaseModel):
     email: EmailStr

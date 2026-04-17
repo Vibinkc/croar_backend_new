@@ -1,98 +1,117 @@
-from typing import Annotated, List, Optional
-from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File, Request, BackgroundTasks
-from sqlalchemy import select, func
-from sqlalchemy.orm import selectinload
-import os
 import json
 import traceback
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep
-from app.models.enterprise.job import JobRequirement, JobStatus
 from app.models.enterprise.candidate import Candidate, CandidateApplication
+from app.models.enterprise.job import JobRequirement, JobStatus
 
 router = APIRouter(prefix="/public/jobs", tags=["Public Jobs"])
 
+
 @router.get("/list")
 async def list_active_jobs(
-    session: DBSessionDep
+    session: DBSessionDep, company_id: UUID | None = None, company_slug: str | None = None
 ):
-    """Publicly list active jobs."""
+    """Publicly list active jobs for a specific company."""
+    if not company_id and not company_slug:
+        return []
+
     stmt = select(JobRequirement).where(
-        JobRequirement.deleted_at == None
-    ).order_by(JobRequirement.created_at.desc())
-    
+        JobRequirement.status == JobStatus.OPEN, JobRequirement.deleted_at == None
+    )
+
+    if company_id:
+        stmt = stmt.where(JobRequirement.company_id == company_id)
+    if company_slug:
+        from app.models.enterprise.company import Company
+
+        stmt = stmt.join(Company).where(Company.slug == company_slug)
+
+    stmt = stmt.order_by(JobRequirement.created_at.desc())
+
     result = await session.execute(stmt)
     return result.scalars().all()
 
+
 @router.get("/{job_id}")
-async def get_public_job(
-    job_id: UUID,
-    session: DBSessionDep
-):
+async def get_public_job(job_id: UUID, session: DBSessionDep):
     """Get job details publicly."""
-    stmt = select(JobRequirement).options(selectinload(JobRequirement.company)).where(
-        JobRequirement.id == job_id
+    stmt = (
+        select(JobRequirement)
+        .options(selectinload(JobRequirement.company))
+        .where(JobRequirement.id == job_id)
     )
     result = await session.execute(stmt)
     job = result.scalar_one_or_none()
-    
+
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-        
+
     return {
         "job": job,
         "organization": {
             "name": job.company.name if job.company else "Our Company",
             "logo_url": job.company.logo_url if job.company else None,
-            "location": job.company.location if job.company else None
-        }
+            "location": job.company.location if job.company else None,
+        },
     }
+
 
 @router.post("/{job_id}/apply")
 async def apply_to_job(
-    request: Request,
-    job_id: UUID,
-    resume: Annotated[UploadFile, File()] = None,
-    session: DBSessionDep = None
+    request: Request, job_id: UUID, resume: Annotated[UploadFile, File()] = None, session: DBSessionDep = None
 ):
     """Allow anyone to apply to a job through a public form with AI analysis."""
     import pypdfium2 as pdfium
+
     from app.core.ai import analyze_text_with_llm
-    
+
     # 1. Verify job
     stmt = select(JobRequirement).where(JobRequirement.id == job_id)
     result = await session.execute(stmt)
     job = result.scalar_one_or_none()
-    if not job: raise HTTPException(status_code=404, detail="Job not found")
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
     # 1.5. Extract all form fields
     try:
         form_data = await request.form()
-    except Exception as e:
+    except Exception:
         form_data = {}
 
     all_fields = {}
     final_resume = resume
-    
-    if hasattr(form_data, 'items'):
+
+    if hasattr(form_data, "items"):
         for k, v in form_data.items():
-            is_file = hasattr(v, 'filename') and hasattr(v, 'file')
+            is_file = hasattr(v, "filename") and hasattr(v, "file")
             if is_file:
                 if not final_resume:
-                    if k == 'resume' or 'resume' in k.lower() or 'cv' in k.lower() or 'file' in k.lower():
-                        final_resume = v
-                    elif not final_resume: 
+                    if (
+                        k == "resume"
+                        or "resume" in k.lower()
+                        or "cv" in k.lower()
+                        or "file" in k.lower()
+                        or not final_resume
+                    ):
                         final_resume = v
                 all_fields[k] = f"FILE: {v.filename}"
             else:
                 all_fields[k] = str(v)
 
     # Extract standard fields with fallbacks
-    full_name_form = all_fields.get('full_name') or all_fields.get('full_name_') or all_fields.get('name') or ""
-    email_form = all_fields.get('email') or all_fields.get('email_address') or ""
-    skills_form = all_fields.get('skills') or all_fields.get('key_skills') or ""
-    phone_form = all_fields.get('phone') or all_fields.get('phone_number') or ""
+    full_name_form = (
+        all_fields.get("full_name") or all_fields.get("full_name_") or all_fields.get("name") or ""
+    )
+    email_form = all_fields.get("email") or all_fields.get("email_address") or ""
+    skills_form = all_fields.get("skills") or all_fields.get("key_skills") or ""
+    phone_form = all_fields.get("phone") or all_fields.get("phone_number") or ""
 
     # 2. Process Resume (Extract Text)
     resume_text = ""
@@ -100,7 +119,7 @@ async def apply_to_job(
         try:
             await final_resume.seek(0)
             content = await final_resume.read()
-            
+
             text_parts = []
             try:
                 pdf = pdfium.PdfDocument(content)
@@ -114,7 +133,7 @@ async def apply_to_job(
                     resume_text = content.decode("utf-8", errors="ignore")
                 except Exception:
                     pass
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
 
     # 3. AI Analysis
@@ -122,7 +141,7 @@ async def apply_to_job(
     ai_analysis = {}
     ai_feedback = {}
     ai_score = 0
-    
+
     if resume_text:
         try:
             prompt = f"""
@@ -170,24 +189,28 @@ async def apply_to_job(
                 }}
             }}
             """
-            
+
             ai_response_str = await analyze_text_with_llm(prompt)
             data = json.loads(ai_response_str)
-            
+
             ai_details = data.get("candidate_details", {})
             ai_analysis = data.get("analysis", {})
-            
+
             ai_feedback = ai_analysis
             ai_score = ai_analysis.get("score", 0)
-            
-            if not full_name_form and ai_details.get("full_name") and ai_details.get("full_name") != "Candidate":
+
+            if (
+                not full_name_form
+                and ai_details.get("full_name")
+                and ai_details.get("full_name") != "Candidate"
+            ):
                 full_name_form = ai_details.get("full_name")
             if not email_form and ai_details.get("email"):
                 email_form = ai_details.get("email")
             if not skills_form and ai_details.get("skills"):
-                 skills_form = ", ".join(ai_details.get("skills"))
-            
-        except Exception as e:
+                skills_form = ", ".join(ai_details.get("skills"))
+
+        except Exception:
             traceback.print_exc()
 
     if not email_form:
@@ -197,9 +220,9 @@ async def apply_to_job(
     stmt = select(Candidate).where(Candidate.email == email_form)
     result = await session.execute(stmt)
     candidate = result.scalar_one_or_none()
-    
+
     skills_list = [s.strip() for s in skills_form.split(",")] if skills_form else ai_details.get("skills", [])
-    
+
     candidate_updates = {
         "full_name": full_name_form or "Candidate",
         "email": email_form,
@@ -207,18 +230,13 @@ async def apply_to_job(
         "phone": phone_form or ai_details.get("phone"),
         "total_experience": ai_details.get("total_experience"),
         "source_platform": all_fields.get("source") or "Careers Page",
-        "parsed_data": {
-            "resume_text": resume_text, 
-            "form_fields": all_fields,
-            **ai_details, 
-            **ai_analysis
-        } if (ai_details or all_fields) else None
+        "parsed_data": {"resume_text": resume_text, "form_fields": all_fields, **ai_details, **ai_analysis}
+        if (ai_details or all_fields)
+        else None,
     }
 
     if not candidate:
-        candidate = Candidate(
-            **candidate_updates
-        )
+        candidate = Candidate(**candidate_updates, company_id=job.company_id)
         session.add(candidate)
         await session.flush()
     else:
@@ -229,14 +247,13 @@ async def apply_to_job(
             candidate.parsed_data.update(candidate_updates["parsed_data"] or {})
         else:
             candidate.parsed_data = candidate_updates["parsed_data"]
-        
+
         session.add(candidate)
         await session.flush()
 
     # 5. Create Application
     check_app = select(CandidateApplication).where(
-        CandidateApplication.candidate_id == candidate.id,
-        CandidateApplication.job_requirement_id == job.id
+        CandidateApplication.candidate_id == candidate.id, CandidateApplication.job_requirement_id == job.id
     )
     res_app = await session.execute(check_app)
     existing_app = res_app.scalar_one_or_none()
@@ -248,10 +265,11 @@ async def apply_to_job(
         candidate_id=candidate.id,
         job_requirement_id=job.id,
         status_id=1,
-        current_stage=1, 
+        current_stage=1,
         ai_match_score=ai_score,
         ai_feedback=ai_feedback,
-        applied_at=func.now()
+        company_id=job.company_id,
+        applied_at=func.now(),
     )
     session.add(application)
     await session.commit()
@@ -259,10 +277,9 @@ async def apply_to_job(
 
     # 6. Trigger Mail Automation (Stage 1 is initial application)
     from app.services.enterprise.automation_service import trigger_automations
-    from fastapi import BackgroundTasks
-    
+
     # We can't easily get BackgroundTasks here since it's not in the path params,
     # but we can import it or just let the service handle it (it already has a fallback)
     await trigger_automations(application.id, 1, session)
-    
+
     return {"message": "Application submitted successfully", "application_id": application.id}

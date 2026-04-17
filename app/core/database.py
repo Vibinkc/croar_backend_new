@@ -91,4 +91,3 @@ async def get_shared_db() -> AsyncIterator[AsyncSession]:
 async def get_db_connect():
     async with db_manager.engine.connect() as conn:
         yield conn
-

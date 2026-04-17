@@ -3,4 +3,3 @@ exclude_dirs:
   - env
 skips:
   - B101  # assert statement
-  - B104  # exec used

@@ -1,12 +1,13 @@
 import datetime
 
+
 def wrap_in_celebratory_template(content_html: str, title: str = "Congratulations!") -> str:
     """
     Wraps HTML content in a premium, celebratory email template.
     Includes a confetti/celebration feel via CSS and colors.
     """
     current_year = datetime.datetime.now().year
-    
+
     return f"""
     <!DOCTYPE html>
     <html>

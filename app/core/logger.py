@@ -20,8 +20,10 @@ def setup_logger(with_debug: bool = False) -> None:
         f"{log_path}/error.log",
         rotation="1 day",
         compression="zip",
-        filter=lambda record: record["extra"].get("context") not in {"system", "comm", "trade"}
-        and record["level"].name in {"ERROR", "CRITICAL"},
+        filter=lambda record: (
+            record["extra"].get("context") not in {"system", "comm", "trade"}
+            and record["level"].name in {"ERROR", "CRITICAL"}
+        ),
         level="DEBUG" if with_debug else "ERROR",
     )
 

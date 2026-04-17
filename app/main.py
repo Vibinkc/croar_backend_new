@@ -1,9 +1,9 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -20,7 +20,7 @@ from app.core.settings import get_settings
 from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
-from app.router import auth, enterprise
+from app.router import auth, enterprise, platform
 
 # Setup Logging
 setup_logging()
@@ -31,10 +31,11 @@ _settings = get_settings()
 async def lifespan(app: FastAPI):
     # Startup logic
     print("Croar Backend Starting...")
-    
+
     yield
     # Shutdown logic
     from app.core.database import db_manager
+
     await db_manager.close_all()
     print("Croar Backend Shutting Down...")
 
@@ -45,7 +46,7 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    openapi_url="/api/openapi.json"
+    openapi_url="/api/openapi.json",
 )
 
 # Exception Handlers
@@ -70,6 +71,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(enterprise.router, prefix="/api/v1/enterprise", tags=["Enterprise"])
+app.include_router(platform.router, prefix="/api/v1/super-admin", tags=["Platform Admin"])
 
 # Static Files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

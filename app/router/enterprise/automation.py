@@ -1,28 +1,33 @@
-from datetime import timezone
-from typing import List, Optional, Annotated
+from datetime import UTC
+from typing import Annotated, Any
 from uuid import UUID
-from fastapi import APIRouter, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from app.core.dependencies import DBSessionDep
+from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.communication import MailAutomation
 from app.models.enterprise.job import JobRequirement
+from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.communication import (
     MailAutomationCreate,
-    MailAutomationUpdate,
     MailAutomationResponse,
+    MailAutomationUpdate,
 )
 
 router = APIRouter(prefix="/automation", tags=["Mail Automation"])
 
 
-@router.get("/mail", response_model=List[MailAutomationResponse])
+@router.get("/mail", response_model=list[MailAutomationResponse])
 async def list_automations(
     session: DBSessionDep,
-    job_id: Optional[UUID] = None,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+    ],
+    job_id: UUID | None = None,
 ):
     """List all mail automations, optionally filtered by job."""
-    stmt = select(MailAutomation)
+    stmt = select(MailAutomation).where(MailAutomation.company_id == current_user.company_id)
     if job_id:
         stmt = stmt.where(MailAutomation.job_requirement_id == job_id)
     stmt = stmt.order_by(MailAutomation.created_at.desc())
@@ -34,11 +39,14 @@ async def list_automations(
 async def create_automation(
     request: MailAutomationCreate,
     session: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
+    ],
 ):
     """Create a new mail automation rule."""
     # Validate job exists
     job_stmt = select(JobRequirement).where(
-        JobRequirement.id == request.job_requirement_id,
+        JobRequirement.id == request.job_requirement_id, JobRequirement.company_id == current_user.company_id
     )
     job_result = await session.execute(job_stmt)
     if not job_result.scalar_one_or_none():
@@ -46,11 +54,9 @@ async def create_automation(
 
     data = request.model_dump()
     if data.get("send_at") and data["send_at"].tzinfo:
-        data["send_at"] = data["send_at"].astimezone(timezone.utc).replace(tzinfo=None)
+        data["send_at"] = data["send_at"].astimezone(UTC).replace(tzinfo=None)
 
-    automation = MailAutomation(
-        **data,
-    )
+    automation = MailAutomation(**data, company_id=current_user.company_id)
     session.add(automation)
     await session.commit()
     await session.refresh(automation)
@@ -62,10 +68,13 @@ async def update_automation(
     automation_id: UUID,
     request: MailAutomationUpdate,
     session: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
+    ],
 ):
     """Update an automation rule (including toggling is_enabled)."""
     stmt = select(MailAutomation).where(
-        MailAutomation.id == automation_id,
+        MailAutomation.id == automation_id, MailAutomation.company_id == current_user.company_id
     )
     result = await session.execute(stmt)
     automation = result.scalar_one_or_none()
@@ -74,7 +83,7 @@ async def update_automation(
 
     update_data = request.model_dump(exclude_unset=True)
     if update_data.get("send_at") and update_data["send_at"].tzinfo:
-        update_data["send_at"] = update_data["send_at"].astimezone(timezone.utc).replace(tzinfo=None)
+        update_data["send_at"] = update_data["send_at"].astimezone(UTC).replace(tzinfo=None)
 
     for key, value in update_data.items():
         setattr(automation, key, value)
@@ -88,10 +97,13 @@ async def update_automation(
 async def delete_automation(
     automation_id: UUID,
     session: DBSessionDep,
+    current_user: Annotated[
+        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
+    ],
 ):
     """Delete a mail automation rule."""
     stmt = select(MailAutomation).where(
-        MailAutomation.id == automation_id,
+        MailAutomation.id == automation_id, MailAutomation.company_id == current_user.company_id
     )
     result = await session.execute(stmt)
     automation = result.scalar_one_or_none()
