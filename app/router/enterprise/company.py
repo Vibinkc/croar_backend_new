@@ -36,7 +36,7 @@ async def get_global_stats(
         )
         # Fetch all partner IDs
         partner_stmt = select(Company.id).where(
-            Company.parent_id == current_user.company_id, Company.deleted_at == None
+            Company.parent_id == current_user.company_id, Company.deleted_at.is_(None)
         )
         partner_ids = (await session.execute(partner_stmt)).scalars().all()
         job_filter = or_(
@@ -44,11 +44,11 @@ async def get_global_stats(
         )
 
     # Total Managed Companies
-    comp_stmt = select(func.count(Company.id)).where(company_filter, Company.deleted_at == None)
+    comp_stmt = select(func.count(Company.id)).where(company_filter, Company.deleted_at.is_(None))
     total_companies = (await session.execute(comp_stmt)).scalar() or 0
 
     # Total Active Jobs
-    jobs_stmt = select(func.count(JobRequirement.id)).where(job_filter, JobRequirement.deleted_at == None)
+    jobs_stmt = select(func.count(JobRequirement.id)).where(job_filter, JobRequirement.deleted_at.is_(None))
     total_jobs = (await session.execute(jobs_stmt)).scalar() or 0
 
     return {
@@ -68,7 +68,7 @@ async def list_companies(
 
     is_consultancy = getattr(current_user.company, "is_consultancy", False)
 
-    stmt = select(Company).where(Company.deleted_at == None)
+    stmt = select(Company).where(Company.deleted_at.is_(None))
 
     if is_consultancy:
         # Show both the consultancy itself and its partners
@@ -146,10 +146,19 @@ async def update_company(
     ],
     update_data: CompanyUpdate = Body(...),
 ):
-    """Update a specific company profile."""
-    stmt = select(Company).where(
-        Company.id == company_id, Company.id == current_user.company_id, Company.deleted_at == None
-    )
+    from sqlalchemy import or_
+
+    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+
+    stmt = select(Company).where(Company.id == company_id, Company.deleted_at == None)
+
+    if is_consultancy:
+        stmt = stmt.where(
+            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+        )
+    else:
+        stmt = stmt.where(Company.id == current_user.company_id)
+
     result = await session.execute(stmt)
     company = result.scalar_one_or_none()
 
@@ -174,9 +183,19 @@ async def delete_company(
     ],
 ):
     """Soft delete a company."""
-    from datetime import datetime
+    from sqlalchemy import or_
 
-    stmt = select(Company).where(Company.id == company_id, Company.id == current_user.company_id)
+    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+
+    stmt = select(Company).where(Company.id == company_id, Company.deleted_at == None)
+
+    if is_consultancy:
+        stmt = stmt.where(
+            or_(Company.id == current_user.company_id, Company.parent_id == current_user.company_id)
+        )
+    else:
+        stmt = stmt.where(Company.id == current_user.company_id)
+
     result = await session.execute(stmt)
     company = result.scalar_one_or_none()
 
