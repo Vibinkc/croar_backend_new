@@ -262,9 +262,9 @@ async def schedule_candidate_interview(
         )
 
     schedule = InterviewSchedule(
-        automation_id=str(automation.id),
-        application_id=str(application.id),
-        interview_id=str(automation.interview_template_id) if automation.interview_type == "AI" else None,
+        automation_id=automation.id,
+        application_id=application.id,
+        interview_id=automation.interview_template_id if automation.interview_type == "AI" else None,
         scheduled_time=next_slot,
         meeting_link=meet_link,
         status="SCHEDULED",
