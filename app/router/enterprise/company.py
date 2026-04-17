@@ -214,8 +214,17 @@ async def get_company_analytics(
     current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
 ):
     """Get hiring analytics for a specific company."""
+    is_consultancy = getattr(current_user.company, "is_consultancy", False)
+    
     if company_id != current_user.company_id:
-        raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
+        if is_consultancy:
+            # Check if this company is a partner
+            stmt = select(Company.id).where(Company.id == company_id, Company.parent_id == current_user.company_id)
+            is_partner = (await session.execute(stmt)).scalar()
+            if not is_partner:
+                raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
+        else:
+            raise HTTPException(status_code=403, detail="Access denied to this company's analytics.")
     from app.models.enterprise.candidate import CandidateApplication
     from app.models.enterprise.job import JobRequirement
 
