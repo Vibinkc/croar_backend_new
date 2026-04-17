@@ -5,6 +5,8 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
 
+from app.models.shared.auth import user_roles
+
 from . import EnterpriseBase
 
 
@@ -38,7 +40,7 @@ class EnterpriseUser(EnterpriseBase):
     deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
     # Relationships
-    roles = relationship("Role", secondary="user_roles", back_populates="users")
+    roles = relationship("Role", secondary=user_roles, back_populates="users")
     company = relationship("Company")
 
     @property
