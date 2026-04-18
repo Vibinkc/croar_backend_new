@@ -5,7 +5,7 @@ from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, String, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from . import EnterpriseBase
+from .base import EnterpriseBase
 
 
 class Student(EnterpriseBase):

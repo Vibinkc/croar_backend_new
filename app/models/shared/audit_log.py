@@ -3,7 +3,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
 
-from . import SharedBase
+from .base import SharedBase
 
 
 class AuditLog(SharedBase):

@@ -11,11 +11,12 @@ from sqlalchemy.orm import selectinload
 from app.core.dependencies import DBSessionDep
 from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.enterprise.job import JobRequirement, JobStatus
+from app.schemas.enterprise.jobs import JobRequirementResponse
 
 router = APIRouter(prefix="/public/jobs", tags=["Public Jobs"])
 
 
-@router.get("/list", response_model=list[Any])
+@router.get("/list", response_model=list[JobRequirementResponse])
 async def list_active_jobs(
     session: DBSessionDep, company_id: UUID | None = None, company_slug: str | None = None
 ) -> list[JobRequirement]:
@@ -26,7 +27,8 @@ async def list_active_jobs(
     stmt = (
         select(JobRequirement)
         .join(JobStatus)
-        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at is None)
+        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at == None)
+        .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
     )
 
     if company_id:
@@ -47,7 +49,7 @@ async def get_public_job(job_id: UUID, session: DBSessionDep) -> dict[str, Any]:
     """Get job details publicly."""
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.company))
+        .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
         .where(JobRequirement.id == job_id)
     )
     result = await session.execute(stmt)
@@ -57,7 +59,7 @@ async def get_public_job(job_id: UUID, session: DBSessionDep) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return {
-        "job": job,
+        "job": JobRequirementResponse.model_validate(job),
         "organization": {
             "name": job.company.name if job.company else "Our Company",
             "logo_url": job.company.logo_url if job.company else None,

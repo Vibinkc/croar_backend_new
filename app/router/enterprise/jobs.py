@@ -97,7 +97,7 @@ async def list_jobs(
     stmt = (
         select(JobRequirement)
         .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
-        .where(JobRequirement.deleted_at is None)
+        .where(JobRequirement.deleted_at == None)
     )
 
     if company_id:
@@ -147,7 +147,7 @@ async def get_job(
     stmt = (
         select(JobRequirement)
         .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
-        .where(JobRequirement.id == job_id, JobRequirement.deleted_at is None)
+        .where(JobRequirement.id == job_id, JobRequirement.deleted_at == None)
     )
 
     if is_consultancy:

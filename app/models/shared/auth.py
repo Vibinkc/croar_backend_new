@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from . import SharedBase
+from .base import SharedBase
 from .constants import ModuleScope, PermissionAction, PermissionScope
 
 # Association Table for SuperAdmin and Role
