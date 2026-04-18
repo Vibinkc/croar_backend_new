@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 from datetime import datetime
 from typing import Any, cast
@@ -27,7 +27,7 @@ _settings = get_settings()
 
 def generate_onboarding_code() -> str:
     """Generate a unique onboarding code like ONB-XXXXX."""
-    suffix = "".join(random.choices(string.digits, k=5))
+    suffix = "".join(secrets.choice(string.digits) for _ in range(5))
     return f"ONB-{suffix}"
 
 
@@ -211,8 +211,11 @@ async def initiate_onboarding_process(
             <body>
                 <h2>Welcome to the Team!</h2>
                 <p>Hello {candidate.full_name or "Candidate"},</p>
-                <p>We are excited to start your onboarding process. Please click the link below to complete your profile and upload necessary documents:</p>
-                <p><a href="{onboarding_url}" style="padding: 10px 20px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 8px;">Complete Onboarding</a></p>
+                <p>We are excited to start your onboarding process. Please click the "
+                "link below to complete your profile and upload necessary documents:</p>
+                <p><a href="{onboarding_url}" style="padding: 10px 20px; "
+                "background-color: #4f46e5; color: white; text-decoration: none; "
+                "border-radius: 8px;">Complete Onboarding</a></p>
                 <p>Or copy and paste this link: {onboarding_url}</p>
                 <p>Best regards,<br>HR Team</p>
             </body>

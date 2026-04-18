@@ -77,7 +77,8 @@ async def ai_generate_survey_questions(
     if not st:
         raise HTTPException(status_code=404, detail="Survey Type not found")
 
-    prompt = f"""You are an elite HR Strategy Consultant. Generate {request.count} high-fidelity survey questions specifically for the {request.industry_nature} industry.
+    prompt = f"""You are an elite HR Strategy Consultant. Generate {request.count}
+high-fidelity survey questions specifically for the {request.industry_nature} industry.
 The survey type is: {st.name}.
 
 Requirements:
@@ -112,7 +113,7 @@ Return ONLY a JSON object:
         )
         return [SurveyAIGeneratedQuestion(**q) for q in questions_list]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}")
+        raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}") from e
 
 
 @router.post("/templates", response_model=SurveyTemplateSchema)
@@ -437,7 +438,7 @@ Return ONLY a JSON object:
         data = json.loads(response_str)
         return SurveyAIAnalysis(**data)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI Analysis failed: {e!s}")
+        raise HTTPException(status_code=500, detail=f"AI Analysis failed: {e!s}") from e
 
 
 @router.post("/instances/{instance_id}/notify")

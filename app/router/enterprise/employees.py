@@ -224,6 +224,6 @@ async def convert_candidate(
         result = await session.execute(stmt)
         return result.scalar_one()
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}") from e

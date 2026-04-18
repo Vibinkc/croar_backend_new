@@ -1,4 +1,4 @@
-import random
+import secrets
 import string
 from datetime import datetime
 from typing import Annotated, Any, cast
@@ -42,7 +42,7 @@ router = APIRouter(prefix="/onboarding", tags=["Enterprise Onboarding"])
 
 def generate_onboarding_code() -> str:
     """Generate a unique onboarding code like ONB-XXXXX."""
-    suffix = "".join(random.choices(string.digits, k=5))
+    suffix = "".join(secrets.choice(string.digits) for _ in range(5))
     return f"ONB-{suffix}"
 
 
@@ -207,7 +207,7 @@ async def get_onboarding(
 
 @router.get("/statuses", response_model=list[OnboardingStatusResponse])
 async def get_onboarding_statuses(
-    session: DBSessionDep, current_user: Annotated[object, Depends(get_current_user)]
+    session: DBSessionDep, _current_user: Annotated[object, Depends(get_current_user)]
 ) -> list[OnboardingStatus]:
     """List all available onboarding statuses."""
     stmt = select(OnboardingStatus)
@@ -282,7 +282,7 @@ async def resubmit_onboarding(
 @router.post("/{id}/approve", response_model=OnboardingResponse)
 async def approve_onboarding(
     id: UUID,
-    request: OnboardingApproveRequest,
+    _request: OnboardingApproveRequest,
     session: DBSessionDep,
     current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.moderate))

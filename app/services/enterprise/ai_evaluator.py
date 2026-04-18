@@ -14,13 +14,15 @@ class AIEvaluatorService:
         if not self.client.api_key:
             return None
 
-        prompt = f"""
-        Generate a subjective assessment question based on the topic: "{topic}" and difficulty level: "{difficulty}".
-        Return a JSON object with the following fields:
-        - question: The question text.
-        - model_answer: A high-quality model answer.
-        - criteria: A dictionary of grading criteria (e.g., grammar, relevance) and their weights (summing to 100).
-        """
+        prompt = (
+            f'Generate a subjective assessment question based on the topic: "{topic}" '
+            f'and difficulty level: "{difficulty}".\n'
+            "Return a JSON object with the following fields:\n"
+            "- question: The question text.\n"
+            "- model_answer: A high-quality model answer.\n"
+            "- criteria: A dictionary of grading criteria (e.g., grammar, relevance)\n"
+            "  and their weights (summing to 100)."
+        )
 
         try:
             response = await self.client.chat.completions.create(
@@ -28,7 +30,9 @@ class AIEvaluatorService:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert educational assessment creator. Output valid JSON only.",
+                        "content": (
+                            "You are an expert educational assessment creator. Output valid JSON only."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -50,13 +54,17 @@ class AIEvaluatorService:
         Student Response: "{student_response}"
 
         CRITICAL VALIDATION:
-        1. If the Student Response is nonsensical, completely irrelevant, or extremely short (e.g., "m", "ok", "idk", single words), the `score` MUST be 0.
+        1. If the Student Response is nonsensical, completely irrelevant,
+           or extremely short (e.g., "m", "ok", "idk", single words),
+           the `score` MUST be 0.
         2. If the response is irrelevant to the question, `score` MUST be 0.
-        3. Do NOT give points for "Grammar" or "Tone" if the content is meaningless. Set ALL metrics to 0 in that case.
+        3. Do NOT give points for "Grammar" or "Tone" if the content is meaningless.
+           Set ALL metrics to 0 in that case.
 
         Return a JSON object with:
         - score: A score out of 100.
-        - feedback: Constructive feedback. If score is 0, explain why (e.g. "Response was too short" or "Irrelevant").
+        - feedback: Constructive feedback. If score is 0, explain why
+          (e.g. "Response was too short" or "Irrelevant").
         - metrics: A dictionary with 'grammar', 'tone', 'structure', 'relevance' scores (0-100).
         """
 
@@ -78,25 +86,24 @@ class AIEvaluatorService:
     async def evaluate_code_response(
         self, question: str, test_cases: list[dict[str, str]], student_code: str
     ) -> dict[str, Any]:
-        prompt = f"""
-        Evaluate the following student code against the problem statement and test cases.
-
-        Question: "{question}"
-        Test Cases: {json.dumps(test_cases, indent=2)}
-        Student Code:
-        {student_code}
-
-        CRITICAL VALIDATION:
-        1. Mentally execute the code against EVERY test case provided.
-        2. Calculate the success rate (e.g., if 3 out of 4 test cases pass, the base score is 75).
-        3. Adjust the final score (0-100) based on code quality, efficiency, and edge case handling.
-        4. If the code is completely nonsensical or doesn't address the problem, the score MUST be 0.
-
-        Return a JSON object with:
-        - score: A score out of 100 based primarily on test case success rate.
-        - feedback: A single string containing detailed feedback, which test cases passed/failed (simulated), and suggestions for improvement.
-        - success_rate: percentage (0-100).
-        """
+        prompt = (
+            "Evaluate the following student code against the problem statement and test cases.\n\n"
+            f'Question: "{question}"\n'
+            f"Test Cases: {json.dumps(test_cases, indent=2)}\n"
+            f"Student Code:\n{student_code}\n\n"
+            "CRITICAL VALIDATION:\n"
+            "1. Mentally execute the code against EVERY test case provided.\n"
+            "2. Calculate the success rate (e.g., if 3 out of 4 test cases pass, the base score is 75).\n"
+            "3. Adjust the final score (0-100) based on code quality, efficiency, "
+            "and edge case handling.\n"
+            "4. If the code is completely nonsensical or doesn't address the problem, "
+            "the score MUST be 0.\n\n"
+            "Return a JSON object with:\n"
+            "- score: A score out of 100 based primarily on test case success rate.\n"
+            "- feedback: A single string containing detailed feedback, which test cases\n"
+            "  passed/failed (simulated), and suggestions for improvement.\n"
+            "- success_rate: percentage (0-100)."
+        )
 
         try:
             response = await self.client.chat.completions.create(
@@ -104,7 +111,9 @@ class AIEvaluatorService:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert code reviewer and execution engine. Output valid JSON only.",
+                        "content": (
+                            "You are an expert code reviewer and execution engine. Output valid JSON only."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -124,7 +133,11 @@ class AIEvaluatorService:
 
         round_context = ""
         if round_titles and len(round_titles) > 0:
-            round_context = f"The client has requested the following specific rounds: {', '.join(round_titles)}. Use these titles and adjust question types to fit their purpose."
+            round_context = (
+                f"The client has requested the following specific rounds: "
+                f"{', '.join(round_titles)}. Use these titles and adjust "
+                "question types to fit their purpose."
+            )
         else:
             round_context = f"Design a realistic {rounds_count}-round hiring process."
 
@@ -135,7 +148,8 @@ class AIEvaluatorService:
         Return a JSON object with a 'rounds' array. Each item should have:
         - round_number: integer
         - round_title: string
-        - questions: array of objects {{"id": int, "text": string, "type": "mcq"|"code"|"text"}}
+        - questions: array of objects {{"id": int, "text": string,
+          "type": "mcq"|"code"|"text"}}
         """
 
         try:
@@ -187,7 +201,10 @@ class AIEvaluatorService:
         try:
             response = await self.client.images.generate(
                 model="dall-e-3",
-                prompt=f"A cinematic, high-fidelity holographic portrait of a futuristic starship pilot. {prompt}.",
+                prompt=(
+                    "A cinematic, high-fidelity holographic portrait of a "
+                    f"futuristic starship pilot. {prompt}."
+                ),
                 size="1024x1024",
                 n=1,
             )

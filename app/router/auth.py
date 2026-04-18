@@ -160,7 +160,7 @@ async def refresh_token(refresh_data: RefreshTokenRequest, session: DBSessionDep
             expires_in=_settings.access_token_expire_minutes * 60,
         )
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise HTTPException(status_code=401, detail="Invalid refresh token") from None
 
 
 @router.get("/me")

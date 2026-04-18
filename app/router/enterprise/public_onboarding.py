@@ -71,7 +71,7 @@ async def submit_onboarding_info(token: UUID, request: Request, session: DBSessi
     try:
         data = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON data")
+        raise HTTPException(status_code=400, detail="Invalid JSON data") from None
 
     # Update info blocks based on what's provided
     if "job_info" in data:

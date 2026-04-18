@@ -78,9 +78,12 @@ async def process_interview_turn(db: AsyncSession, attempt_id: str, user_text: s
     DECIDE:
     1. If in technical interview phase:
        - If the candidate sufficiently answered, set action to NEXT_QUESTION.
-       - If the candidate explicitly doesn't know the answer OR they have struggled for 2+ turns on this same topic, set action to NEXT_QUESTION (move on politely).
+       - If the candidate explicitly doesn't know the answer OR they have
+         struggled for 2+ turns on this same topic, set action to NEXT_QUESTION
+         (move on politely).
        - If they need minor clarification, set action to FOLLOW_UP.
-       - NEVER repeat a question literally. If you must ask again, change your wording completely.
+       - NEVER repeat a question literally. If you must ask again,
+         change your wording completely.
        - Be professional, empathetic, and conversational.
 
     2. If in EMAIL_VERIFICATION phase (all questions done but email not verified):
@@ -112,7 +115,10 @@ async def process_interview_turn(db: AsyncSession, attempt_id: str, user_text: s
             if current_index >= len(questions):
                 action = "EMAIL_VERIFICATION"
                 if "confirm your email" not in ai_text.lower():
-                    ai_text = f"Got it. {ai_text}. Before we conclude, could you please confirm your email address for our records?"
+                    ai_text = (
+                        f"Got it. {ai_text}. Before we conclude, could you please "
+                        "confirm your email address for our records?"
+                    )
             else:
                 next_q = questions[current_index]
                 q_text = str(next_q.get("question", ""))
@@ -120,11 +126,17 @@ async def process_interview_turn(db: AsyncSession, attempt_id: str, user_text: s
                     ai_text = f"Got it. {ai_text}. Now, let's move to the next topic: {q_text}"
         elif action == "EMAIL_VERIFICATION" and not bool(ai_decision.get("email_matched")):
             if "email" not in user_text.lower() and "@" not in user_text:
-                ai_text = "Before we wrap up, I just need you to confirm your email address for verification purposes."
+                ai_text = (
+                    "Before we wrap up, I just need you to confirm your email "
+                    "address for verification purposes."
+                )
 
         if bool(ai_decision.get("email_matched")):
             action = "END"
-            ai_text = "Thank you! Your email has been verified. That covers all my questions for today. We will get back to you soon."
+            ai_text = (
+                "Thank you! Your email has been verified. That covers all my "
+                "questions for today. We will get back to you soon."
+            )
 
         history.append({"role": "ai", "text": ai_text})
 
@@ -213,7 +225,10 @@ async def initialize_interview(
         questions = cast("list[dict[str, Any]]", plan_data.get("questions", []))
 
         if questions:
-            initial_text = f"Hello! I am your AI interviewer. Let's start with our first topic: {questions[0].get('question')}"
+            initial_text = (
+                f"Hello! I am your AI interviewer. Let's start with our first "
+                f"topic: {questions[0].get('question')}"
+            )
             history.append({"role": "ai", "text": initial_text})
             transcript_data["history"] = history
             attempt.transcript = transcript_data

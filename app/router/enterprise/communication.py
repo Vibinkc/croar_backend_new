@@ -88,10 +88,15 @@ def wrap_with_layout(body: str, company_name: str, logo_url: str | None = None) 
     <head>
         <meta charset="utf-8">
         <style>
-            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #334155; margin: 0; padding: 0; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                             Helvetica, Arial, sans-serif;
+                line-height: 1.6; color: #334155; margin: 0; padding: 0;
+            }}
             .container {{ max-width: 600px; margin: 0 auto; padding: 40px 20px; }}
             .header {{ border-bottom: 1px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px; }}
-            .footer {{ border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 40px; font-size: 12px; color: #94a3b8; text-align: center; }}
+            .footer {{ border-top: 1px solid #e2e8f0; padding-top: 20px; margin-top: 40px;
+                      font-size: 12px; color: #94a3b8; text-align: center; }}
         </style>
     </head>
     <body>
@@ -242,7 +247,7 @@ async def get_email_logs(
 @router.post("/sync-imap")
 async def sync_emails_manually(
     session: DBSessionDep,
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
     ],
     background_tasks: BackgroundTasks,
@@ -314,7 +319,7 @@ async def send_emails(
     current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
     ],
-    background_tasks: BackgroundTasks,
+    _background_tasks: BackgroundTasks,
 ) -> dict[str, int]:
     """Send emails."""
     template = None
@@ -452,7 +457,7 @@ async def send_emails(
 @router.post("/draft")
 async def draft_email(
     request: EmailDraftRequest,
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
     ],
 ) -> dict[str, Any]:
@@ -468,13 +473,13 @@ async def draft_email(
         )
         return {"content": response.choices[0].message.content}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/generate-template")
 async def generate_template(
     request: TemplateGenerationRequest,
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
     ],
 ) -> dict[str, Any]:
@@ -487,7 +492,7 @@ async def generate_template(
         )
         return {
             "name": request.purpose,
-            "subject": "Regarding your application – {{job_title}}",
+            "subject": "Regarding your application - {{job_title}}",
             "body": fallback_body,
             "variables": ["candidate_name", "job_title", "company_name", "recruiter_name"],
         }
@@ -497,7 +502,8 @@ async def generate_template(
         system_prompt = (
             "You are an expert HR email writer. "
             "Generate a complete email template in JSON format with the following keys: "
-            '"name" (short template name), "subject" (email subject line), "body" (full HTML-friendly email body). '
+            '"name" (short template name), "subject" (email subject line), '
+            '"body" (full HTML-friendly email body). '
             "Use double-brace placeholders like {{candidate_name}}, {{job_title}}, {{company_name}}, "
             "{{recruiter_name}}, {{company_address}} where appropriate. "
             "Return ONLY valid JSON, no markdown fences."
@@ -526,4 +532,4 @@ async def generate_template(
             "variables": variables,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Template generation failed: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Template generation failed: {e!s}") from e

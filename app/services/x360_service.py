@@ -275,7 +275,7 @@ class X360Service:
             def avg(lst: list[int]) -> float | None:
                 return sum(lst) / len(lst) if lst else None
 
-            all_vals = [v for l in rel_data.values() for v in l]
+            all_vals = [v for lst in rel_data.values() for v in lst]
 
             formatted_scores.append(
                 {

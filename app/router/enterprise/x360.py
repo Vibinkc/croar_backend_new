@@ -75,7 +75,7 @@ async def list_questions(
 @router.post("/ai-generate", response_model=list[X360AIGeneratedQuestion])
 async def generate_questions_ai(
     request: X360AIGenerateRequest,
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.analytics, PermissionAction.generate))
     ],
 ) -> list[X360AIGeneratedQuestion]:
@@ -83,7 +83,9 @@ async def generate_questions_ai(
     if request.custom_category:
         categories_str += f", {request.custom_category}"
 
-    prompt = f"""You are an elite Performance Management Consultant. Generate {request.count} high-fidelity 360-degree feedback questions for the following categories: {categories_str}.
+    prompt = f"""You are an elite Performance Management Consultant.
+Generate {request.count} high-fidelity 360-degree feedback questions
+for the following categories: {categories_str}.
 The target audience is employees in a modern, fast-paced organization.
 
 Requirements:
@@ -115,7 +117,7 @@ Return ONLY a JSON list of objects:
         data = json.loads(response_str)
         return [X360AIGeneratedQuestion(**q) for q in cast("list[dict[str, object]]", data)]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}")
+        raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}") from e
 
 
 # Templates
@@ -334,7 +336,7 @@ async def get_cycle_progress(
         )
 
     # Calculate AI scores for completed ratees
-    for rid, data in progress_map.items():
+    for _rid, data in progress_map.items():
         if cast("int", data["completed"]) > 0:
             # Fetch report data (which includes AI eval)
             report = await x360_service.get_report(db, cast("UUID", data["ratee_id"]), cycle_id)

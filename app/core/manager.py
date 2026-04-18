@@ -7,7 +7,7 @@ from app.core.database import DBSessionManager
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """
     To handles startup and shutdown events.
     """

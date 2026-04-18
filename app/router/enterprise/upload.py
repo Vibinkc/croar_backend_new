@@ -16,8 +16,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 @router.post("/logo")
 async def upload_company_logo(
-    session: DBSessionDep,
-    current_user: Annotated[
+    _session: DBSessionDep,
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
     ],
     file: UploadFile = File(...),
@@ -38,7 +38,7 @@ async def upload_company_logo(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e!s}") from e
 
     # Return the relative URL
     return {"url": f"/uploads/branding/{filename}"}

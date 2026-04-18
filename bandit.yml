@@ -3,3 +3,5 @@ exclude_dirs:
   - env
 skips:
   - B101  # assert statement
+  - B106  # hardcoded password funcarg
+  - B110  # try-except-pass

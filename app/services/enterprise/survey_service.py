@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +10,6 @@ from app.models.enterprise.survey import SurveyInvite, SurveyInviteStatus
 from app.router.enterprise.communication import send_smtp_email
 
 _settings = get_settings()
-
-
-from typing import cast
 
 
 class SurveyService:

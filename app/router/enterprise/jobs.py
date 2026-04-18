@@ -324,7 +324,7 @@ async def publish_job(
 @router.post("/generate-jd")
 async def generate_jd_endpoint(
     request: JDGenerationRequest,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
+    _current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
 ) -> dict[str, object]:
     """Generate or enhance a job description and optionally a workflow using AI."""
     jd_result = await generate_job_description_ai(
@@ -347,7 +347,7 @@ async def generate_jd_endpoint(
 @router.post("/generate-workflow")
 async def generate_workflow_endpoint(
     request: WorkflowGenerationRequest,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
+    _current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
 ) -> list[dict[str, object]]:
     """Generate a structured automated workflow for a job."""
     workflow = await hiring_agent_service.generate_automated_workflow(

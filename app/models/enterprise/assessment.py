@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -14,9 +14,6 @@ class AssessmentType(enum.StrEnum):
     APTITUDE = "APTITUDE"
     CODING = "CODING"
     BOTH = "BOTH"
-
-
-from sqlalchemy.orm import Mapped, mapped_column
 
 
 class AssessmentTemplate(Base):

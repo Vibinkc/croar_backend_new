@@ -48,7 +48,7 @@ async def create_interview_template(
 
 @router.post("/generate-questions")
 async def generate_questions(
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.interviews, PermissionAction.generate))
     ],
     topic: str,
