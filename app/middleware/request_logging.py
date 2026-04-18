@@ -23,7 +23,8 @@ async def request_logging_middleware(
         response.headers["X-Request-ID"] = request_id
 
         logger.info(
-            f"Request completed | ID: {request_id} | Status: {response.status_code} | Time: {process_time:.4f}s"
+            f"Request completed | ID: {request_id} | Status: {response.status_code} | "
+            f"Time: {process_time:.4f}s"
         )
         return response
     except Exception as e:

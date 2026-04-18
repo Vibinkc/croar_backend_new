@@ -37,7 +37,7 @@ async def list_assessment_automations(
 
 @router.post("/generate-preview", response_model=list[dict[str, Any]])
 async def generate_preview_questions(
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
     ],
     type: AssessmentType,
@@ -83,7 +83,7 @@ async def generate_questions(
     ],
     automation_id: UUID,
     db: DBSessionDep,
-    count: int = 10,
+    _count: int = 10,
 ) -> AssessmentAutomation:
     company_id = getattr(current_user, "company_id", None)
     stmt = select(AssessmentAutomation).where(

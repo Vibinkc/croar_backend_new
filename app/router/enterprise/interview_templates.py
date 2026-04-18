@@ -23,7 +23,7 @@ async def list_interview_templates(
     company_id = getattr(current_user, "company_id", None)
     query = (
         select(Interview)
-        .where(Interview.deleted_at is None, Interview.company_id == company_id)
+        .where(Interview.deleted_at == None, Interview.company_id == company_id)
         .order_by(Interview.created_at.desc())
     )
     result = await db.execute(query)
@@ -48,7 +48,7 @@ async def create_interview_template(
 
 @router.post("/generate-questions")
 async def generate_questions(
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.interviews, PermissionAction.generate))
     ],
     topic: str,

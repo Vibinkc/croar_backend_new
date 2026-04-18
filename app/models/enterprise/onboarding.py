@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
 
-from . import EnterpriseBase
+from .base import EnterpriseBase
 
 
 class OnboardingTemplate(EnterpriseBase):

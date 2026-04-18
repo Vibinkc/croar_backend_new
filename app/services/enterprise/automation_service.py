@@ -18,6 +18,7 @@ from app.models.enterprise.user_role import EnterpriseUser as HiringAgent
 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
+background_tasks_set = set()
 
 
 async def evaluate_criteria(criteria: str, context: dict[str, Any]) -> bool:
@@ -95,7 +96,8 @@ async def trigger_automations(
     for mail_auto in mail_automations:
         passed = await evaluate_criteria(mail_auto.criteria, context)
         logger.info(
-            f"Mail Automation {mail_auto.id} evaluation: {'PASSED' if passed else 'FAILED'} | Criteria: '{mail_auto.criteria}'"
+            f"Mail Automation {mail_auto.id} evaluation: "
+            f"{'PASSED' if passed else 'FAILED'} | Criteria: '{mail_auto.criteria}'"
         )
         if passed:
             if mail_auto.is_immediate:
@@ -137,7 +139,8 @@ async def trigger_automations(
                     )
                 else:
                     logger.warning(
-                        f"Auto-move skipped for application {application.id}: already at last stage {max_stage}"
+                        f"Auto-move skipped for application {application.id}: "
+                        f"already at last stage {max_stage}"
                     )
 
     # 4. Handle Assessment Automations
@@ -152,7 +155,8 @@ async def trigger_automations(
     for ass_auto in as_automations:
         passed = await evaluate_criteria(ass_auto.criteria, context)
         logger.info(
-            f"Assessment Automation {ass_auto.id} evaluation: {'PASSED' if passed else 'FAILED'} | Criteria: '{ass_auto.criteria}'"
+            f"Assessment Automation {ass_auto.id} evaluation: "
+            f"{'PASSED' if passed else 'FAILED'} | Criteria: '{ass_auto.criteria}'"
         )
         if passed:
             if ass_auto.is_immediate:
@@ -190,7 +194,8 @@ async def trigger_automations(
     for interview_auto in int_automations:
         passed = await evaluate_criteria(interview_auto.criteria, context)
         logger.info(
-            f"Interview Automation {interview_auto.id} evaluation: {'PASSED' if passed else 'FAILED'} | Criteria: '{interview_auto.criteria}'"
+            f"Interview Automation {interview_auto.id} evaluation: "
+            f"{'PASSED' if passed else 'FAILED'} | Criteria: '{interview_auto.criteria}'"
         )
         if passed:
             logger.info(f"Scheduling interview for {candidate.email} via automation {interview_auto.id}")
@@ -290,7 +295,9 @@ async def send_assessment_invitation(
 
         from fastapi.concurrency import run_in_threadpool
 
-        asyncio.create_task(run_in_threadpool(do_send))
+        task = asyncio.create_task(run_in_threadpool(do_send))
+        background_tasks_set.add(task)
+        task.add_done_callback(background_tasks_set.discard)
 
     # 5. Log as 'sent'
     log = EmailLog(
@@ -369,7 +376,9 @@ async def send_automated_email(
 
         from fastapi.concurrency import run_in_threadpool
 
-        asyncio.create_task(run_in_threadpool(do_send))
+        task = asyncio.create_task(run_in_threadpool(do_send))
+        background_tasks_set.add(task)
+        task.add_done_callback(background_tasks_set.discard)
 
     # 5. Log
     log = EmailLog(

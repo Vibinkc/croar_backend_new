@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
 
-from . import EnterpriseBase
+from .base import EnterpriseBase
 
 # Enums
 INTERVIEW_TYPE = ENUM("HR", "TECHNICAL", "VIDEO", "LIVE", name="interview_type", create_type=True)

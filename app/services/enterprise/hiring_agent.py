@@ -122,13 +122,15 @@ class HiringAgentService:
         if criteria.get("check_notice_period") and job.notice_period_max is not None:
             if candidate.notice_period is not None and candidate.notice_period > job.notice_period_max:
                 rejection_reasons.append(
-                    f"Notice period of {candidate.notice_period} days exceeds the job limit of {job.notice_period_max} days."
+                    f"Notice period of {candidate.notice_period} days "
+                    f"exceeds the job limit of {job.notice_period_max} days."
                 )
 
         if criteria.get("check_salary") and job.salary_max is not None:
             if candidate.expected_salary is not None and candidate.expected_salary > job.salary_max:
                 rejection_reasons.append(
-                    f"Expected salary of {candidate.expected_salary} exceeds the job budget max of {job.salary_max}."
+                    f"Expected salary of {candidate.expected_salary} "
+                    f"exceeds the job budget max of {job.salary_max}."
                 )
 
         if rejection_reasons:
@@ -228,13 +230,13 @@ class HiringAgentService:
             q_text = "<br>".join([f"{i + 1}. {q}" for i, q in enumerate(questions)])
 
             subject = f"[REF:{app.id}] Screening: Following up on your application for {job.title}"
-            body = f"""
-            Hi {candidate.full_name},<br><br>
-            To proceed with your application for <b>{job.title}</b>, please answer the following questions:<br><br>
-            {q_text}<br><br>
-            Simply reply to this email with your answers.<br><br>
-            Best regards,<br>Autonomous Hiring Agent
-            """
+            body = (
+                f"Hi {candidate.full_name},<br><br>To proceed with your "
+                f"application for <b>{job.title}</b>, please answer the "
+                f"following questions:<br><br>{q_text}<br><br>"
+                "Simply reply to this email with your answers.<br><br>"
+                "Best regards,<br>Autonomous Hiring Agent"
+            )
 
             bt.add_task(self._send_agent_email, str(candidate.email), subject, body)
 
@@ -353,21 +355,28 @@ class HiringAgentService:
             )
             content = str(res.choices[0].message.content)
             return cast("dict[str, Any]", json.loads(content))
-        except:
+        except Exception:
             return {"score": 50, "analysis": "Could not parse response with AI."}
 
     async def get_rejection_explanation(self, candidate_name: str, job_title: str, reasons: list[str]) -> str:
         """
         Generates a professional, AI-crafted rejection reason.
         """
-        prompt = f"Write a professional and polite 1-sentence reason for rejecting {candidate_name} for the {job_title} role. Reasons for rejection: {', '.join(reasons)}. Keep it constructive."
+        prompt = (
+            f"Write a professional and polite 1-sentence reason for rejecting {candidate_name} "
+            f"for the {job_title} role. Reasons for rejection: {', '.join(reasons)}. "
+            "Keep it constructive."
+        )
         try:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
             )
             return str(response.choices[0].message.content)
-        except:
-            return "Thank you for your interest, but your profile does not meet our current requirements for notice period or salary expectations."
+        except Exception:
+            return (
+                "Thank you for your interest, but your profile does not meet our "
+                "current requirements for notice period or salary expectations."
+            )
 
     async def generate_smart_reply(self, message_body: str, candidate_name: str, job_title: str) -> str:
         """
@@ -388,8 +397,12 @@ class HiringAgentService:
                 model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
             )
             return str(response.choices[0].message.content)
-        except:
-            return f"Hi {candidate_name}, thank you for your message. We have received your update regarding the {job_title} position and will get back to you shortly."
+        except Exception:
+            return (
+                f"Hi {candidate_name}, thank you for your message. We have received "
+                f"your update regarding the {job_title} position and will get "
+                "back to you shortly."
+            )
 
 
 hiring_agent_service = HiringAgentService()

@@ -116,6 +116,10 @@ ignore = [
     "TD003",   # wants TODO comments to contain issue link
     "TID252",  # wants to avoid using relative imports
     "PLC0415", # wants to avoid using internal class/method imports
+    "B008",    # Do not perform function call in argument defaults (standard FastAPI)
+    "S105",    # Possible hardcoded password (false positives)
+    "S106",    # Possible hardcoded password (false positives)
+    "S110",    # try-except-pass (sometimes okay, bandit is noisy)
     # TODO: This needs to be enabled later
     "ERA001", # wants to avoid commented code 
     # TODO: Add Copyright rule later
@@ -124,6 +128,9 @@ ignore = [
     "RUF029",
     "RET504",
     "RUF043",
+    "N818",    # Exception names should end in Error
+    "D401",    # Docstrings should be in imperative mood
+    "RUF067",  # __init__.py should only contain docstrings and re-exports
 ]
 
 [tool.coverage.report]
@@ -141,30 +148,31 @@ exclude_also = ["if TYPE_CHECKING:"]
     "E722",    # bare except is fine in scripts
     "RUF006",  # dangling asyncio tasks are fine in scripts
     "E402",    # module-level imports after code are fine in scripts
+    "E501",    # Line too long is fine in scripts
 ]
 "seed_*.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "check_*.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "fix_*.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "reset_db.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "api_test.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "verify_*.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "tmp_*.py" = [
     "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "F821",
 ]
 "test_*.py" = [
-    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402",
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 "tests/**/*.py" = [
     "INP001",  # wants to use __init__.py for test classes
@@ -172,6 +180,15 @@ exclude_also = ["if TYPE_CHECKING:"]
     "SLF001",  # wants to avoid accessing private attributes
     "PLR6301", # wants to avoid using non public methods if static possible
     "PLR2004", # wants to avoid using direct values
+]
+"hard_db_update_*.py" = [
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
+]
+"patch_*.py" = [
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
+]
+"init_schema_all.py" = [
+    "ANN", "ARG001", "D", "B904", "B008", "E722", "RUF006", "E402", "E501",
 ]
 
 [tool.ruff.lint.isort]

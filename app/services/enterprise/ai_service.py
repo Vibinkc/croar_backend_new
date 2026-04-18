@@ -1,12 +1,11 @@
 import logging
-
-from app.models.enterprise.assessment import AssessmentType
-
-logger = logging.getLogger(__name__)
-
 from typing import cast
 
 from app.core.ai import generate_aptitude_questions, generate_coding_questions
+from app.core.ai import generate_interview_questions as giq
+from app.models.enterprise.assessment import AssessmentType
+
+logger = logging.getLogger(__name__)
 
 
 async def generate_assessment_questions(
@@ -99,9 +98,6 @@ async def generate_assessment_questions(
     except Exception as e:
         logger.error(f"AI Generation Error: {e}")
         return []
-
-
-from app.core.ai import generate_interview_questions as giq
 
 
 async def generate_interview_questions_service(

@@ -41,7 +41,9 @@ async def _send_scheduled_email_async(
 
         if not (automation and application and candidate and job):
             logger.error(
-                f"Missing data for task: auto={bool(automation)}, app={bool(application)}, cand={bool(candidate)}, job={bool(job)}"
+                f"Missing data for task: auto={bool(automation)}, "
+                f"app={bool(application)}, cand={bool(candidate)}, "
+                f"job={bool(job)}"
             )
             return False
 

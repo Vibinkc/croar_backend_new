@@ -28,15 +28,15 @@ async def get_platform_stats(
 ) -> dict[str, object]:
     """Get high-level platform statistics for the Super Admin dashboard."""
     # Total Organizations
-    org_stmt = select(func.count(Company.id)).where(Company.deleted_at is None)
+    org_stmt = select(func.count(Company.id)).where(Company.deleted_at == None)
     total_orgs = (await session.execute(org_stmt)).scalar() or 0
 
     # Total Users across all orgs
-    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at is None)
+    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at == None)
     total_users = (await session.execute(user_stmt)).scalar() or 0
 
     # Total Global Roles
-    role_stmt = select(func.count(Role.id)).where(Role.tenant_id is None)
+    role_stmt = select(func.count(Role.id)).where(Role.tenant_id == None)
     total_roles = (await session.execute(role_stmt)).scalar() or 0
 
     return {
@@ -50,7 +50,7 @@ async def get_platform_stats(
 @router.get("/tenants", response_model=list[CompanyResponse])
 async def list_tenants(session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]) -> list[object]:
     """List all tenants (organizations) in the platform."""
-    stmt = select(Company).where(Company.deleted_at is None)
+    stmt = select(Company).where(Company.deleted_at == None)
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
@@ -306,7 +306,7 @@ async def list_global_roles(
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id is None)
+        .where(Role.tenant_id == None)
         .order_by(Role.role_rank.asc())
     )
     result = await session.execute(stmt)
@@ -319,7 +319,7 @@ async def create_global_role(
 ) -> object:
     """Create a new global system role."""
     # Check if role exists
-    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id is None)
+    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id == None)
     if (await session.execute(stmt)).scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Role already exists")
 
@@ -355,7 +355,7 @@ async def update_global_role(
 ) -> object:
     """Update a global role's metadata and permissions."""
     stmt = (
-        select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id, Role.tenant_id is None)
+        select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id, Role.tenant_id == None)
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()
@@ -401,7 +401,7 @@ async def list_all_permissions(
     """List all available permissions in the system."""
     stmt = (
         select(Permission)
-        .where(Permission.tenant_id is None)
+        .where(Permission.tenant_id == None)
         .order_by(Permission.module.asc(), Permission.resource.asc())
     )
     result = await session.execute(stmt)

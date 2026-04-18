@@ -1,10 +1,4 @@
-from app.core.database import Base
-
-
-class EnterpriseBase(Base):
-    __abstract__ = True
-
-
+from .base import EnterpriseBase
 from .assessment import AssessmentAttempt, AssessmentAutomation, AssessmentTemplate
 from .candidate import ApplicationStatus, Candidate, CandidateApplication
 from .communication import EmailLog, EmailTemplate, MailAutomation

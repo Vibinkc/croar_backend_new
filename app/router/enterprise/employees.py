@@ -116,7 +116,7 @@ async def list_employees(
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.company_id == company_id, Employee.deleted_at is None)
+        .where(Employee.company_id == company_id, Employee.deleted_at == None)
     )
 
     result = await session.execute(stmt)
@@ -133,7 +133,7 @@ async def get_employee(
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.id == id, Employee.company_id == company_id, Employee.deleted_at is None)
+        .where(Employee.id == id, Employee.company_id == company_id, Employee.deleted_at == None)
     )
 
     result = await session.execute(stmt)
@@ -154,7 +154,7 @@ async def update_employee(
 ) -> Employee:
     company_id = getattr(current_user, "company_id", None)
     stmt = select(Employee).where(
-        Employee.id == id, Employee.company_id == company_id, Employee.deleted_at is None
+        Employee.id == id, Employee.company_id == company_id, Employee.deleted_at == None
     )
     res = await session.execute(stmt)
     employee = res.scalar_one_or_none()
@@ -224,6 +224,6 @@ async def convert_candidate(
         result = await session.execute(stmt)
         return result.scalar_one()
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}") from e

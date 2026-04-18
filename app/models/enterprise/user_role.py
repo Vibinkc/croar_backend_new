@@ -8,7 +8,7 @@ from sqlalchemy.sql import text
 
 from app.models.shared.auth import user_roles
 
-from . import EnterpriseBase
+from .base import EnterpriseBase
 
 
 class EnterpriseUser(EnterpriseBase):

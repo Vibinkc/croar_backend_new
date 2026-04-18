@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.database import db_manager
 from app.core.exception_handlers import (
     app_exception_handler,
     database_exception_handler,
@@ -29,14 +30,12 @@ _settings = get_settings()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup logic
     print("Croar Backend Starting...")
 
     yield
     # Shutdown logic
-    from app.core.database import db_manager
-
     await db_manager.close_all()
     print("Croar Backend Shutting Down...")
 

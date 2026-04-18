@@ -89,7 +89,7 @@ async def verify_interview_session(
             **data,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Initialization failed: {e!s}")
+        raise HTTPException(status_code=500, detail=f"Initialization failed: {e!s}") from e
 
 
 @router.post("/{attempt_id}/chat")
@@ -103,9 +103,9 @@ async def interview_chat_turn(
         data = await process_interview_turn(session, str(attempt_id), text)
         return cast("dict[str, Any]", data)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @router.post("/{attempt_id}/complete")

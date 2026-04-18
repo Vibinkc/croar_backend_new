@@ -9,12 +9,12 @@ from app.models.enterprise import Company, JobPosting, JobRequirement
 class EnterpriseService:
     @staticmethod
     async def get_companies(db: AsyncSession) -> list[Company]:
-        result = await db.execute(select(Company).where(Company.deleted_at is None))
+        result = await db.execute(select(Company).where(Company.deleted_at == None))
         return list(result.scalars().all())
 
     @staticmethod
     async def get_jobs(db: AsyncSession) -> list[JobRequirement]:
-        result = await db.execute(select(JobRequirement).where(JobRequirement.deleted_at is None))
+        result = await db.execute(select(JobRequirement).where(JobRequirement.deleted_at == None))
         return list(result.scalars().all())
 
     @staticmethod

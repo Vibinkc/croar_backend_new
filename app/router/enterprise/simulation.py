@@ -143,7 +143,7 @@ async def delete_scenario(
 @router.post("/scenarios/ai-generate", response_model=SimulationScenarioCreate)
 async def ai_generate_scenario(
     request: AIGenerateScenarioRequest,
-    current_user: Annotated[
+    _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
     ],
 ) -> SimulationScenarioCreate:
@@ -159,7 +159,10 @@ Return ONLY a JSON object that matches this structure:
   "category": "CONFLICT / SALES / LEADERSHIP / CUSTOMER_SERVICE / EXIT_INTERVIEW",
   "character_name": "A personality-rich name for the AI Agent",
   "character_role": "The professional role of the character",
-  "system_prompt": "DEEP NEURAL LOGIC: Full instructions for the AI on how to behave. Include personality traits, specific emotional triggers related to the scenario, and the desired outcome (e.g. 'Be firm but fair', 'Start angry but calm down if the employee uses empathy').",
+  "system_prompt": "DEEP NEURAL LOGIC: Full instructions for the AI on how to behave. "
+                   "Include personality traits, specific emotional triggers related to the scenario, "
+                   "and the desired outcome (e.g. 'Be firm but fair', 'Start angry but calm down if the "
+                   "employee uses empathy').",
   "initial_message": "The character's first line in the simulation",
   "difficulty": "Beginner / Intermediate / Advanced"
 }}
@@ -177,7 +180,7 @@ Return ONLY a JSON object that matches this structure:
         return SimulationScenarioCreate(**data)
     except Exception as e:
         print(f"Scenario Generation Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate scenario blueprint")
+        raise HTTPException(status_code=500, detail="Failed to generate scenario blueprint") from e
 
 
 # Assignment Management (Admin)
@@ -226,12 +229,16 @@ async def create_assignments(
         subject = f"[Action Required] New AI Training Assigned: {scenario.title}"
         body = f"""
         <p>Hi {emp.first_name},</p>
-        <p>A new interactive AI simulation has been assigned to you in the <strong>Neural Coaching Lab</strong>:</p>
-        <div style="background: #f8fafc; padding: 20px; border-radius: 12px; margin: 20px 0; border: 1px solid #e2e8f0;">
+        <p>A new interactive AI simulation has been assigned to you in the '
+        '<strong>Neural Coaching Lab</strong>:</p>
+        <div style="background: #f8fafc; padding: 20px; border-radius: 12px; margin: 20px 0; '
+        'border: 1px solid #e2e8f0;">
             <p style="margin: 0; font-weight: bold; color: #4f46e5;">Scenario: {scenario.title}</p>
-            <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">Character: {scenario.character_name} ({scenario.character_role})</p>
+            <p style="margin: 5px 0 0 0; color: #64748b; font-size: 14px;">Character: '
+        f'{scenario.character_name} ({scenario.character_role})</p>
         </div>
-        <p>This simulation is designed to help you practice real-world behavioral challenges in a safe, immersive environment.</p>
+        <p>This simulation is designed to help you practice real-world behavioral challenges '
+        'in a safe, immersive environment.</p>
         <p>Please log in to your employee portal to engage the simulation.</p>
         """
         background_tasks.add_task(run_in_threadpool, send_smtp_email, emp.email, subject, body, "Croar Lab")
@@ -406,7 +413,10 @@ async def simulation_chat(
 
     chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in history])
     ai_reply = await analyze_text_with_llm(
-        f"Respond to the following conversation as the character {sess.scenario.character_name}. KEEP IT BRIEF, REALISTIC, AND HIGH-FIDELITY. DO NOT include JSON brackets or any other formatting. Just return the character's direct spoken response.\n\n{chat_context}"
+        f"Respond to the following conversation as the character {sess.scenario.character_name}. "
+        "KEEP IT BRIEF, REALISTIC, AND HIGH-FIDELITY. DO NOT include JSON brackets or any "
+        "other formatting. Just return the character's direct spoken response.\n\n"
+        f"{chat_context}"
     )
 
     actual_reply = ai_reply
@@ -454,7 +464,10 @@ async def complete_simulation(
     if len(user_messages) < 3:
         raise HTTPException(
             status_code=400,
-            detail="INSUFFICIENT_INTERACTION: Please engage in at least 3 exchanges with the AI Agent before requesting a behavioral audit.",
+            detail=(
+                "INSUFFICIENT_INTERACTION: Please engage in at least 3 exchanges "
+                "with the AI Agent before requesting a behavioral audit."
+            ),
         )
 
     "\n".join([f"{m['role']}: {m['content']}" for m in sess.conversation])
@@ -463,7 +476,9 @@ Analyze this role-play simulation:
 Scenario: {sess.scenario.title}
 Character: {sess.scenario.character_name}
 
-CRITICAL: If the conversation is extremely short or the user is clearly not engaging seriously (e.g. just saying 'hi', 'ok'), set 'overall_score' to 0 and state that more data is needed in 'coaching_summary'.
+CRITICAL: If the conversation is extremely short or the user is clearly not engaging seriously
+(e.g. just saying 'hi', 'ok'), set 'overall_score' to 0 and state that more data is needed
+in 'coaching_summary'.
 
 Return ONLY a JSON object:
 {{

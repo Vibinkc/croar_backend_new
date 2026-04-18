@@ -1,4 +1,5 @@
 import logging
+from typing import cast
 
 from fastapi import APIRouter, BackgroundTasks, Request
 
@@ -8,9 +9,6 @@ from app.services.enterprise.hiring_agent import hiring_agent_service
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-from typing import cast
 
 
 @router.post("/voice/vapi/webhook")
@@ -79,7 +77,11 @@ async def process_vapi_transcript(
             return
 
         # Analyze Transcript
-        prompt = f"Analyze this phone interview transcript. Extract any notice period or salary expectations mentioned. Give a score from 0-100 on how well they fit the role. Transcript: {transcript}"
+        prompt = (
+            "Analyze this phone interview transcript. Extract any notice period or salary "
+            "expectations mentioned. Give a score from 0-100 on how well they fit the role. "
+            f"Transcript: {transcript}"
+        )
         intelligence = await hiring_agent_service.evaluate_candidate_response(prompt, transcript)
 
         # Save recording and analysis to log

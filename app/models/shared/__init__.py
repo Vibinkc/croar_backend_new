@@ -1,11 +1,4 @@
-from app.core.database import Base
-
-
-class SharedBase(Base):
-    __abstract__ = True
-
-
-# Import models to register them
+from .base import SharedBase
 from .audit_log import AuditLog
 from .auth import Permission, Role, role_permissions, super_admin_roles, user_roles
 from .backup import Backup

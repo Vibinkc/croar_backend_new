@@ -173,7 +173,7 @@ async def list_team_members(
     stmt = (
         select(EnterpriseUser)
         .options(selectinload(EnterpriseUser.roles).selectinload(Role.permissions))
-        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at is None)
+        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at == None)
     )
 
     result = await session.execute(stmt)
@@ -197,7 +197,7 @@ async def add_team_member(
     role_stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id is None))
+        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id == None))
     )
     result = await session.execute(role_stmt)
     roles = result.scalars().all()

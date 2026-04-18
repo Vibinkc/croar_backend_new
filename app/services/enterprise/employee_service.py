@@ -37,7 +37,7 @@ class EmployeeService:
 
     @staticmethod
     async def convert_candidate_to_employee(
-        session: AsyncSession, candidate_id: UUID, performed_by: str
+        session: AsyncSession, candidate_id: UUID, _performed_by: str
     ) -> Employee:
         """Convert an onboarded candidate to an employee."""
         # 1. Fetch Candidate with related data

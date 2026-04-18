@@ -23,6 +23,7 @@ from app.models.enterprise.user_role import EnterpriseUser as HiringAgent
 from app.router.enterprise.communication import send_smtp_email
 
 logger = logging.getLogger(__name__)
+background_tasks = set()
 
 
 async def generate_google_meet_link(
@@ -87,7 +88,8 @@ def parse_time(time_str: str) -> time:
 
 async def find_available_slot(db: AsyncSession, automation: InterviewAutomation) -> datetime:
     """
-    Finds the next available time slot starting from 'tomorrow', respecting daily_limits, working hours, and date ranges.
+    Finds the next available time slot starting from 'tomorrow', respecting
+    daily_limits, working hours, and date ranges.
     Assumes each interview is 30 minutes.
     """
     today = date.today()
@@ -288,7 +290,13 @@ async def send_interview_invite(
     scheduled_time_str = (
         schedule.scheduled_time.strftime("%Y-%m-%d %H:%M") if schedule.scheduled_time else "TBD"
     )
-    body = f"Hello {candidate.full_name or 'Candidate'},\n\nYour interview for {job.title} has been scheduled.\n\nTime: {scheduled_time_str}\nLink: {schedule.meeting_link}\n\nBest regards,\nHiring Team"
+    body = (
+        f"Hello {candidate.full_name or 'Candidate'},\n\n"
+        f"Your interview for {job.title} has been scheduled.\n\n"
+        f"Time: {scheduled_time_str}\n"
+        f"Link: {schedule.meeting_link}\n\n"
+        "Best regards,\nHiring Team"
+    )
 
     if automation.email_template_id:
         tpl_stmt = select(EmailTemplate).where(EmailTemplate.id == automation.email_template_id)
@@ -330,7 +338,12 @@ async def send_interview_invite(
             def make_button(m: Any) -> str:
                 url = m.group(1)
                 label = m.group(2).strip()
-                return f'<center><a href="{url}" style="display:inline-block;padding:14px 30px;background-color:#6e8efb;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold;margin:20px 0;">{label}</a></center>'
+                return (
+                    f'<center><a href="{url}" style="display:inline-block;'
+                    "padding:14px 30px;background-color:#6e8efb;color:#ffffff;"
+                    "text-decoration:none;border-radius:8px;font-weight:bold;"
+                    f'margin:20px 0;">{label}</a></center>'
+                )
 
             body = re.sub(button_pattern, make_button, str(body))
 
@@ -393,4 +406,6 @@ async def send_interview_invite(
         except Exception:
             pass
 
-    asyncio.create_task(run_in_threadpool(do_send_emails))
+    task = asyncio.create_task(run_in_threadpool(do_send_emails))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)

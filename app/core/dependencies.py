@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, cast
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -25,14 +25,10 @@ DBConnectionDep = Annotated[AsyncConnection, Depends(get_db_connect)]
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
 
 
-from typing import Annotated, cast
-
-
 async def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], session: DBSessionDep
 ) -> EnterpriseUser | SuperAdmin:
     """
-    _settings = get_settings()
     Get current authenticated user (EnterpriseUser or SuperAdmin) from JWT token.
     """
     credentials_exception = HTTPException(
@@ -47,7 +43,7 @@ async def get_current_user(
         if email is None:
             raise credentials_exception
     except JWTError:
-        raise credentials_exception
+        raise credentials_exception from None
 
     # 1. Check for EnterpriseUser first (most common)
     stmt_eu = (
