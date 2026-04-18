@@ -1,4 +1,5 @@
 import uuid
+from typing import cast
 
 from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -44,8 +45,8 @@ class EnterpriseUser(EnterpriseBase):
     company = relationship("Company")
 
     @property
-    def role(self):
+    def role(self) -> object | None:
         """Compatibility property for legacy code expecting a single role."""
         if self.roles:
-            return self.roles[0]
+            return cast("object", self.roles[0])
         return None

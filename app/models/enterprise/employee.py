@@ -11,12 +11,12 @@ from . import EnterpriseBase
 class Department(EnterpriseBase):
     __tablename__ = "departments"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    company_id: Mapped[str] = mapped_column(
+    company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
 
@@ -31,7 +31,7 @@ class Department(EnterpriseBase):
 class Employee(EnterpriseBase):
     __tablename__ = "employees"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
     employee_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)  # e.g., EMP-1001
@@ -79,31 +79,37 @@ class Employee(EnterpriseBase):
     pincode: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Relationships
-    company_id: Mapped[str] = mapped_column(
+    company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    department_id: Mapped[str | None] = mapped_column(
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("departments.id", ondelete="SET NULL"), nullable=True
     )
-    reporting_to_id: Mapped[str | None] = mapped_column(
+    reporting_to_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True
     )
 
     # JSONB for complex structures
-    dependents: Mapped[dict] = mapped_column(JSONB, nullable=True, server_default=text("'[]'::jsonb"))
-    educational_details: Mapped[dict] = mapped_column(
+    dependents: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=True, server_default=text("'[]'::jsonb")
     )
-    emergency_contacts: Mapped[dict] = mapped_column(JSONB, nullable=True, server_default=text("'[]'::jsonb"))
-    social_profiles: Mapped[dict] = mapped_column(
+    educational_details: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=True, server_default=text("'[]'::jsonb")
+    )
+    emergency_contacts: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=True, server_default=text("'[]'::jsonb")
+    )
+    social_profiles: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=True, server_default=text("'{}'::jsonb")
     )  # LinkedIn, Twitter, Facebook
-    payment_information: Mapped[dict] = mapped_column(
+    payment_information: Mapped[list[dict[str, object]]] = mapped_column(
         JSONB, nullable=True, server_default=text("'[]'::jsonb")
     )
     roles_responsibilities: Mapped[str | None] = mapped_column(Text, nullable=True)
     skills: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=True)
-    documents: Mapped[dict] = mapped_column(JSONB, nullable=True, server_default=text("'[]'::jsonb"))
+    documents: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB, nullable=True, server_default=text("'[]'::jsonb")
+    )
 
     # Audit
     created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
@@ -116,7 +122,7 @@ class Employee(EnterpriseBase):
     company = relationship("Company", backref="employees")
     department = relationship("Department", backref="employees")
     reporting_to = relationship("Employee", remote_side=[id], backref="direct_reports")
-    candidate_id: Mapped[str | None] = mapped_column(
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("candidates.id", ondelete="SET NULL"), nullable=True
     )
     candidate = relationship("Candidate")

@@ -6,7 +6,7 @@ from app.models.shared.constants import ModuleScope, PermissionAction
 
 
 class Token(BaseModel):
-    """Token response with access and refresh tokens"""
+    """Token response with access and refresh tokens."""
 
     access_token: str
     refresh_token: str
@@ -16,20 +16,20 @@ class Token(BaseModel):
 
 
 class TokenData(BaseModel):
-    """Data extracted from JWT token"""
+    """Data extracted from JWT token."""
 
     email: str | None = None
     role: str | None = None
 
 
 class RefreshTokenRequest(BaseModel):
-    """Request to refresh access token"""
+    """Request to refresh access token."""
 
     refresh_token: str
 
 
 class LogoutRequest(BaseModel):
-    """Request to logout and blacklist token"""
+    """Request to logout and blacklist token."""
 
     pass  # Token comes from Authorization header
 

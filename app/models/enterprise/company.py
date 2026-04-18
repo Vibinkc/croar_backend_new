@@ -20,7 +20,7 @@ class Company(EnterpriseBase):
     logo_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     industry: Mapped[str | None] = mapped_column(String(100), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    config: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    config: Mapped[dict[str, object]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     is_consultancy: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True

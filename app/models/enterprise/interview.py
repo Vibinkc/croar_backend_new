@@ -1,4 +1,5 @@
 import uuid
+from datetime import date, datetime
 
 from sqlalchemy import ARRAY, TIMESTAMP, Boolean, Date, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import ENUM, JSONB, UUID
@@ -27,20 +28,20 @@ class Interview(EnterpriseBase):
 
     type: Mapped[str] = mapped_column(INTERVIEW_TYPE, default="VIDEO")
 
-    plan: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    avatar_config: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    settings: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    plan: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    avatar_config: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    settings: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     company_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
-    deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
 
 class InterviewAutomation(EnterpriseBase):
@@ -49,15 +50,15 @@ class InterviewAutomation(EnterpriseBase):
     id: Mapped[str] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    job_requirement_id: Mapped[str] = mapped_column(
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False
     )
     stage_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     stage_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     criteria: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    start_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
-    end_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     start_time: Mapped[str] = mapped_column(String(10), default="09:00")
     end_time: Mapped[str] = mapped_column(String(10), default="17:00")
@@ -69,11 +70,11 @@ class InterviewAutomation(EnterpriseBase):
     google_meet_link: Mapped[str | None] = mapped_column(String, nullable=True)
 
     interview_type: Mapped[str] = mapped_column(String(50), default="GMEET", server_default="GMEET")
-    interview_template_id: Mapped[str | None] = mapped_column(
+    interview_template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("interviews.id", ondelete="SET NULL"), nullable=True
     )
 
-    email_template_id: Mapped[str | None] = mapped_column(
+    email_template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True
     )
 
@@ -84,7 +85,7 @@ class InterviewAutomation(EnterpriseBase):
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
 
     job = relationship("JobRequirement")
     email_template = relationship("EmailTemplate")
@@ -98,20 +99,20 @@ class InterviewSchedule(EnterpriseBase):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    interview_id: Mapped[str | None] = mapped_column(
+    interview_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("interviews.id", ondelete="CASCADE"), nullable=True
     )
-    automation_id: Mapped[str | None] = mapped_column(
+    automation_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("interview_automations.id", ondelete="CASCADE"), nullable=True
     )
-    application_id: Mapped[str | None] = mapped_column(
+    application_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("candidate_applications.id", ondelete="CASCADE"), nullable=True
     )
-    interviewer_id: Mapped[str | None] = mapped_column(
+    interviewer_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    scheduled_time: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, nullable=False)
+    scheduled_time: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     meeting_link: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="SCHEDULED")
 
@@ -119,8 +120,8 @@ class InterviewSchedule(EnterpriseBase):
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
@@ -128,6 +129,7 @@ class InterviewSchedule(EnterpriseBase):
     automation = relationship("InterviewAutomation", backref="schedules")
     application = relationship("CandidateApplication", back_populates="interview_schedules")
     interviewer = relationship("EnterpriseUser")
+    attempts = relationship("InterviewAttempt", back_populates="schedule", cascade="all, delete-orphan")
 
 
 class InterviewAttempt(EnterpriseBase):
@@ -137,25 +139,25 @@ class InterviewAttempt(EnterpriseBase):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    schedule_id: Mapped[str | None] = mapped_column(
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("interview_schedules.id", ondelete="SET NULL"), nullable=True
     )
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
 
-    transcript: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    ai_feedback: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    transcript: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    ai_feedback: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     overall_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
 
     company_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
-    schedule = relationship("InterviewSchedule", backref="attempts")
+    schedule = relationship("InterviewSchedule", back_populates="attempts")
     user = relationship("EnterpriseUser")

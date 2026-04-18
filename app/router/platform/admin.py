@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -23,18 +23,20 @@ platform_admin_dep = Depends(PermissionChecker(ModuleScope.platform, PermissionA
 
 
 @router.get("/stats")
-async def get_platform_stats(session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def get_platform_stats(
+    session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> dict[str, object]:
     """Get high-level platform statistics for the Super Admin dashboard."""
     # Total Organizations
-    org_stmt = select(func.count(Company.id)).where(Company.deleted_at == None)
+    org_stmt = select(func.count(Company.id)).where(Company.deleted_at is None)
     total_orgs = (await session.execute(org_stmt)).scalar() or 0
 
     # Total Users across all orgs
-    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at == None)
+    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at is None)
     total_users = (await session.execute(user_stmt)).scalar() or 0
 
     # Total Global Roles
-    role_stmt = select(func.count(Role.id)).where(Role.tenant_id == None)
+    role_stmt = select(func.count(Role.id)).where(Role.tenant_id is None)
     total_roles = (await session.execute(role_stmt)).scalar() or 0
 
     return {
@@ -46,21 +48,21 @@ async def get_platform_stats(session: DBSessionDep, admin: Annotated[Any, platfo
 
 
 @router.get("/tenants", response_model=list[CompanyResponse])
-async def list_tenants(session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def list_tenants(session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]) -> list[object]:
     """List all tenants (organizations) in the platform."""
-    stmt = select(Company).where(Company.deleted_at == None)
+    stmt = select(Company).where(Company.deleted_at is None)
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/tenants", response_model=CompanyResponse)
 async def create_tenant(
     session: DBSessionDep,
-    admin: Annotated[Any, platform_admin_dep],
+    _admin: Annotated[object, platform_admin_dep],
     org_data: CompanyCreate,
     admin_email: str = Body(...),
     admin_password: str = Body(...),
-):
+) -> object:
     """Create a new tenant and its first admin user."""
     import re
 
@@ -115,8 +117,8 @@ async def create_tenant(
 
 @router.get("/tenants/{tenant_id}", response_model=CompanyResponse)
 async def get_tenant_details(
-    tenant_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> object:
     tenant = await session.get(Company, tenant_id)
     if not tenant or tenant.deleted_at:
         raise HTTPException(status_code=404, detail="Tenant not found")
@@ -128,8 +130,8 @@ async def update_tenant(
     tenant_id: UUID,
     tenant_in: CompanyUpdate,
     session: DBSessionDep,
-    admin: Annotated[Any, platform_admin_dep],
-):
+    _admin: Annotated[object, platform_admin_dep],
+) -> object:
     tenant = await session.get(Company, tenant_id)
     if not tenant or tenant.deleted_at:
         raise HTTPException(status_code=404, detail="Tenant not found")
@@ -144,12 +146,14 @@ async def update_tenant(
 
 
 @router.delete("/tenants/{tenant_id}")
-async def delete_tenant(tenant_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def delete_tenant(
+    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> dict[str, str]:
     tenant = await session.get(Company, tenant_id)
     if not tenant:
         raise HTTPException(status_code=404, detail="Tenant not found")
 
-    tenant.deleted_at = func.now()
+    tenant.deleted_at = cast("Any", func.now())
     await session.commit()
     return {"status": "success"}
 
@@ -159,11 +163,11 @@ async def delete_tenant(tenant_id: UUID, session: DBSessionDep, admin: Annotated
 
 @router.get("/tenants/{tenant_id}/divisions", response_model=list[DepartmentOut])
 async def list_tenant_divisions(
-    tenant_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> list[object]:
     stmt = select(Department).where(Department.company_id == tenant_id)
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/tenants/{tenant_id}/divisions", response_model=DepartmentOut)
@@ -171,8 +175,8 @@ async def create_tenant_division(
     tenant_id: UUID,
     div_in: DepartmentCreate,
     session: DBSessionDep,
-    admin: Annotated[Any, platform_admin_dep],
-):
+    _admin: Annotated[object, platform_admin_dep],
+) -> object:
     new_div = Department(name=div_in.name, description=div_in.description, company_id=tenant_id)
     session.add(new_div)
     await session.commit()
@@ -180,10 +184,10 @@ async def create_tenant_division(
     return new_div
 
 
-@router.get("/tenants/{tenant_id}/admins", response_model=list[Any])
+@router.get("/tenants/{tenant_id}/admins", response_model=list[object])
 async def list_tenant_admins(
-    tenant_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> list[object]:
     # Fetch users with ADMIN role for this tenant
     stmt = (
         select(EnterpriseUser)
@@ -192,16 +196,16 @@ async def list_tenant_admins(
         .options(selectinload(EnterpriseUser.roles))
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
-@router.post("/tenants/{tenant_id}/admins", response_model=Any)
+@router.post("/tenants/{tenant_id}/admins", response_model=object)
 async def create_tenant_admin(
     tenant_id: UUID,
     session: DBSessionDep,
-    admin: Annotated[Any, platform_admin_dep],
-    admin_data: Any = Body(...),
-):
+    _admin: Annotated[object, platform_admin_dep],
+    admin_data: dict[str, object] = Body(...),
+) -> object:
     # Get/Create ADMIN role for this company
     stmt = select(Role).where(Role.name == "ADMIN", Role.tenant_id == tenant_id)
     result = await session.execute(stmt)
@@ -225,10 +229,10 @@ async def create_tenant_admin(
 
     password = admin_data.get("password") or "Admin@123"
     new_user = EnterpriseUser(
-        email=admin_data.get("email"),
-        password_hash=get_password_hash(password),
-        first_name=admin_data.get("first_name", "Admin"),
-        last_name=admin_data.get("last_name", "User"),
+        email=cast("str", admin_data.get("email")),
+        password_hash=get_password_hash(cast("str", password)),
+        first_name=cast("str", admin_data.get("first_name", "Admin")),
+        last_name=cast("str", admin_data.get("last_name", "User")),
         company_id=tenant_id,
         is_active=True,
     )
@@ -241,34 +245,34 @@ async def create_tenant_admin(
     return new_user
 
 
-@router.get("/tenants/{tenant_id}/users", response_model=list[Any])
+@router.get("/tenants/{tenant_id}/users", response_model=list[object])
 async def list_tenant_users(
-    tenant_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> list[object]:
     stmt = (
         select(EnterpriseUser)
         .where(EnterpriseUser.company_id == tenant_id)
         .options(selectinload(EnterpriseUser.roles))
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
-@router.post("/tenants/{tenant_id}/users", response_model=Any)
+@router.post("/tenants/{tenant_id}/users", response_model=object)
 async def create_tenant_user(
     tenant_id: UUID,
     session: DBSessionDep,
-    admin: Annotated[Any, platform_admin_dep],
-    user_data: Any = Body(...),
-):
+    _admin: Annotated[object, platform_admin_dep],
+    user_data: dict[str, object] = Body(...),
+) -> object:
     # This is a guestimated implementation based on common patterns
     # In a real scenario, we'd use a specific schema
     password = user_data.get("password") or "Welcome@123"
     new_user = EnterpriseUser(
-        email=user_data.get("email"),
-        password_hash=get_password_hash(password),
-        first_name=user_data.get("first_name"),
-        last_name=user_data.get("last_name"),
+        email=cast("str", user_data.get("email")),
+        password_hash=get_password_hash(cast("str", password)),
+        first_name=cast("str", user_data.get("first_name")),
+        last_name=cast("str", user_data.get("last_name")),
         company_id=tenant_id,
         is_active=True,
     )
@@ -280,8 +284,8 @@ async def create_tenant_user(
 
 @router.delete("/tenants/{tenant_id}/users/{user_id}")
 async def delete_tenant_user(
-    tenant_id: UUID, user_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    tenant_id: UUID, user_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> dict[str, str]:
     stmt = select(EnterpriseUser).where(EnterpriseUser.id == user_id, EnterpriseUser.company_id == tenant_id)
     result = await session.execute(stmt)
     user = result.scalar_one_or_none()
@@ -295,25 +299,27 @@ async def delete_tenant_user(
 
 
 @router.get("/roles", response_model=list[RoleOut])
-async def list_global_roles(session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def list_global_roles(
+    session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> list[object]:
     """List all global (system-wide) roles."""
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id == None)
+        .where(Role.tenant_id is None)
         .order_by(Role.role_rank.asc())
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/roles", response_model=RoleOut)
 async def create_global_role(
-    role_in: RoleCreate, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    role_in: RoleCreate, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> object:
     """Create a new global system role."""
     # Check if role exists
-    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id == None)
+    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id is None)
     if (await session.execute(stmt)).scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Role already exists")
 
@@ -326,7 +332,7 @@ async def create_global_role(
     if role_in.permission_ids:
         perm_stmt = select(Permission).where(Permission.id.in_(role_in.permission_ids))
         perms = (await session.execute(perm_stmt)).scalars().all()
-        new_role.permissions = perms
+        new_role.permissions = list(perms)
 
     await session.commit()
     await session.refresh(new_role)
@@ -334,7 +340,9 @@ async def create_global_role(
 
 
 @router.get("/roles/{role_id}", response_model=RoleOut)
-async def get_role_details(role_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def get_role_details(
+    role_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> object:
     role = await session.get(Role, role_id)
     if not role or role.tenant_id:
         raise HTTPException(status_code=404, detail="Global role not found")
@@ -343,11 +351,11 @@ async def get_role_details(role_id: UUID, session: DBSessionDep, admin: Annotate
 
 @router.put("/roles/{role_id}", response_model=RoleOut)
 async def update_global_role(
-    role_id: UUID, role_in: RoleUpdate, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]
-):
+    role_id: UUID, role_in: RoleUpdate, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> object:
     """Update a global role's metadata and permissions."""
     stmt = (
-        select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id, Role.tenant_id == None)
+        select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id, Role.tenant_id is None)
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()
@@ -362,7 +370,7 @@ async def update_global_role(
     if role_in.permission_ids is not None:
         perm_stmt = select(Permission).where(Permission.id.in_(role_in.permission_ids))
         perms = (await session.execute(perm_stmt)).scalars().all()
-        role.permissions = perms
+        role.permissions = list(perms)
 
     await session.commit()
     await session.refresh(role)
@@ -370,7 +378,9 @@ async def update_global_role(
 
 
 @router.delete("/roles/{role_id}")
-async def delete_global_role(role_id: UUID, session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def delete_global_role(
+    role_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> dict[str, str]:
     """Delete a custom global role. System roles protected."""
     role = await session.get(Role, role_id)
     if not role or role.tenant_id:
@@ -385,12 +395,14 @@ async def delete_global_role(role_id: UUID, session: DBSessionDep, admin: Annota
 
 
 @router.get("/permissions", response_model=list[PermissionOut])
-async def list_all_permissions(session: DBSessionDep, admin: Annotated[Any, platform_admin_dep]):
+async def list_all_permissions(
+    session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
+) -> list[object]:
     """List all available permissions in the system."""
     stmt = (
         select(Permission)
-        .where(Permission.tenant_id == None)
+        .where(Permission.tenant_id is None)
         .order_by(Permission.module.asc(), Permission.resource.asc())
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())

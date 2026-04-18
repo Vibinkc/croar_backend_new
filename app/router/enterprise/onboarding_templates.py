@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,28 +15,33 @@ router = APIRouter(prefix="/onboarding/templates", tags=["Onboarding Templates"]
 @router.get("/", response_model=list[OnboardingTemplateResponse])
 async def list_templates(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))
+    ],
+) -> list[object]:
     """List all onboarding templates."""
     stmt = (
         select(OnboardingTemplate)
-        .where(OnboardingTemplate.company_id == current_user.company_id)
+        .where(OnboardingTemplate.company_id == getattr(current_user, "company_id", None))
         .order_by(OnboardingTemplate.name)
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/", response_model=OnboardingTemplateResponse, status_code=status.HTTP_201_CREATED)
 async def create_template(
     template_in: OnboardingTemplateCreate,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.create))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.create))
+    ],
+) -> object:
     """Create a new onboarding template."""
     # Check for duplicate name WITHIN the company
     check_stmt = select(OnboardingTemplate).where(
-        OnboardingTemplate.name == template_in.name, OnboardingTemplate.company_id == current_user.company_id
+        OnboardingTemplate.name == template_in.name,
+        OnboardingTemplate.company_id == getattr(current_user, "company_id", None),
     )
     existing = await session.execute(check_stmt)
     if existing.scalar_one_or_none():
@@ -44,7 +49,9 @@ async def create_template(
             status_code=400, detail="A template with this name already exists in your organization"
         )
 
-    template = OnboardingTemplate(**template_in.model_dump(), company_id=current_user.company_id)
+    template = OnboardingTemplate(
+        **template_in.model_dump(), company_id=getattr(current_user, "company_id", None)
+    )
     session.add(template)
     await session.commit()
     await session.refresh(template)
@@ -55,11 +62,14 @@ async def create_template(
 async def get_template_details(
     id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))
+    ],
+) -> object:
     """Get onboarding template details."""
     stmt = select(OnboardingTemplate).where(
-        OnboardingTemplate.id == id, OnboardingTemplate.company_id == current_user.company_id
+        OnboardingTemplate.id == id,
+        OnboardingTemplate.company_id == getattr(current_user, "company_id", None),
     )
     result = await session.execute(stmt)
     template = result.scalar_one_or_none()
@@ -74,11 +84,14 @@ async def update_template(
     id: UUID,
     template_in: OnboardingTemplateCreate,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.update))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.update))
+    ],
+) -> object:
     """Update an onboarding template."""
     stmt = select(OnboardingTemplate).where(
-        OnboardingTemplate.id == id, OnboardingTemplate.company_id == current_user.company_id
+        OnboardingTemplate.id == id,
+        OnboardingTemplate.company_id == getattr(current_user, "company_id", None),
     )
     result = await session.execute(stmt)
     template = result.scalar_one_or_none()
@@ -98,11 +111,14 @@ async def update_template(
 async def delete_template(
     id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.delete))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.delete))
+    ],
+) -> None:
     """Delete an onboarding template."""
     stmt = select(OnboardingTemplate).where(
-        OnboardingTemplate.id == id, OnboardingTemplate.company_id == current_user.company_id
+        OnboardingTemplate.id == id,
+        OnboardingTemplate.company_id == getattr(current_user, "company_id", None),
     )
     result = await session.execute(stmt)
     template = result.scalar_one_or_none()

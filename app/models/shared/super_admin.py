@@ -1,3 +1,5 @@
+from typing import cast
+
 from sqlalchemy import TIMESTAMP, Boolean, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -30,7 +32,7 @@ class SuperAdmin(SharedBase):
     @property
     def role(self) -> str:
         if self.roles:
-            return self.roles[0].name
+            return cast("str", self.roles[0].name)
         return "SUPER_ADMIN"
 
     @property

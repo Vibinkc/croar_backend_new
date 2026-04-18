@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -10,20 +10,19 @@ from app.services.enterprise.hiring_agent import hiring_agent_service
 
 router = APIRouter(prefix="/agent", tags=["Hiring Agent"])
 
-# Removed get_enterprise_agent helper as it's redundant with get_current_user
-
 
 @router.post("/process-all")
 async def process_active_candidates(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.moderate))],
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.moderate))],
     background_tasks: BackgroundTasks,
-):
+) -> dict[str, Any]:
     """
     Manually trigger the AI Agent to process all pending applications.
     """
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(CandidateApplication).where(
-        CandidateApplication.company_id == current_user.company_id, CandidateApplication.deleted_at == None
+        CandidateApplication.company_id == company_id, CandidateApplication.deleted_at is None
     )
     result = await session.execute(stmt)
     applications = result.scalars().all()
@@ -39,7 +38,7 @@ async def process_active_candidates(
 @router.post("/inbound-email")
 async def handle_inbound_email(
     request: dict[str, Any], session: DBSessionDep, background_tasks: BackgroundTasks
-):
+) -> dict[str, Any]:
     """
     Webhook endpoint to receive incoming emails.
     """
@@ -51,7 +50,7 @@ async def handle_inbound_email(
         raise HTTPException(status_code=400, detail="Missing email components")
 
     result = await hiring_agent_service.process_inbound_email(
-        from_email, subject, body, session, background_tasks
+        str(from_email), str(subject), str(body), session, background_tasks
     )
     return result
 
@@ -60,15 +59,16 @@ async def handle_inbound_email(
 async def get_application_agent_log(
     application_id: str,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+) -> list[Any]:
     """Retrieve the AI Agent's activity log for a specific application."""
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(CandidateApplication).where(
-        CandidateApplication.id == application_id, CandidateApplication.company_id == current_user.company_id
+        CandidateApplication.id == application_id, CandidateApplication.company_id == company_id
     )
     res = await session.execute(stmt)
     app = res.scalar_one_or_none()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
 
-    return (app.ai_feedback or {}).get("agent_log", [])
+    return list(cast("list[Any]", (app.ai_feedback or {}).get("agent_log", [])))

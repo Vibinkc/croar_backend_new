@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -27,12 +27,13 @@ async def create_department(
     request: DepartmentCreate,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.create))
     ],
-):
+) -> Department:
+    company_id = getattr(current_user, "company_id", None)
     # Check for duplicate name in the same company
     existing_stmt = select(Department).where(
-        Department.name == request.name, Department.company_id == current_user.company_id
+        Department.name == request.name, Department.company_id == company_id
     )
     existing = await session.execute(existing_stmt)
     if existing.scalar_one_or_none():
@@ -42,7 +43,7 @@ async def create_department(
         )
 
     data = request.model_dump()
-    data["company_id"] = current_user.company_id
+    data["company_id"] = company_id
     department = Department(**data)
     session.add(department)
     await session.commit()
@@ -53,11 +54,14 @@ async def create_department(
 @router.get("/departments", response_model=list[DepartmentOut])
 async def list_departments(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))],
-):
-    stmt = select(Department).where(Department.company_id == current_user.company_id)
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.read))
+    ],
+) -> list[Department]:
+    company_id = getattr(current_user, "company_id", None)
+    stmt = select(Department).where(Department.company_id == company_id)
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 # Employee CRUD
@@ -65,8 +69,10 @@ async def list_departments(
 async def create_employee(
     request: EmployeeCreate,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.create))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.create))
+    ],
+) -> Employee:
     # Check for duplicate email (Global uniqueness as per schema)
     email_stmt = select(Employee).where(Employee.email == request.email)
     existing_email = await session.execute(email_stmt)
@@ -86,7 +92,7 @@ async def create_employee(
         )
 
     data = request.model_dump()
-    data["company_id"] = current_user.company_id
+    data["company_id"] = getattr(current_user, "company_id", None)
     employee = Employee(**data)
     session.add(employee)
     await session.commit()
@@ -104,28 +110,30 @@ async def create_employee(
 @router.get("/", response_model=list[EmployeeOut])
 async def list_employees(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
+) -> list[Employee]:
+    company_id = getattr(current_user, "company_id", None)
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.company_id == current_user.company_id, Employee.deleted_at == None)
+        .where(Employee.company_id == company_id, Employee.deleted_at is None)
     )
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.get("/{id}", response_model=EmployeeOut)
 async def get_employee(
     id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.read))],
+) -> Employee:
+    company_id = getattr(current_user, "company_id", None)
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.id == id, Employee.company_id == current_user.company_id, Employee.deleted_at == None)
+        .where(Employee.id == id, Employee.company_id == company_id, Employee.deleted_at is None)
     )
 
     result = await session.execute(stmt)
@@ -140,10 +148,13 @@ async def update_employee(
     id: UUID,
     request: EmployeeUpdate,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.update))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.update))
+    ],
+) -> Employee:
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(Employee).where(
-        Employee.id == id, Employee.company_id == current_user.company_id, Employee.deleted_at == None
+        Employee.id == id, Employee.company_id == company_id, Employee.deleted_at is None
     )
     res = await session.execute(stmt)
     employee = res.scalar_one_or_none()
@@ -154,32 +165,35 @@ async def update_employee(
     for key, value in update_data.items():
         setattr(employee, key, value)
 
-    employee.updated_at = datetime.now()
+    employee.updated_at = cast("Any", datetime.now())
     await session.commit()
 
     # Eager load relationships for the response model
-    stmt = (
+    stmt_reload = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
         .where(Employee.id == employee.id)
     )
-    result = await session.execute(stmt)
-    return result.scalar_one()
+    result_reload = await session.execute(stmt_reload)
+    return result_reload.scalar_one()
 
 
 @router.delete("/{id}", status_code=204)
 async def delete_employee(
     id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.delete))],
-):
-    stmt = select(Employee).where(Employee.id == id, Employee.company_id == current_user.company_id)
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.delete))
+    ],
+) -> None:
+    company_id = getattr(current_user, "company_id", None)
+    stmt = select(Employee).where(Employee.id == id, Employee.company_id == company_id)
     res = await session.execute(stmt)
     employee = res.scalar_one_or_none()
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    employee.deleted_at = datetime.now()
+    employee.deleted_at = cast("Any", datetime.now())
     await session.commit()
     return
 
@@ -190,11 +204,14 @@ async def convert_candidate(
     candidate_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.moderate))
+        object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.moderate))
     ],
-):
+) -> Employee:
     try:
-        agent_name = f"{current_user.first_name} {current_user.last_name or ''}".strip()
+        first_name = getattr(current_user, "first_name", "")
+        last_name = getattr(current_user, "last_name", "")
+        agent_name = f"{first_name} {last_name}".strip() or "System"
+
         employee = await employee_service.convert_candidate_to_employee(session, candidate_id, agent_name)
         await session.commit()
 

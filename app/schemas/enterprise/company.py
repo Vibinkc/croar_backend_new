@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -9,7 +10,7 @@ class CompanyBase(BaseModel):
     industry: str | None = None
     location: str | None = None
     logo_url: str | None = None
-    config: dict | None = {}
+    config: dict[str, Any] | None = {}
     is_consultancy: bool | None = False
     parent_id: UUID | None = None
 
@@ -23,7 +24,7 @@ class CompanyUpdate(BaseModel):
     industry: str | None = None
     location: str | None = None
     logo_url: str | None = None
-    config: dict | None = None
+    config: dict[str, Any] | None = None
     is_consultancy: bool | None = None
     parent_id: UUID | None = None
 

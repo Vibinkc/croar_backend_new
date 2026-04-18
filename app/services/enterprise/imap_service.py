@@ -2,7 +2,7 @@ import email
 import imaplib
 import re
 from email.header import decode_header
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,13 +15,13 @@ _settings = get_settings()
 
 
 class ImapService:
-    def __init__(self):
-        self.host = _settings.imap_address
-        self.port = _settings.imap_port
-        self.user = _settings.imap_username
-        self.password = _settings.imap_password
+    def __init__(self) -> None:
+        self.host = str(_settings.imap_address)
+        self.port = int(cast("Any", _settings.imap_port))
+        self.user = str(_settings.imap_username)
+        self.password = str(_settings.imap_password)
 
-    def _decode_mime_words(self, s):
+    def _decode_mime_words(self, s: str | None) -> str:
         if not s:
             return ""
         return "".join(
@@ -29,7 +29,9 @@ class ImapService:
             for word, encoding in decode_header(s)
         )
 
-    async def fetch_and_sync_emails(self, session: AsyncSession, background_tasks: Any):
+    async def fetch_and_sync_emails(
+        self, session: AsyncSession, background_tasks: object
+    ) -> dict[str, object]:
         """
         Connects to IMAP, fetches recent emails, and syncs them to local DB.
         """
@@ -45,23 +47,26 @@ class ImapService:
             if status != "OK":
                 return {"status": "Failed to search inbox"}
 
-            email_ids = response[0].split()
+            email_ids = cast("list[bytes]", response[0].split())
             recent_ids = email_ids[-50:] if len(email_ids) > 50 else email_ids
             sync_count = 0
 
             for e_id in reversed(recent_ids):
                 try:
-                    status, data = mail.fetch(e_id, "(RFC822)")
-                    if status != "OK":
+                    status, data = mail.fetch(e_id.decode(), "(RFC822)")
+                    if status != "OK" or not data:
                         continue
 
-                    raw_email = data[0][1]
+                    raw_email_part = data[0]
+                    if not isinstance(raw_email_part, tuple):
+                        continue
+                    raw_email = raw_email_part[1]
                     msg = email.message_from_bytes(raw_email)
 
                     message_id = msg.get("Message-ID")
 
                     if message_id:
-                        stmt = select(EmailLog).where(EmailLog.message_id == message_id)
+                        stmt = select(EmailLog).where(EmailLog.message_id == str(message_id))
                         res = await session.execute(stmt)
                         if res.scalar_one_or_none():
                             continue
@@ -76,12 +81,18 @@ class ImapService:
                     if msg.is_multipart():
                         for part in msg.walk():
                             if part.get_content_type() == "text/plain":
-                                body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                                payload = part.get_payload(decode=True)
+                                if isinstance(payload, bytes):
+                                    body = payload.decode("utf-8", errors="ignore")
                                 break
                             if part.get_content_type() == "text/html":
-                                body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                                payload = part.get_payload(decode=True)
+                                if isinstance(payload, bytes):
+                                    body = payload.decode("utf-8", errors="ignore")
                     else:
-                        body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+                        payload = msg.get_payload(decode=True)
+                        if isinstance(payload, bytes):
+                            body = payload.decode("utf-8", errors="ignore")
 
                     new_email = EmailLog(
                         direction=EmailDirection.INBOUND,
@@ -91,7 +102,7 @@ class ImapService:
                         body=body,
                         status="received",
                         is_read=False,
-                        message_id=message_id,
+                        message_id=str(message_id) if message_id else None,
                     )
                     session.add(new_email)
                     await session.flush()
@@ -108,7 +119,7 @@ class ImapService:
                     if sync_count >= 20:
                         break
                 except Exception as e:
-                    print(f"Error processing email {e_id}: {e}")
+                    print(f"Error processing email {e_id.decode()}: {e}")
                     continue
 
             await session.commit()

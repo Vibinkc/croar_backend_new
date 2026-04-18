@@ -1,16 +1,17 @@
 import logging
-from typing import Any
 
 from app.models.enterprise.assessment import AssessmentType
 
 logger = logging.getLogger(__name__)
+
+from typing import cast
 
 from app.core.ai import generate_aptitude_questions, generate_coding_questions
 
 
 async def generate_assessment_questions(
     type: AssessmentType, topic: str, count: int = 10
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Generates assessment questions using LLM.
     """
@@ -26,7 +27,7 @@ async def generate_assessment_questions(
                 {
                     "id": str(i),
                     "type": "APTITUDE",
-                    "question": q["question_text"],
+                    "question": cast("str", q["question_text"]),
                     "options": q["options"],
                     "correct_answer": q["correct_answer"],
                     "explanation": q.get("explanation", ""),
@@ -42,11 +43,13 @@ async def generate_assessment_questions(
                     "title": q["title"],
                     "problem_statement": q["question_text"],
                     "content": {
-                        "problem_description": q["content"].get("problem_description", ""),
-                        "constraints": q["content"].get("constraints", []),
-                        "examples": q["content"].get("examples", []),
-                        "test_cases": q["content"].get("test_cases", []),
-                        "initial_code": q["content"].get("initial_code", {}),
+                        "problem_description": cast("dict[str, object]", q["content"]).get(
+                            "problem_description", ""
+                        ),
+                        "constraints": cast("dict[str, object]", q["content"]).get("constraints", []),
+                        "examples": cast("dict[str, object]", q["content"]).get("examples", []),
+                        "test_cases": cast("dict[str, object]", q["content"]).get("test_cases", []),
+                        "initial_code": cast("dict[str, object]", q["content"]).get("initial_code", {}),
                     },
                     "difficulty": q.get("difficulty", "Medium"),
                 }
@@ -59,7 +62,7 @@ async def generate_assessment_questions(
         apt_raw = await generate_aptitude_questions(topic, apt_count, difficulty, context)
         cod_raw = await generate_coding_questions(topic, cod_count, difficulty, context)
 
-        questions = []
+        questions: list[dict[str, object]] = []
         # Map Aptitude
         for i, q in enumerate(apt_raw, 1):
             questions.append(
@@ -81,11 +84,13 @@ async def generate_assessment_questions(
                     "title": q["title"],
                     "problem_statement": q["question_text"],
                     "content": {
-                        "problem_description": q["content"].get("problem_description", ""),
-                        "constraints": q["content"].get("constraints", []),
-                        "examples": q["content"].get("examples", []),
-                        "test_cases": q["content"].get("test_cases", []),
-                        "initial_code": q["content"].get("initial_code", {}),
+                        "problem_description": cast("dict[str, object]", q["content"]).get(
+                            "problem_description", ""
+                        ),
+                        "constraints": cast("dict[str, object]", q["content"]).get("constraints", []),
+                        "examples": cast("dict[str, object]", q["content"]).get("examples", []),
+                        "test_cases": cast("dict[str, object]", q["content"]).get("test_cases", []),
+                        "initial_code": cast("dict[str, object]", q["content"]).get("initial_code", {}),
                     },
                     "difficulty": q.get("difficulty", "Medium"),
                 }
@@ -101,7 +106,7 @@ from app.core.ai import generate_interview_questions as giq
 
 async def generate_interview_questions_service(
     topic: str, count: int = 10, difficulty: str = "Intermediate"
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Service wrapper for generating interview questions.
     """

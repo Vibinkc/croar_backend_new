@@ -2,10 +2,9 @@ import json
 import re
 import smtplib
 from datetime import datetime
-from decimal import Decimal
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openai import AsyncOpenAI
 from sqlalchemy import select
@@ -15,11 +14,14 @@ from app.core.settings import get_settings
 from app.models.enterprise.candidate import ApplicationStatus, Candidate, CandidateApplication
 from app.models.enterprise.job import JobRequirement
 
+if TYPE_CHECKING:
+    from fastapi import BackgroundTasks
+
 _settings = get_settings()
 
 
 class HiringAgentService:
-    def __init__(self):
+    def __init__(self) -> None:
         self.client = AsyncOpenAI(api_key=_settings.openai_api_key)
 
     async def generate_automated_workflow(self, job_title: str, job_description: str) -> list[dict[str, Any]]:
@@ -29,7 +31,7 @@ class HiringAgentService:
         prompt = f"""
         Design a 5-stage automated hiring workflow for the role: "{job_title}".
         Job Description Summary: {job_description[:500]}
-        
+
         For each stage, provide:
         1. Stage Name (e.g., Screening, Technical Assessment, Culture Fit)
         2. Agent Policy:
@@ -37,7 +39,7 @@ class HiringAgentService:
            - time_limit_hours: (integer) Max time for this stage.
            - evaluation_criteria: (object) What to check? (min_score, required_skills, etc.)
            - screening_questions: (array) Questions for the candidate if this is a screening stage.
-        
+
         Return a JSON array of stages. Each stage must follow this structure:
         {{
           "id": "string", (Must be sequential starting from "1", e.g., "1", "2", "3", "4", "5")
@@ -60,8 +62,6 @@ class HiringAgentService:
             }}
           }}
         }}
-        
-        Focus on automation. Ensure the criteria are realistic for the role.
         """
 
         try:
@@ -76,10 +76,9 @@ class HiringAgentService:
                 ],
                 response_format={"type": "json_object"},
             )
-            content = response.choices[0].message.content
-            data = json.loads(content)
+            content = str(response.choices[0].message.content)
+            data: dict[str, list[dict[str, Any]]] = json.loads(content)
             stages = data.get("stages", [])
-            # Safety normalization
             for i, stage in enumerate(stages):
                 stage["id"] = str(i + 1)
                 stage["order"] = i + 1
@@ -98,46 +97,40 @@ class HiringAgentService:
         """
         The core engine. Evaluates the candidate against a specific stage policy.
         """
-        log = (application.ai_feedback or {}).get("agent_log", [])
+        feedback = cast("dict[str, Any]", application.ai_feedback or {})
+        log = cast("list[dict[str, Any]]", feedback.get("agent_log", []))
         now = datetime.now().isoformat()
 
-        criteria = stage_policy.get("evaluation_criteria", {})
+        criteria = cast("dict[str, Any]", stage_policy.get("evaluation_criteria", {}))
 
-        decision = {"action": "STAY", "reason": "Awaiting further data or manual review."}
+        decision: dict[str, Any] = {"action": "STAY", "reason": "Awaiting further data or manual review."}
 
-        # 1. Logical Checks (Notice Period, Salary, Skills)
-        rejection_reasons = []
+        rejection_reasons: list[str] = []
 
-        # Skill Match Check
-        if criteria.get("required_skills") and candidate.skills:
+        required_skills = cast("list[str] | None", criteria.get("required_skills"))
+        if required_skills and candidate.skills:
             matching_skills = [
-                s for s in criteria["required_skills"] if s.lower() in [cs.lower() for cs in candidate.skills]
+                s for s in required_skills if s.lower() in [cs.lower() for cs in candidate.skills]
             ]
-            match_percent = (
-                (len(matching_skills) / len(criteria["required_skills"])) * 100
-                if criteria["required_skills"]
-                else 0
-            )
-            if match_percent < criteria.get("min_skill_match", 50):
+            match_percent = (len(matching_skills) / len(required_skills)) * 100 if required_skills else 0
+            min_skill_match = float(criteria.get("min_skill_match", 50.0))
+            if match_percent < min_skill_match:
                 rejection_reasons.append(
-                    f"Insufficient skill match: {int(match_percent)}% (Required: {criteria.get('min_skill_match', 50)}%)"
+                    f"Insufficient skill match: {int(match_percent)}% (Required: {int(min_skill_match)}%)"
                 )
 
-        # Notice Period Check
         if criteria.get("check_notice_period") and job.notice_period_max is not None:
             if candidate.notice_period is not None and candidate.notice_period > job.notice_period_max:
                 rejection_reasons.append(
                     f"Notice period of {candidate.notice_period} days exceeds the job limit of {job.notice_period_max} days."
                 )
 
-        # Salary Check
         if criteria.get("check_salary") and job.salary_max is not None:
             if candidate.expected_salary is not None and candidate.expected_salary > job.salary_max:
                 rejection_reasons.append(
                     f"Expected salary of {candidate.expected_salary} exceeds the job budget max of {job.salary_max}."
                 )
 
-        # 2. Decision Making
         if rejection_reasons:
             decision = {
                 "action": "AUTO_REJECT",
@@ -153,12 +146,15 @@ class HiringAgentService:
                     "reasons": rejection_reasons,
                 }
             )
-        elif application.ai_match_score and application.ai_match_score >= criteria.get("min_score", 60):
+        elif application.ai_match_score and application.ai_match_score >= float(
+            criteria.get("min_score", 60.0)
+        ):
+            min_score = float(criteria.get("min_score", 60.0))
             decision = {
                 "action": "MOVE_TO_NEXT",
                 "reason": "PASSED_EVALUATION",
                 "details": [
-                    f"Scored {application.ai_match_score} which meets the threshold of {criteria.get('min_score', 60)}."
+                    f"Scored {application.ai_match_score} which meets the threshold of {int(min_score)}."
                 ],
             }
             log.append(
@@ -172,26 +168,26 @@ class HiringAgentService:
 
         return {"decision": decision, "updated_log": log}
 
-    async def _send_agent_email(self, to_email: str, subject: str, body: str):
+    async def _send_agent_email(self, to_email: str, subject: str, body: str) -> tuple[bool, str]:
         """Private helper to send emails from the agent."""
         try:
             msg = MIMEMultipart()
-            msg["From"] = _settings.mailer_sender_email
+            msg["From"] = str(_settings.mailer_sender_email)
             msg["To"] = to_email
             msg["Subject"] = subject
             msg.attach(MIMEText(body, "html"))
 
-            with smtplib.SMTP(_settings.smtp_address, _settings.smtp_port) as server:
+            with smtplib.SMTP(str(_settings.smtp_address), int(_settings.smtp_port)) as server:
                 server.starttls()
                 if _settings.smtp_username and _settings.smtp_password:
-                    server.login(_settings.smtp_username, _settings.smtp_password)
+                    server.login(str(_settings.smtp_username), str(_settings.smtp_password))
                 server.send_message(msg)
             return True, ""
         except Exception as e:
             return False, str(e)
 
     async def process_application(
-        self, application_id: str, session: AsyncSession, background_tasks: Any
+        self, application_id: str, session: AsyncSession, background_tasks: object
     ) -> dict[str, Any]:
         """
         The main autonomous processing loop for a single application.
@@ -207,29 +203,28 @@ class HiringAgentService:
             return {"error": "Missing required data"}
 
         current_stage_idx = app.current_stage - 1
-        if current_stage_idx >= len(job.workflow_stages):
+        workflow_stages = cast("list[dict[str, Any]]", job.workflow_stages)
+        if current_stage_idx >= len(workflow_stages):
             return {"status": "Already at final stage"}
 
-        stage_config = job.workflow_stages[current_stage_idx]
-        policy = stage_config.get("agent_policy", {})
-
-        feedback = app.ai_feedback or {}
+        stage_config = workflow_stages[current_stage_idx]
+        feedback = cast("dict[str, Any]", app.ai_feedback or {})
         if feedback.get("agent_status") == "AWAITING_SCREENING":
             return {"status": "Waiting for candidate response"}
 
-        # Perform Evaluation
         evaluation = await self.evaluate_application_logic(app, candidate, job, stage_config)
-        decision = evaluation["decision"]
+        decision = cast("dict[str, Any]", evaluation["decision"])
         app.ai_feedback = {**feedback, "agent_log": evaluation["updated_log"]}
 
-        # Handle Action
         if decision["action"] == "MOVE_TO_NEXT":
             app.current_stage += 1
             await session.commit()
             return await self.process_application(application_id, session, background_tasks)
 
+        bt = cast("BackgroundTasks", background_tasks)
+
         if decision["action"] == "STAY" and stage_config.get("screening_questions"):
-            questions = stage_config["screening_questions"]
+            questions = cast("list[str]", stage_config["screening_questions"])
             q_text = "<br>".join([f"{i + 1}. {q}" for i, q in enumerate(questions)])
 
             subject = f"[REF:{app.id}] Screening: Following up on your application for {job.title}"
@@ -241,28 +236,28 @@ class HiringAgentService:
             Best regards,<br>Autonomous Hiring Agent
             """
 
-            background_tasks.add_task(self._send_agent_email, candidate.email, subject, body)
+            bt.add_task(self._send_agent_email, str(candidate.email), subject, body)
 
-            app.ai_feedback = {**app.ai_feedback, "agent_status": "AWAITING_SCREENING"}
+            app.ai_feedback = {**feedback, "agent_status": "AWAITING_SCREENING"}
             await session.commit()
             return {"status": "Sent screening questions"}
 
         if decision["action"] == "AUTO_REJECT":
             rejection_msg = await self.get_rejection_explanation(
-                candidate.full_name, job.title, decision.get("details", [])
+                str(candidate.full_name), str(job.title), cast("list[str]", decision.get("details", []))
             )
             subject = f"[REF:{app.id}] Update regarding your application for {job.title}"
             body = f"Hi {candidate.full_name},<br><br>{rejection_msg}<br><br>Thank you for your time."
 
-            background_tasks.add_task(self._send_agent_email, candidate.email, subject, body)
+            bt.add_task(self._send_agent_email, str(candidate.email), subject, body)
 
             stmt = select(ApplicationStatus).where(ApplicationStatus.name == "Rejected")
             res = await session.execute(stmt)
-            status = res.scalar_one_or_none()
-            if status:
-                app.status_id = status.id
+            status_obj = res.scalar_one_or_none()
+            if status_obj:
+                app.status_id = status_obj.id
 
-            app.ai_feedback = {**app.ai_feedback, "agent_status": "REJECTED"}
+            app.ai_feedback = {**feedback, "agent_status": "REJECTED"}
             await session.commit()
             return {"status": "Candidate rejected autonomously"}
 
@@ -270,8 +265,8 @@ class HiringAgentService:
         return {"status": "Decision: No change"}
 
     async def process_inbound_email(
-        self, from_email: str, subject: str, body: str, session: AsyncSession, background_tasks: Any
-    ):
+        self, from_email: str, subject: str, body: str, session: AsyncSession, background_tasks: object
+    ) -> dict[str, Any]:
         """
         Receives an email, finds the application via REF tag, extracts data, and resumes the agent.
         """
@@ -286,28 +281,33 @@ class HiringAgentService:
                 .order_by(CandidateApplication.created_at.desc())
             )
             res = await session.execute(stmt)
-            app = res.scalars().first()
-            if app:
-                app_id = str(app.id)
+            app_found = res.scalars().first()
+            if app_found:
+                app_id = str(app_found.id)
 
         if not app_id:
             return {"error": "Could not identify application"}
 
         app = await session.get(CandidateApplication, app_id)
+        if not app:
+            return {"error": "Application not found"}
         candidate = await session.get(Candidate, app.candidate_id)
+        if not candidate:
+            return {"error": "Candidate not found"}
 
         intelligence = await self.evaluate_candidate_response(
             "Extract notice period and salary expectation from this reply.", body
         )
 
-        values = intelligence.get("values_extracted", {})
+        values = cast("dict[str, Any]", intelligence.get("values_extracted", {}))
         if values.get("notice_period"):
             candidate.notice_period = int(values["notice_period"])
         if values.get("salary"):
-            candidate.expected_salary = Decimal(str(values["salary"]))
+            candidate.expected_salary = float(values["salary"])
 
         now = datetime.now().isoformat()
-        log = (app.ai_feedback or {}).get("agent_log", [])
+        feedback = cast("dict[str, Any]", app.ai_feedback or {})
+        log = cast("list[dict[str, Any]]", feedback.get("agent_log", []))
         log.append(
             {
                 "time": now,
@@ -318,8 +318,11 @@ class HiringAgentService:
             }
         )
 
-        app.ai_feedback = {**(app.ai_feedback or {}), "agent_log": log, "agent_status": "REPLY_RECEIVED"}
-        candidate.parsed_data = {**(candidate.parsed_data or {}), "inbound_intelligence": intelligence}
+        app.ai_feedback = {**feedback, "agent_log": log, "agent_status": "REPLY_RECEIVED"}
+        candidate.parsed_data = {
+            **cast("dict[str, Any]", candidate.parsed_data or {}),
+            "inbound_intelligence": intelligence,
+        }
 
         await session.commit()
         return await self.process_application(str(app.id), session, background_tasks)
@@ -332,7 +335,7 @@ class HiringAgentService:
         prompt = f"""
         Question: {question}
         Candidate Response: {response}
-        
+
         Evaluate this response for a professional job application.
         Return JSON with:
         - score: (0-100)
@@ -348,7 +351,8 @@ class HiringAgentService:
                 ],
                 response_format={"type": "json_object"},
             )
-            return json.loads(res.choices[0].message.content)
+            content = str(res.choices[0].message.content)
+            return cast("dict[str, Any]", json.loads(content))
         except:
             return {"score": 50, "analysis": "Could not parse response with AI."}
 
@@ -361,7 +365,7 @@ class HiringAgentService:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
             )
-            return response.choices[0].message.content
+            return str(response.choices[0].message.content)
         except:
             return "Thank you for your interest, but your profile does not meet our current requirements for notice period or salary expectations."
 
@@ -373,9 +377,9 @@ class HiringAgentService:
         Candidate: {candidate_name}
         Job: {job_title}
         Last Message: {message_body}
-        
-        Draft a polite, professional 2-3 sentence reply as an AI Hiring Assistant. 
-        If the candidate asked a question, try to acknowledge it. 
+
+        Draft a polite, professional 2-3 sentence reply as an AI Hiring Assistant.
+        If the candidate asked a question, try to acknowledge it.
         If they provided info, thank them and say we will get back to them.
         Keep it concise and friendly.
         """
@@ -383,7 +387,7 @@ class HiringAgentService:
             response = await self.client.chat.completions.create(
                 model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
             )
-            return response.choices[0].message.content
+            return str(response.choices[0].message.content)
         except:
             return f"Hi {candidate_name}, thank you for your message. We have received your update regarding the {job_title} position and will get back to you shortly."
 

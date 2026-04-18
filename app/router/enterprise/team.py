@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
@@ -19,7 +19,9 @@ team_manage_dep = Depends(PermissionChecker(ModuleScope.employees, PermissionAct
 
 
 @router.get("/roles", response_model=list[RoleSchema])
-async def list_org_roles(session: DBSessionDep, current_user: Annotated[Any, team_manage_dep]):
+async def list_org_roles(
+    session: DBSessionDep, current_user: Annotated[object, team_manage_dep]
+) -> list[object]:
     """List all roles available for this organization (including global ones)."""
     # Fetch roles that belong to this tenant or are system roles
     # Note: Tenant ID is coming from the current_user's company_id
@@ -28,34 +30,36 @@ async def list_org_roles(session: DBSessionDep, current_user: Annotated[Any, tea
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id == tenant_id, Role.is_system == False)
+        .where(Role.tenant_id == tenant_id, not Role.is_system)
         .order_by(Role.role_rank.asc())
     )
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.get("/permissions", response_model=list[PermissionSchema])
-async def list_available_permissions(session: DBSessionDep, current_user: Annotated[Any, team_manage_dep]):
+async def list_available_permissions(
+    session: DBSessionDep, current_user: Annotated[object, team_manage_dep]
+) -> list[object]:
     """List all permissions that can be assigned to roles."""
     tenant_id = getattr(current_user, "company_id", None)
     stmt = select(Permission).where(
-        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id == None)),
+        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id is None)),
         Permission.module != ModuleScope.platform,
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/roles", response_model=RoleSchema)
 async def create_org_role(
     session: DBSessionDep,
-    current_user: Annotated[Any, team_manage_dep],
+    current_user: Annotated[object, team_manage_dep],
     name: str = Body(...),
     description: str = Body(None),
     permission_ids: list[UUID] = Body([]),
-):
+) -> object:
     """Create a custom role for the organization."""
     tenant_id = getattr(current_user, "company_id", None)
     if not tenant_id:
@@ -93,11 +97,11 @@ async def create_org_role(
 async def update_org_role(
     role_id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, team_manage_dep],
+    current_user: Annotated[object, team_manage_dep],
     name: str = Body(None),
     description: str = Body(None),
     permission_ids: list[UUID] = Body(None),
-):
+) -> object:
     """Update a custom role for the organization."""
     tenant_id = getattr(current_user, "company_id", None)
 
@@ -107,7 +111,7 @@ async def update_org_role(
         .where(
             Role.id == role_id,
             Role.tenant_id == tenant_id,
-            Role.is_system == False,  # Cannot edit system roles
+            not Role.is_system,  # Cannot edit system roles
         )
     )
     result = await session.execute(stmt)
@@ -136,15 +140,15 @@ async def update_org_role(
 
 @router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_org_role(
-    role_id: UUID, session: DBSessionDep, current_user: Annotated[Any, team_manage_dep]
-):
+    role_id: UUID, session: DBSessionDep, current_user: Annotated[object, team_manage_dep]
+) -> None:
     """Delete a custom role for the organization."""
     tenant_id = getattr(current_user, "company_id", None)
 
     stmt = select(Role).where(
         Role.id == role_id,
         Role.tenant_id == tenant_id,
-        Role.is_system == False,  # Cannot delete system roles
+        not Role.is_system,  # Cannot delete system roles
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()
@@ -158,7 +162,9 @@ async def delete_org_role(
 
 
 @router.get("/members", response_model=list[UserInTeam])
-async def list_team_members(session: DBSessionDep, current_user: Annotated[Any, team_manage_dep]):
+async def list_team_members(
+    session: DBSessionDep, current_user: Annotated[object, team_manage_dep]
+) -> list[object]:
     """List all members of the organization with their roles."""
     tenant_id = getattr(current_user, "company_id", None)
     if not tenant_id:
@@ -167,23 +173,23 @@ async def list_team_members(session: DBSessionDep, current_user: Annotated[Any, 
     stmt = (
         select(EnterpriseUser)
         .options(selectinload(EnterpriseUser.roles).selectinload(Role.permissions))
-        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at == None)
+        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at is None)
     )
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/members", response_model=UserInTeam)
 async def add_team_member(
     session: DBSessionDep,
-    current_user: Annotated[Any, team_manage_dep],
+    current_user: Annotated[object, team_manage_dep],
     email: str = Body(...),
     password: str = Body(...),
     first_name: str = Body(...),
     last_name: str = Body(...),
     role_ids: list[UUID] = Body(...),
-):
+) -> object:
     """Add a new member to the organization team."""
     tenant_id = getattr(current_user, "company_id", None)
 
@@ -191,7 +197,7 @@ async def add_team_member(
     role_stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id == None))
+        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id is None))
     )
     result = await session.execute(role_stmt)
     roles = result.scalars().all()

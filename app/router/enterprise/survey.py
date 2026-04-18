@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -41,30 +41,36 @@ router = APIRouter(prefix="/surveys", tags=["Surveys"])
 @router.get("/types", response_model=list[SurveyTypeSchema])
 async def list_survey_types(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
+) -> list[SurveyTypeModel]:
     stmt = (
         select(SurveyTypeModel)
-        .where((SurveyTypeModel.company_id == current_user.company_id) | (SurveyTypeModel.company_id == None))
+        .where(
+            (SurveyTypeModel.company_id == getattr(current_user, "company_id", None))
+            | (SurveyTypeModel.company_id is None)
+        )
         .order_by(SurveyTypeModel.name)
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.post("/ai-generate-questions", response_model=list[SurveyAIGeneratedQuestion])
 async def ai_generate_survey_questions(
     request: SurveyAIGenerateRequest,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.generate))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.generate))
+    ],
+) -> list[SurveyAIGeneratedQuestion]:
     """
     Generates industry-specific survey questions using AI.
     """
     # 1. Get the survey type name
     stmt = select(SurveyTypeModel).where(
         SurveyTypeModel.id == request.survey_type_id,
-        (SurveyTypeModel.company_id == current_user.company_id) | (SurveyTypeModel.company_id == None),
+        (SurveyTypeModel.company_id == getattr(current_user, "company_id", None))
+        | (SurveyTypeModel.company_id is None),
     )
     res = await db.execute(stmt)
     st = res.scalar_one_or_none()
@@ -101,7 +107,9 @@ Return ONLY a JSON object:
 
         data = json.loads(response_str)
         # Extract questions from the nested field if present, otherwise assume data is the list
-        questions_list = data.get("questions", data) if isinstance(data, dict) else data
+        questions_list = cast(
+            "list[dict[str, object]]", data.get("questions", data) if isinstance(data, dict) else data
+        )
         return [SurveyAIGeneratedQuestion(**q) for q in questions_list]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}")
@@ -111,14 +119,14 @@ Return ONLY a JSON object:
 async def create_template(
     request: SurveyTemplateCreate,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.create))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.create))],
+) -> SurveyTemplateModel:
     new_tpl = SurveyTemplateModel(
         survey_type_id=request.survey_type_id,
         title=request.title,
         description=request.description,
         is_active=request.is_active,
-        company_id=current_user.company_id,
+        company_id=cast("uuid.UUID", getattr(current_user, "company_id", None)),
     )
     db.add(new_tpl)
     await db.flush()
@@ -132,7 +140,7 @@ async def create_template(
             scale_min=q_data.scale_min,
             scale_max=q_data.scale_max,
             options=q_data.options,
-            company_id=current_user.company_id,
+            company_id=cast("uuid.UUID", getattr(current_user, "company_id", None)),
         )
         db.add(new_q)
 
@@ -151,16 +159,16 @@ async def create_template(
 @router.get("/templates", response_model=list[SurveyTemplateSchema])
 async def list_templates(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
+) -> list[SurveyTemplateModel]:
     stmt = (
         select(SurveyTemplateModel)
-        .where(SurveyTemplateModel.company_id == current_user.company_id)
+        .where(SurveyTemplateModel.company_id == getattr(current_user, "company_id", None))
         .options(selectinload(SurveyTemplateModel.questions), selectinload(SurveyTemplateModel.survey_type))
         .order_by(SurveyTemplateModel.created_at.desc())
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.post("/launch", response_model=SurveyInstanceSchema)
@@ -168,8 +176,8 @@ async def launch_survey(
     request: SurveyInstanceCreate,
     db: DBSessionDep,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.create))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.create))],
+) -> SurveyInstanceModel:
     new_instance = SurveyInstanceModel(
         template_id=request.template_id,
         name=request.name,
@@ -177,17 +185,17 @@ async def launch_survey(
         end_date=request.end_date,
         status=SurveyInstanceStatus.ACTIVE,
         target_group=request.target_group,
-        company_id=current_user.company_id,
+        company_id=cast("uuid.UUID", getattr(current_user, "company_id", None)),
     )
     db.add(new_instance)
     await db.flush()
 
     # Determine target employees
-    target_ids = []
+    target_ids: list[uuid.UUID] = []
     if request.target_group == "ALL":
-        stmt = select(Employee.id).where(Employee.company_id == current_user.company_id)
-        res = await db.execute(stmt)
-        target_ids = res.scalars().all()
+        ids_stmt = select(Employee.id).where(Employee.company_id == getattr(current_user, "company_id", None))
+        res_ids = await db.execute(ids_stmt)
+        target_ids = list(res_ids.scalars().all())
     elif request.target_group == "CUSTOM" and request.employee_ids:
         target_ids = request.employee_ids
 
@@ -197,7 +205,7 @@ async def launch_survey(
             instance_id=new_instance.id,
             employee_id=emp_id,
             status=SurveyInviteStatus.PENDING,
-            company_id=current_user.company_id,
+            company_id=cast("uuid.UUID", getattr(current_user, "company_id", None)),
         )
         db.add(new_invite)
 
@@ -207,7 +215,7 @@ async def launch_survey(
     background_tasks.add_task(survey_service.notify_participants, db, new_instance.id)
 
     # Reload with relationships
-    stmt = (
+    stmt_reload = (
         select(SurveyInstanceModel)
         .where(SurveyInstanceModel.id == new_instance.id)
         .options(
@@ -215,15 +223,15 @@ async def launch_survey(
             selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.questions),
         )
     )
-    res = await db.execute(stmt)
-    return res.scalar_one()
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
 
 
 @router.get("/invites", response_model=list[SurveyInviteFull])
 async def list_my_invites(
     db: DBSessionDep,
     employee_id: uuid.UUID = Query(...),  # In production, this would be from employee auth
-):
+) -> list[SurveyInviteModel]:
     stmt = (
         select(SurveyInviteModel)
         .where(
@@ -237,11 +245,11 @@ async def list_my_invites(
         )
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.get("/invite/{token}", response_model=SurveyInviteFull)
-async def get_invite_by_token(token: str, db: DBSessionDep):
+async def get_invite_by_token(token: str, db: DBSessionDep) -> SurveyInviteModel:
     stmt = (
         select(SurveyInviteModel)
         .where(SurveyInviteModel.token == token)
@@ -263,7 +271,7 @@ async def get_invite_by_token(token: str, db: DBSessionDep):
 
 
 @router.post("/submit/{token}")
-async def submit_survey(token: str, submission: SurveySubmission, db: DBSessionDep):
+async def submit_survey(token: str, submission: SurveySubmission, db: DBSessionDep) -> dict[str, str]:
     stmt = select(SurveyInviteModel).where(SurveyInviteModel.token == token)
     res = await db.execute(stmt)
     invite = res.scalar_one_or_none()
@@ -283,7 +291,7 @@ async def submit_survey(token: str, submission: SurveySubmission, db: DBSessionD
         )
 
     invite.status = SurveyInviteStatus.COMPLETED
-    invite.completed_at = func.now()
+    invite.completed_at = cast("Any", func.now())
     await db.commit()
     return {"message": "Survey submitted successfully"}
 
@@ -291,11 +299,11 @@ async def submit_survey(token: str, submission: SurveySubmission, db: DBSessionD
 @router.get("/instances", response_model=list[SurveyInstanceSchema])
 async def list_instances(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
+) -> list[SurveyInstanceModel]:
     stmt = (
         select(SurveyInstanceModel)
-        .where(SurveyInstanceModel.company_id == current_user.company_id)
+        .where(SurveyInstanceModel.company_id == getattr(current_user, "company_id", None))
         .options(
             selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.survey_type),
             selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.questions),
@@ -303,20 +311,21 @@ async def list_instances(
         .order_by(SurveyInstanceModel.created_at.desc())
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.get("/report/{instance_id}", response_model=SurveyReport)
 async def get_survey_report(
     instance_id: uuid.UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.review))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.review))],
+) -> SurveyReport:
     # Check instance
     stmt = (
         select(SurveyInstanceModel)
         .where(
-            SurveyInstanceModel.id == instance_id, SurveyInstanceModel.company_id == current_user.company_id
+            SurveyInstanceModel.id == instance_id,
+            SurveyInstanceModel.company_id == getattr(current_user, "company_id", None),
         )
         .options(selectinload(SurveyInstanceModel.template).selectinload(SurveyTemplateModel.questions))
     )
@@ -326,24 +335,24 @@ async def get_survey_report(
         raise HTTPException(status_code=404, detail="Survey instance not found")
 
     # Invite stats
-    stmt = select(
+    stmt_stats = select(
         func.count(SurveyInviteModel.id),
         func.count(SurveyInviteModel.id).filter(SurveyInviteModel.status == SurveyInviteStatus.COMPLETED),
     ).where(SurveyInviteModel.instance_id == instance_id)
-    res = await db.execute(stmt)
-    total, completed = res.one()
+    res_stats = await db.execute(stmt_stats)
+    total, completed = cast("tuple[int, int]", res_stats.one())
 
     # Question breakdown
     summaries = []
     for q in instance.template.questions:
         # Fetch all responses for this question in this instance
-        stmt = (
+        stmt_resp = (
             select(SurveyResponseModel)
             .join(SurveyInviteModel)
             .where(SurveyInviteModel.instance_id == instance_id, SurveyResponseModel.question_id == q.id)
         )
-        res = await db.execute(stmt)
-        responses = res.scalars().all()
+        res_resp = await db.execute(stmt_resp)
+        responses = cast("list[SurveyResponseModel]", list(res_resp.scalars().all()))
 
         summary = QuestionSummary(
             question_id=q.id, question_text=q.text, question_type=q.type, response_count=len(responses)
@@ -353,9 +362,10 @@ async def get_survey_report(
             vals = [r.answer_value for r in responses if r.answer_value is not None]
             if vals:
                 summary.average_score = sum(vals) / len(vals)
-                dist = {}
+                dist: dict[str, object] = {}
                 for v in vals:
-                    dist[str(v)] = dist.get(str(v), 0) + 1
+                    current_count = cast("int", dist.get(str(v), 0))
+                    dist[str(v)] = current_count + 1
                 summary.distribution = dist
         elif q.type == "TEXT":
             summary.text_responses = [r.answer_text for r in responses if r.answer_text]
@@ -375,8 +385,8 @@ async def get_survey_report(
 async def generate_survey_report_ai(
     instance_id: uuid.UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.review))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.review))],
+) -> SurveyAIAnalysis:
     """
     Generates strategic AI insights based on aggregated survey data.
     """
@@ -400,7 +410,7 @@ async def generate_survey_report_ai(
 
     context_str = "\n".join(context_parts)
 
-    prompt = f"""You are an expert Organizational Psychologist and Management Consultant. 
+    prompt = f"""You are an expert Organizational Psychologist and Management Consultant.
 Analyze the following aggregated employee survey data and provide a high-fidelity strategic evaluation.
 
 Data:
@@ -434,11 +444,14 @@ Return ONLY a JSON object:
 async def notify_instance_participants(
     instance_id: uuid.UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.moderate))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.moderate))
+    ],
+) -> dict[str, str]:
     # Verify instance ownership
     stmt = select(SurveyInstanceModel).where(
-        SurveyInstanceModel.id == instance_id, SurveyInstanceModel.company_id == current_user.company_id
+        SurveyInstanceModel.id == instance_id,
+        SurveyInstanceModel.company_id == getattr(current_user, "company_id", None),
     )
     res = await db.execute(stmt)
     if not res.scalar_one_or_none():
@@ -452,12 +465,17 @@ async def notify_instance_participants(
 async def resend_survey_invite(
     invite_id: uuid.UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.moderate))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.moderate))
+    ],
+) -> dict[str, str]:
     stmt = (
         select(SurveyInviteModel)
         .join(SurveyInstanceModel)
-        .where(SurveyInviteModel.id == invite_id, SurveyInstanceModel.company_id == current_user.company_id)
+        .where(
+            SurveyInviteModel.id == invite_id,
+            SurveyInstanceModel.company_id == getattr(current_user, "company_id", None),
+        )
         .options(selectinload(SurveyInviteModel.employee), selectinload(SurveyInviteModel.instance))
     )
     res = await db.execute(stmt)
@@ -473,7 +491,7 @@ async def resend_survey_invite(
 
 
 @router.post("/portal/login")
-async def unified_portal_login(employee_id: uuid.UUID, email: str, db: DBSessionDep):
+async def unified_portal_login(employee_id: uuid.UUID, email: str, db: DBSessionDep) -> dict[str, object]:
     """
     Unified entry point for employees to see both 360 and Survey tasks.
     """

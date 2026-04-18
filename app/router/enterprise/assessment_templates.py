@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,15 +21,18 @@ router = APIRouter(prefix="/assessment-templates", tags=["Assessment Templates"]
 @router.get("/", response_model=list[AssessmentTemplateResponse])
 async def list_assessment_templates(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> list[AssessmentTemplate]:
+    company_id = getattr(current_user, "company_id", None)
     stmt = (
         select(AssessmentTemplate)
-        .where(AssessmentTemplate.company_id == current_user.company_id)
+        .where(AssessmentTemplate.company_id == company_id)
         .options(selectinload(AssessmentTemplate.email_template))
     )
     result = await db.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/", response_model=AssessmentTemplateResponse)
@@ -37,10 +40,11 @@ async def create_assessment_template(
     template_in: AssessmentTemplateCreate,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
     ],
-):
-    db_template = AssessmentTemplate(**template_in.model_dump(), company_id=current_user.company_id)
+) -> AssessmentTemplate:
+    company_id = getattr(current_user, "company_id", None)
+    db_template = AssessmentTemplate(**template_in.model_dump(), company_id=cast("UUID", company_id))
     db.add(db_template)
     await db.commit()
 
@@ -58,11 +62,14 @@ async def create_assessment_template(
 async def get_assessment_template(
     template_id: UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> AssessmentTemplate:
+    company_id = getattr(current_user, "company_id", None)
     stmt = (
         select(AssessmentTemplate)
-        .where(AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id)
+        .where(AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == company_id)
         .options(selectinload(AssessmentTemplate.email_template))
     )
     result = await db.execute(stmt)
@@ -79,11 +86,12 @@ async def update_assessment_template(
     template_in: AssessmentTemplateUpdate,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.update))
     ],
-):
+) -> AssessmentTemplate:
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(AssessmentTemplate).where(
-        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == company_id
     )
     result = await db.execute(stmt)
     db_template = result.scalar_one_or_none()
@@ -112,11 +120,12 @@ async def delete_assessment_template(
     template_id: UUID,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.delete))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.delete))
     ],
-):
+) -> None:
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(AssessmentTemplate).where(
-        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == company_id
     )
     result = await db.execute(stmt)
     db_template = result.scalar_one_or_none()
@@ -134,12 +143,13 @@ async def generate_template_questions(
     template_id: UUID,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
     ],
     count: int = 10,
-):
+) -> AssessmentTemplate:
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(AssessmentTemplate).where(
-        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == current_user.company_id
+        AssessmentTemplate.id == template_id, AssessmentTemplate.company_id == company_id
     )
     result = await db.execute(stmt)
     db_template = result.scalar_one_or_none()

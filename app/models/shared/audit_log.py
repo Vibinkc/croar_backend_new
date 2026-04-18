@@ -17,7 +17,7 @@ class AuditLog(SharedBase):
     )
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     entity_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=True)  # Target entity ID
-    details: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    details: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     timestamp: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, server_default=func.now(), index=True)
 
     admin = relationship("SuperAdmin")

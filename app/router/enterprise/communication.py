@@ -1,19 +1,16 @@
+import json
+import re
 import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import select, update
-
-from app.core.settings import get_settings
-
-_settings = get_settings()
-
 from openai import AsyncOpenAI
+from sqlalchemy import select, update
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.core.settings import get_settings
@@ -24,6 +21,7 @@ from app.models.enterprise.job import JobRequirement
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.communication import (
     EmailDraftRequest,
+    EmailLogResponse,
     EmailSendRequest,
     EmailTemplateCreate,
     EmailTemplateResponse,
@@ -37,16 +35,14 @@ _settings = get_settings()
 
 router = APIRouter(prefix="/communication", tags=["Enterprise Communication"])
 
-# Removed redundant helper
-
 
 async def get_communication_context(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
     ],
     job_id: UUID | None = None,
-):
+) -> dict[str, Any]:
     """Get sender context for templates."""
     company = None
     if job_id:
@@ -60,22 +56,20 @@ async def get_communication_context(
         company = result.scalar_one_or_none()
 
     if not company:
-        stmt = select(Company).where(Company.id == current_user.company_id).limit(1)
+        company_id = getattr(current_user, "company_id", None)
+        stmt = select(Company).where(Company.id == company_id).limit(1)
         result = await session.execute(stmt)
         company = result.scalar_one_or_none()
 
-    recruiter_name = (
-        current_user.first_name + " " + (current_user.last_name or "")
-        if current_user.first_name
-        else "Recruiting Team"
-    )
-    recruiter_name = recruiter_name.strip()
+    first_name = getattr(current_user, "first_name", "")
+    last_name = getattr(current_user, "last_name", "")
+    recruiter_name = (f"{first_name} {last_name}").strip() or "Recruiting Team"
 
     return {
         "company_name": company.name if company else None,
         "company_address": company.location if company else None,
         "recruiter_name": recruiter_name,
-        "recruiter_email": current_user.email,
+        "recruiter_email": getattr(current_user, "email", ""),
     }
 
 
@@ -126,15 +120,15 @@ def send_smtp_email(
         actual_logo = logo_url or _settings.default_logo_url
         branded_body = wrap_with_layout(body, actual_company, actual_logo)
         msg = MIMEMultipart()
-        msg["From"] = _settings.mailer_sender_email
+        msg["From"] = str(_settings.mailer_sender_email)
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(branded_body, "html"))
 
-        with smtplib.SMTP(_settings.smtp_address, _settings.smtp_port) as server:
+        with smtplib.SMTP(str(_settings.smtp_address), int(cast("Any", _settings.smtp_port))) as server:
             server.starttls()
             if _settings.smtp_username and _settings.smtp_password:
-                server.login(_settings.smtp_username, _settings.smtp_password)
+                server.login(str(_settings.smtp_username), str(_settings.smtp_password))
             server.send_message(msg)
         return True, ""
     except Exception as e:
@@ -146,11 +140,13 @@ async def create_template(
     request: EmailTemplateCreate,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
     ],
-):
+) -> EmailTemplate:
     """Create a new email template."""
-    new_template = EmailTemplate(**request.model_dump(), company_id=current_user.company_id)
+    new_template = EmailTemplate(
+        **request.model_dump(), company_id=cast("UUID", getattr(current_user, "company_id", None))
+    )
     session.add(new_template)
     await session.commit()
     await session.refresh(new_template)
@@ -163,12 +159,12 @@ async def update_template(
     request: EmailTemplateUpdate,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
     ],
-):
+) -> EmailTemplate:
     """Update an existing email template."""
     stmt = select(EmailTemplate).where(
-        EmailTemplate.id == template_id, EmailTemplate.company_id == current_user.company_id
+        EmailTemplate.id == template_id, EmailTemplate.company_id == getattr(current_user, "company_id", None)
     )
     result = await session.execute(stmt)
     template = result.scalar_one_or_none()
@@ -190,12 +186,12 @@ async def delete_template(
     template_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
     ],
-):
+) -> dict[str, str]:
     """Delete an email template."""
     stmt = select(EmailTemplate).where(
-        EmailTemplate.id == template_id, EmailTemplate.company_id == current_user.company_id
+        EmailTemplate.id == template_id, EmailTemplate.company_id == getattr(current_user, "company_id", None)
     )
     result = await session.execute(stmt)
     template = result.scalar_one_or_none()
@@ -212,47 +208,47 @@ async def delete_template(
 async def list_templates(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
     ],
-):
+) -> list[EmailTemplate]:
     """List all email templates for the organization."""
     stmt = (
         select(EmailTemplate)
-        .where(EmailTemplate.company_id == current_user.company_id)
+        .where(EmailTemplate.company_id == getattr(current_user, "company_id", None))
         .order_by(EmailTemplate.created_at.desc())
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
-@router.get("/logs")
+@router.get("/logs", response_model=list[EmailLogResponse])
 async def get_email_logs(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
     ],
     direction: str | None = None,
-):
+) -> list[EmailLog]:
     """Get history of emails."""
-    stmt = select(EmailLog).where(EmailLog.company_id == current_user.company_id)
+    stmt = select(EmailLog).where(EmailLog.company_id == getattr(current_user, "company_id", None))
     if direction:
         stmt = stmt.where(EmailLog.direction == direction)
 
     stmt = stmt.order_by(EmailLog.sent_at.desc())
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/sync-imap")
 async def sync_emails_manually(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
     ],
     background_tasks: BackgroundTasks,
-):
+) -> dict[str, Any]:
     """Trigger manual IMAP sync."""
-    result = await imap_service.fetch_and_sync_emails("default", session, background_tasks)
+    result = await imap_service.fetch_and_sync_emails(session, background_tasks)
     return result
 
 
@@ -261,13 +257,13 @@ async def mark_as_read(
     log_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
     ],
-):
+) -> dict[str, str]:
     """Mark an inbound email as read."""
     stmt = (
         update(EmailLog)
-        .where(EmailLog.id == log_id, EmailLog.company_id == current_user.company_id)
+        .where(EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None))
         .values(is_read=True)
     )
     await session.execute(stmt)
@@ -280,11 +276,13 @@ async def get_smart_reply(
     log_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
     ],
-):
+) -> dict[str, Any]:
     """Generate an AI smart reply for an inbound message."""
-    stmt = select(EmailLog).where(EmailLog.id == log_id, EmailLog.company_id == current_user.company_id)
+    stmt = select(EmailLog).where(
+        EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None)
+    )
     res = await session.execute(stmt)
     log = res.scalar_one_or_none()
     if not log:
@@ -314,59 +312,57 @@ async def send_emails(
     request: EmailSendRequest,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
     ],
     background_tasks: BackgroundTasks,
-):
+) -> dict[str, int]:
     """Send emails."""
     template = None
+    company_id = getattr(current_user, "company_id", None)
     if request.template_id:
         stmt = select(EmailTemplate).where(
-            EmailTemplate.id == request.template_id, EmailTemplate.company_id == current_user.company_id
+            EmailTemplate.id == request.template_id, EmailTemplate.company_id == company_id
         )
         result = await session.execute(stmt)
         template = result.scalar_one_or_none()
         if not template:
             raise HTTPException(status_code=404, detail="Template not found")
 
-    recipients = []
+    recipients: list[tuple[str, Candidate | None]] = []
 
     if request.recipient_ids:
-        stmt = select(Candidate).where(
-            Candidate.id.in_(request.recipient_ids), Candidate.company_id == current_user.company_id
+        stmt_cand = select(Candidate).where(
+            Candidate.id.in_(request.recipient_ids), Candidate.company_id == company_id
         )
-        res_cand = await session.execute(stmt)
+        res_cand = await session.execute(stmt_cand)
         for cand in res_cand.scalars().all():
-            recipients.append((cand.email, cand))
+            recipients.append((str(cand.email), cand))
 
     if request.recipient_emails:
         for email_addr in request.recipient_emails:
-            stmt = (
+            stmt_e = (
                 select(Candidate)
-                .where(Candidate.email == email_addr, Candidate.company_id == current_user.company_id)
+                .where(Candidate.email == email_addr, Candidate.company_id == company_id)
                 .limit(1)
             )
-            res_cand = await session.execute(stmt)
-            cand = res_cand.scalar_one_or_none()
+            res_e = await session.execute(stmt_e)
+            cand_e = res_e.scalar_one_or_none()
 
             if not any(r[0] == email_addr for r in recipients):
-                recipients.append((email_addr, cand))
+                recipients.append((email_addr, cand_e))
 
     if not recipients:
         raise HTTPException(status_code=400, detail="No recipients provided")
 
-    default_stmt = select(Company).where(Company.id == current_user.company_id).limit(1)
+    default_stmt = select(Company).where(Company.id == company_id).limit(1)
     res_def = await session.execute(default_stmt)
     default_company = res_def.scalar_one_or_none()
 
     company_name_base = default_company.name if default_company else "Our Company"
     company_address_base = default_company.location if default_company and default_company.location else ""
-    recruiter_name = (
-        current_user.first_name + " " + (current_user.last_name or "")
-        if current_user.first_name
-        else "Recruiting Team"
-    )
-    recruiter_name = recruiter_name.strip()
+    first_name = getattr(current_user, "first_name", "")
+    last_name = getattr(current_user, "last_name", "")
+    recruiter_name = (f"{first_name} {last_name}").strip() or "Recruiting Team"
 
     sent_count = 0
     failed_count = 0
@@ -381,7 +377,7 @@ async def send_emails(
         company_logo = default_company.logo_url if default_company else None
 
         if candidate:
-            stmt = (
+            stmt_app = (
                 select(CandidateApplication, JobRequirement, Company)
                 .join(JobRequirement, CandidateApplication.job_requirement_id == JobRequirement.id)
                 .outerjoin(Company, JobRequirement.company_id == Company.id)
@@ -390,8 +386,8 @@ async def send_emails(
                 .limit(1)
             )
 
-            res = await session.execute(stmt)
-            app_data = res.first()
+            res_app = await session.execute(stmt_app)
+            app_data = res_app.first()
             if app_data:
                 _, job, company = app_data
                 job_title = job.title
@@ -405,24 +401,24 @@ async def send_emails(
         )
 
         replacements = {
-            "{{candidate_name}}": candidate_name,
-            "{{job_title}}": job_title,
-            "{{company_name}}": company_name,
-            "{{recruiter_name}}": recruiter_name,
-            "{{company_address}}": company_address,
-            "{{company_logo}}": company_logo or "",
+            "{{candidate_name}}": str(candidate_name),
+            "{{job_title}}": str(job_title),
+            "{{company_name}}": str(company_name),
+            "{{recruiter_name}}": str(recruiter_name),
+            "{{company_address}}": str(company_address),
+            "{{company_logo}}": str(company_logo or ""),
         }
 
         if request.custom_variables:
             for key, val in request.custom_variables.items():
                 k = key if key.startswith("{{") else f"{{{{{key}}}}}"
-                replacements[k] = val
+                replacements[k] = str(val)
 
         final_body = body_template
         final_subject = subject
         for key, val in replacements.items():
-            final_body = final_body.replace(key, str(val))
-            final_subject = final_subject.replace(key, str(val))
+            final_body = final_body.replace(key, val)
+            final_subject = final_subject.replace(key, val)
 
         log_entry = EmailLog(
             recipient_email=email_addr,
@@ -431,7 +427,8 @@ async def send_emails(
             status="pending",
             template_id=template.id if template else None,
             candidate_id=candidate.id if candidate else None,
-            company_id=current_user.company_id,
+            company_id=company_id,
+            sent_at=cast("Any", datetime.now()),
         )
         session.add(log_entry)
         await session.flush()
@@ -456,15 +453,15 @@ async def send_emails(
 async def draft_email(
     request: EmailDraftRequest,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
     ],
-):
+) -> dict[str, Any]:
     """Draft an email using AI."""
     if not _settings.openai_api_key:
         return {"subject": f"Regarding {request.purpose}", "body": "Draft content."}
 
     try:
-        client = AsyncOpenAI(api_key=_settings.openai_api_key)
+        client = AsyncOpenAI(api_key=str(_settings.openai_api_key))
         prompt = f"Draft a {request.tone} email for {request.purpose}."
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}]
@@ -478,14 +475,11 @@ async def draft_email(
 async def generate_template(
     request: TemplateGenerationRequest,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.generate))
     ],
-):
+) -> dict[str, Any]:
     """Generate a complete email template (name, subject, body) using AI."""
-    import re
-
     if not _settings.openai_api_key:
-        # Graceful fallback when no OpenAI key is configured
         fallback_body = (
             "Dear {{candidate_name}},\n\n"
             "We are reaching out regarding {{job_title}} at {{company_name}}.\n\n"
@@ -499,7 +493,7 @@ async def generate_template(
         }
 
     try:
-        client = AsyncOpenAI(api_key=_settings.openai_api_key)
+        client = AsyncOpenAI(api_key=str(_settings.openai_api_key))
         system_prompt = (
             "You are an expert HR email writer. "
             "Generate a complete email template in JSON format with the following keys: "
@@ -517,17 +511,13 @@ async def generate_template(
         )
 
         raw = response.choices[0].message.content or ""
-        # Strip markdown fences if present
         raw = re.sub(r"^```[a-z]*\n?", "", raw.strip(), flags=re.IGNORECASE)
         raw = re.sub(r"```$", "", raw.strip())
 
-        import json
-
         data = json.loads(raw)
 
-        # Auto-extract variable names from body
         variables = re.findall(r"\{\{(\w+)\}\}", data.get("body", ""))
-        variables = list(dict.fromkeys(variables))  # deduplicate preserving order
+        variables = list(dict.fromkeys(variables))
 
         return {
             "name": data.get("name", request.purpose),

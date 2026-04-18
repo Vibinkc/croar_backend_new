@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -63,73 +64,88 @@ class EmployeeService:
             raise ValueError("No onboarding process found for this candidate")
 
         # 3. Extract information
-        job_info = onboarding.job_info or {}
-        personal_info = onboarding.personal_info or {}
-        form_data = onboarding.form_data or {}
+        job_info = cast("dict[str, Any]", onboarding.job_info or {})
+        personal_info = cast("dict[str, Any]", onboarding.personal_info or {})
+        form_data = cast("dict[str, Any]", onboarding.form_data or {})
 
         # 4. Extract names safely
         full_name_parts = (candidate.full_name or "").split(" ")
-        first_name = personal_info.get("first_name") or (full_name_parts[0] if full_name_parts else "Unknown")
-        last_name = personal_info.get("last_name") or (
-            " ".join(full_name_parts[1:]) if len(full_name_parts) > 1 else "Unknown"
+        first_name = (
+            str(personal_info.get("first_name"))
+            if personal_info.get("first_name")
+            else (full_name_parts[0] if full_name_parts else "Unknown")
+        )
+        last_name = (
+            str(personal_info.get("last_name"))
+            if personal_info.get("last_name")
+            else (" ".join(full_name_parts[1:]) if len(full_name_parts) > 1 else "Unknown")
         )
 
         # 5. Get Company ID
-        company_id = None
+        company_id_val: UUID | None = None
         if onboarding.application and onboarding.application.job_requirement:
-            company_id = onboarding.application.job_requirement.company_id
+            company_id_val = cast("UUID", onboarding.application.job_requirement.company_id)
 
-        if not company_id:
+        if not company_id_val:
             raise ValueError("Could not determine company for candidate conversion")
 
         # 6. Generate Employee ID
-        employee_id = await EmployeeService.generate_employee_id(session, company_id)
+        employee_id = await EmployeeService.generate_employee_id(session, company_id_val)
 
         # 7. Create Employee Record
         employee = Employee(
             employee_id=employee_id,
             first_name=first_name,
-            middle_name=personal_info.get("middle_name"),
+            middle_name=str(personal_info.get("middle_name")) if personal_info.get("middle_name") else None,
             last_name=last_name,
             email=candidate.email,
             mobile=candidate.phone,
-            phone_number=personal_info.get("phone_number") or candidate.phone,
-            designation=job_info.get("designation")
-            or (
+            phone_number=str(personal_info.get("phone_number"))
+            if personal_info.get("phone_number")
+            else candidate.phone,
+            designation=str(job_info.get("designation"))
+            if job_info.get("designation")
+            else (
                 onboarding.application.job_requirement.title
                 if onboarding.application and onboarding.application.job_requirement
                 else None
             ),
             status="Active",
-            employment_type=job_info.get("employment_type") or "Full-time",
-            hire_date=job_info.get("hire_date") or date.today(),
-            original_hire_date=job_info.get("hire_date") or date.today(),
+            employment_type=str(job_info.get("employment_type"))
+            if job_info.get("employment_type")
+            else "Full-time",
+            hire_date=cast("Any", job_info.get("hire_date")) or date.today(),
+            original_hire_date=cast("Any", job_info.get("hire_date")) or date.today(),
             source=candidate.source_platform or "Recruitment",
             notice_period=candidate.notice_period,
-            pan_card_number=form_data.get("pan_card_number") or personal_info.get("pan_card_number"),
-            aadhar_card_number=form_data.get("aadhar_card_number") or personal_info.get("aadhar_card_number"),
-            passport_number=form_data.get("passport_number"),
-            date_of_birth=personal_info.get("date_of_birth"),
-            gender=personal_info.get("gender"),
-            marital_status=personal_info.get("marital_status"),
-            blood_group=personal_info.get("blood_group"),
-            address_line_1=personal_info.get("address_line_1") or personal_info.get("address"),
-            address_line_2=personal_info.get("address_line_2"),
-            city=personal_info.get("city"),
-            state=personal_info.get("state"),
-            pincode=personal_info.get("pincode"),
-            country=personal_info.get("country", "India"),
-            company_id=company_id,
+            pan_card_number=str(
+                form_data.get("pan_card_number") or personal_info.get("pan_card_number") or ""
+            ),
+            aadhar_card_number=str(
+                form_data.get("aadhar_card_number") or personal_info.get("aadhar_card_number") or ""
+            ),
+            passport_number=str(form_data.get("passport_number") or ""),
+            date_of_birth=cast("Any", personal_info.get("date_of_birth")),
+            gender=str(personal_info.get("gender") or ""),
+            marital_status=str(personal_info.get("marital_status") or ""),
+            blood_group=str(personal_info.get("blood_group") or ""),
+            address_line_1=str(personal_info.get("address_line_1") or personal_info.get("address") or ""),
+            address_line_2=str(personal_info.get("address_line_2") or ""),
+            city=str(personal_info.get("city") or ""),
+            state=str(personal_info.get("state") or ""),
+            pincode=str(personal_info.get("pincode") or ""),
+            country=str(personal_info.get("country", "India")),
+            company_id=company_id_val,
             candidate_id=candidate.id,
             # Additional JSON sections from form_data
-            dependents=form_data.get("dependents", []),
-            educational_details=form_data.get("educational_details", []),
-            emergency_contacts=form_data.get("emergency_contacts", []),
-            social_profiles=form_data.get("social_profiles", {}),
-            payment_information=form_data.get("payment_information", []),
-            roles_responsibilities=form_data.get("roles_responsibilities"),
+            dependents=cast("list[dict[str, Any]]", form_data.get("dependents", [])),
+            educational_details=cast("list[dict[str, Any]]", form_data.get("educational_details", [])),
+            emergency_contacts=cast("list[dict[str, Any]]", form_data.get("emergency_contacts", [])),
+            social_profiles=cast("dict[str, Any]", form_data.get("social_profiles", {})),
+            payment_information=cast("list[dict[str, Any]]", form_data.get("payment_information", [])),
+            roles_responsibilities=str(form_data.get("roles_responsibilities") or ""),
             skills=candidate.skills or [],
-            documents=form_data.get("documents", []),
+            documents=cast("list[dict[str, Any]]", form_data.get("documents", [])),
         )
 
         session.add(employee)

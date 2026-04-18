@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -10,6 +10,9 @@ from app.core.security import create_access_token, create_refresh_token, decode_
 from app.core.settings import get_settings
 from app.schemas.auth import RefreshTokenRequest, Token
 
+if TYPE_CHECKING:
+    from app.models.shared.auth import Role
+
 _settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -17,7 +20,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()], session: DBSessionDep
-):
+) -> Token:
     """
     Login endpoint - returns access token and refresh token.
     Supports EnterpriseUser, SuperAdmin, and legacy DefaultUser.
@@ -26,41 +29,44 @@ async def login_for_access_token(
     from app.models.shared.super_admin import SuperAdmin
     from app.models.user import User as DefaultUser
 
-    user = None
+    user_obj: Any = None
     role_name = "USER"
     user_type = "enterprise"
 
     # 1. Try to fetch Enterprise User
-    stmt = select(EntUser).options(selectinload(EntUser.roles)).where(EntUser.email == form_data.username)
-    result = await session.execute(stmt)
-    user = result.scalar_one_or_none()
+    stmt_ent = select(EntUser).options(selectinload(EntUser.roles)).where(EntUser.email == form_data.username)
+    result_ent = await session.execute(stmt_ent)
+    user_ent = result_ent.scalar_one_or_none()
 
-    if user:
-        role_name = user.roles[0].name if user.roles else "RECRUITER"
+    if user_ent:
+        user_obj = user_ent
+        role_name = user_ent.roles[0].name if user_ent.roles else "RECRUITER"
         user_type = "enterprise"
     else:
         # 2. Try to fetch SuperAdmin
-        stmt = (
+        stmt_admin = (
             select(SuperAdmin)
             .options(selectinload(SuperAdmin.roles))
             .where(SuperAdmin.email == form_data.username)
         )
-        result = await session.execute(stmt)
-        user = result.scalar_one_or_none()
+        result_admin = await session.execute(stmt_admin)
+        user_admin = result_admin.scalar_one_or_none()
 
-        if user:
-            role_name = user.roles[0].name if user.roles else "SUPER_ADMIN"
+        if user_admin:
+            user_obj = user_admin
+            role_name = user_admin.roles[0].name if user_admin.roles else "SUPER_ADMIN"
             user_type = "superadmin"
         else:
             # 3. Fallback for default users (Students)
-            stmt = select(DefaultUser).where(DefaultUser.email == form_data.username)
-            result = await session.execute(stmt)
-            user = result.scalar_one_or_none()
-            if user:
+            stmt_default = select(DefaultUser).where(DefaultUser.email == form_data.username)
+            result_default = await session.execute(stmt_default)
+            user_default = result_default.scalar_one_or_none()
+            if user_default:
+                user_obj = user_default
                 role_name = "STUDENT"
                 user_type = "default"
 
-    if not user:
+    if not user_obj:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -68,7 +74,9 @@ async def login_for_access_token(
         )
 
     # Check password
-    hashed_password = getattr(user, "password_hash", getattr(user, "password", None))
+    hashed_password = cast(
+        "str | None", getattr(user_obj, "password_hash", getattr(user_obj, "password", None))
+    )
     if not hashed_password or not verify_password(form_data.password, hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -77,10 +85,11 @@ async def login_for_access_token(
         )
 
     # Create claims
-    extra_claims = {"role": role_name, "user_id": str(user.id), "user_type": user_type}
+    extra_claims: dict[str, object] = {"role": role_name, "user_id": str(user_obj.id), "user_type": user_type}
 
-    access_token = create_access_token(subject=user.email, extra_claims=extra_claims)
-    refresh_token = create_refresh_token(subject=user.email)
+    email = cast("str", user_obj.email)
+    access_token = create_access_token(subject=email, extra_claims=extra_claims)
+    refresh_token = create_refresh_token(subject=email)
 
     return Token(
         access_token=access_token,
@@ -92,41 +101,55 @@ async def login_for_access_token(
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(refresh_data: RefreshTokenRequest, session: DBSessionDep):
+async def refresh_token(refresh_data: RefreshTokenRequest, session: DBSessionDep) -> Token:
     try:
         payload = decode_token(refresh_data.refresh_token)
         if payload.get("type") != "refresh":
             raise HTTPException(status_code=401, detail="Invalid token type")
 
-        email = payload.get("sub")
+        email = cast("str", payload.get("sub"))
 
         # Determine actual user level
         from app.models.enterprise.user_role import EnterpriseUser as EntUser
         from app.models.shared.super_admin import SuperAdmin
         from app.models.user import User as DefaultUser
 
-        stmt = select(SuperAdmin).options(selectinload(SuperAdmin.roles)).where(SuperAdmin.email == email)
-        user = (await session.execute(stmt)).scalar_one_or_none()
+        user_obj: Any = None
         role_name = "SUPER_ADMIN"
         user_type = "superadmin"
 
-        if not user:
-            stmt = select(EntUser).options(selectinload(EntUser.roles)).where(EntUser.email == email)
-            user = (await session.execute(stmt)).scalar_one_or_none()
-            if user:
-                role_name = user.roles[0].name if user.roles else "RECRUITER"
+        stmt_admin = (
+            select(SuperAdmin).options(selectinload(SuperAdmin.roles)).where(SuperAdmin.email == email)
+        )
+        user_admin = (await session.execute(stmt_admin)).scalar_one_or_none()
+
+        if user_admin:
+            user_obj = user_admin
+            role_name = user_admin.roles[0].name if user_admin.roles else "SUPER_ADMIN"
+            user_type = "superadmin"
+        else:
+            stmt_ent = select(EntUser).options(selectinload(EntUser.roles)).where(EntUser.email == email)
+            user_ent = (await session.execute(stmt_ent)).scalar_one_or_none()
+            if user_ent:
+                user_obj = user_ent
+                role_name = user_ent.roles[0].name if user_ent.roles else "RECRUITER"
                 user_type = "enterprise"
             else:
-                stmt = select(DefaultUser).where(DefaultUser.email == email)
-                user = (await session.execute(stmt)).scalar_one_or_none()
-                if user:
+                stmt_default = select(DefaultUser).where(DefaultUser.email == email)
+                user_default = (await session.execute(stmt_default)).scalar_one_or_none()
+                if user_default:
+                    user_obj = user_default
                     role_name = "STUDENT"
                     user_type = "default"
 
-        if not user:
+        if not user_obj:
             raise HTTPException(status_code=401, detail="User no longer exists")
 
-        extra_claims = {"role": role_name, "user_id": str(user.id), "user_type": user_type}
+        extra_claims: dict[str, object] = {
+            "role": role_name,
+            "user_id": str(user_obj.id),
+            "user_type": user_type,
+        }
 
         access_token = create_access_token(subject=email, extra_claims=extra_claims)
         return Token(
@@ -141,12 +164,14 @@ async def refresh_token(refresh_data: RefreshTokenRequest, session: DBSessionDep
 
 
 @router.get("/me")
-async def get_me(current_user: Annotated[Any, Depends(get_current_user)]):
+async def get_me(current_user: Annotated[object, Depends(get_current_user)]) -> dict[str, object]:
     """
     Get current user profile and aggregated permissions.
     """
+
     permissions = []
-    for role in current_user.roles:
+    roles = cast("list[Role]", getattr(current_user, "roles", []))
+    for role in roles:
         for perm in role.permissions:
             # We use module:action as the standard permission string
             permissions.append(f"{perm.module}:{perm.action}")
@@ -154,12 +179,18 @@ async def get_me(current_user: Annotated[Any, Depends(get_current_user)]):
     # Remove duplicates
     unique_permissions = list(set(permissions))
 
+    email = cast("str", getattr(current_user, "email", ""))
+    user_id = cast("str", getattr(current_user, "id", ""))
+    first_name = cast("str", getattr(current_user, "first_name", ""))
+    last_name = cast("str", getattr(current_user, "last_name", ""))
+    company_id = cast("str", getattr(current_user, "company_id", ""))
+
     return {
-        "id": str(current_user.id),
-        "email": current_user.email,
-        "first_name": getattr(current_user, "first_name", ""),
-        "last_name": getattr(current_user, "last_name", ""),
-        "role": current_user.roles[0].name if current_user.roles else "USER",
-        "company_id": str(getattr(current_user, "company_id", "")),
+        "id": user_id,
+        "email": email,
+        "first_name": first_name,
+        "last_name": last_name,
+        "role": roles[0].name if roles else "USER",
+        "company_id": company_id,
         "permissions": unique_permissions,
     }

@@ -11,8 +11,13 @@ from app.router.enterprise.communication import send_smtp_email
 _settings = get_settings()
 
 
+from typing import cast
+
+
 class SurveyService:
-    async def notify_participants(self, db: AsyncSession, instance_id: uuid.UUID, only_pending: bool = True):
+    async def notify_participants(
+        self, db: AsyncSession, instance_id: uuid.UUID, only_pending: bool = True
+    ) -> int:
         """
         Sends email invitations to all participants of a survey instance.
         """
@@ -26,7 +31,7 @@ class SurveyService:
             stmt = stmt.where(SurveyInvite.status == SurveyInviteStatus.PENDING)
 
         res = await db.execute(stmt)
-        invites = res.scalars().all()
+        invites = cast("list[SurveyInvite]", res.scalars().all())
 
         sent_count = 0
         for invite in invites:
@@ -46,8 +51,9 @@ class SurveyService:
         if not employee or not employee.email:
             return False
 
-        survey_link = f"{_settings.frontend_url}/enterprise/surveys/fill/{invite.token}"
-        portal_link = f"{_settings.frontend_url}/enterprise/assessments-360/portal"
+        frontend_url = _settings.frontend_url
+        survey_link = f"{frontend_url}/enterprise/surveys/fill/{invite.token}"
+        portal_link = f"{frontend_url}/enterprise/assessments-360/portal"
 
         subject = f"Feedback Request: {instance.name}"
         body = (
@@ -64,8 +70,9 @@ class SurveyService:
             f"HR Team"
         )
 
-        success, _ = send_smtp_email(
-            to_email=employee.email, subject=subject, body=body, company_name="Croar"
+        success, _ = cast(
+            "tuple[bool, object]",
+            send_smtp_email(to_email=employee.email, subject=subject, body=body, company_name="Croar"),
         )
         return success
 

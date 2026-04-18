@@ -142,7 +142,7 @@ class QuestionSummary(BaseModel):
     average_score: float | None = None
     response_count: int
     text_responses: list[str] = []
-    distribution: dict = {}  # For MCQ or Rating distribution
+    distribution: dict[str, object] = {}  # For MCQ or Rating distribution
 
 
 class SurveyAIAnalysis(BaseModel):

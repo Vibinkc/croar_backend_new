@@ -14,8 +14,10 @@ from app.services.enterprise.automation_service import send_assessment_invitatio
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="send_scheduled_assessment_task")
-def send_scheduled_assessment_task(automation_id_str: str, application_id_str: str, candidate_id_str: str):
+@celery_app.task(name="send_scheduled_assessment_task")  # type: ignore
+def send_scheduled_assessment_task(
+    automation_id_str: str, application_id_str: str, candidate_id_str: str
+) -> None:
     """
     Celery task to send a scheduled assessment invitation.
     """
@@ -27,40 +29,40 @@ def send_scheduled_assessment_task(automation_id_str: str, application_id_str: s
 
     # We use a synchronous wrapper for the async service call
     @async_to_sync
-    async def run_send():
+    async def run_send() -> None:
         async with db_manager.session() as session:
             # Fetch necessary records
             # 1. Automation
-            stmt = select(AssessmentAutomation).where(AssessmentAutomation.id == automation_id)
-            res = await session.execute(stmt)
-            automation = res.scalar_one_or_none()
+            auto_stmt = select(AssessmentAutomation).where(AssessmentAutomation.id == automation_id)
+            auto_res = await session.execute(auto_stmt)
+            automation = auto_res.scalar_one_or_none()
 
             if not automation or not automation.is_enabled:
                 logger.warning(f"Automation {automation_id} not found or disabled. Skipping.")
                 return
 
             # 2. Application
-            stmt = select(CandidateApplication).where(CandidateApplication.id == application_id)
-            res = await session.execute(stmt)
-            application = res.scalar_one_or_none()
+            app_stmt = select(CandidateApplication).where(CandidateApplication.id == application_id)
+            app_res = await session.execute(app_stmt)
+            application = app_res.scalar_one_or_none()
 
             if not application:
                 logger.warning(f"Application {application_id} not found. Skipping.")
                 return
 
             # 3. Candidate
-            stmt = select(Candidate).where(Candidate.id == candidate_id)
-            res = await session.execute(stmt)
-            candidate = res.scalar_one_or_none()
+            cand_stmt = select(Candidate).where(Candidate.id == candidate_id)
+            cand_res = await session.execute(cand_stmt)
+            candidate = cand_res.scalar_one_or_none()
 
             if not candidate:
                 logger.warning(f"Candidate {candidate_id} not found. Skipping.")
                 return
 
             # 4. Job
-            stmt = select(JobRequirement).where(JobRequirement.id == application.job_requirement_id)
-            res = await session.execute(stmt)
-            job = res.scalar_one_or_none()
+            job_stmt = select(JobRequirement).where(JobRequirement.id == application.job_requirement_id)
+            job_res = await session.execute(job_stmt)
+            job = job_res.scalar_one_or_none()
 
             if not job:
                 logger.warning(f"Job not found for application {application_id}. Skipping.")

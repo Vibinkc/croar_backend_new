@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,22 +8,21 @@ from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.candidate import CandidateApplication
-from app.models.enterprise.interview import InterviewSchedule  # Added
+from app.models.enterprise.interview import InterviewSchedule
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.applications import ApplicationResponse, UpdateStageRequest
 
 router = APIRouter(prefix="/applications", tags=["Enterprise Applications"])
 
-# Removed redundant helper
-
 
 @router.get("/", response_model=list[ApplicationResponse])
 async def list_applications(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
-    job_id: UUID = None,
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    job_id: UUID | None = None,
+) -> list[ApplicationResponse]:
     """List applications, optionally filtered by job_id."""
+    company_id = getattr(current_user, "company_id", None)
     stmt = (
         select(CandidateApplication)
         .options(
@@ -32,56 +31,53 @@ async def list_applications(
             selectinload(CandidateApplication.onboarding),
             selectinload(CandidateApplication.interview_schedules).selectinload(InterviewSchedule.attempts),
         )
-        .where(CandidateApplication.company_id == current_user.company_id)
+        .where(CandidateApplication.company_id == company_id)
     )
 
     if job_id:
         stmt = stmt.where(CandidateApplication.job_requirement_id == job_id)
 
     result = await session.execute(stmt)
-    apps = result.scalars().all()
+    apps = cast("list[CandidateApplication]", result.scalars().all())
 
-    # Populate scores for each app
+    final_apps: list[ApplicationResponse] = []
     for app in apps:
         # 1. Assessment Scores
         attempts = sorted(
             app.assessment_attempts,
-            key=lambda x: x.completed_at.replace(tzinfo=None) if x.completed_at else datetime.min,
+            key=lambda x: (
+                cast("datetime", x.completed_at).replace(tzinfo=None) if x.completed_at else datetime.min
+            ),
             reverse=True,
         )
         latest = attempts[0] if attempts and attempts[0].status == "COMPLETED" else None
 
-        if latest:
-            app.assessment_score = latest.score
-            app.aptitude_score = latest.aptitude_score
-            app.coding_score = latest.coding_score
-        else:
-            app.assessment_score = None
-            app.aptitude_score = None
-            app.coding_score = None
-
         # 2. AI Interview Score
-        all_interviews = []
+        all_attempts = []
         for schedule in app.interview_schedules:
-            all_interviews.extend(schedule.attempts)
+            all_attempts.extend(schedule.attempts)
 
-        # Sort by created_at to get the latest
-        completed_interviews = [i for i in all_interviews if i.overall_score is not None]
-        completed_interviews.sort(key=lambda x: x.created_at, reverse=True)
-
-        if completed_interviews:
-            app.ai_interview_score = float(completed_interviews[0].overall_score)
-        else:
-            app.ai_interview_score = None
+        completed_interviews = [i for i in all_attempts if i.overall_score is not None]
+        completed_interviews.sort(key=lambda x: cast("datetime", x.created_at), reverse=True)
 
         # 3. Populate onboarding_id
+        onboarding_id = None
         if app.onboarding:
-            if isinstance(app.onboarding, list) and len(app.onboarding) > 0:
-                app.onboarding_id = app.onboarding[0].id
-            elif not isinstance(app.onboarding, list):
-                app.onboarding_id = app.onboarding.id
+            onboarding_id = app.onboarding.id
 
-    return apps
+        resp = ApplicationResponse.model_validate(app)
+        if latest:
+            resp.assessment_score = latest.score
+            resp.aptitude_score = latest.aptitude_score
+            resp.coding_score = latest.coding_score
+
+        if completed_interviews:
+            resp.ai_interview_score = float(completed_interviews[0].overall_score)
+
+        resp.onboarding_id = onboarding_id
+        final_apps.append(resp)
+
+    return final_apps
 
 
 @router.patch("/{application_id}/stage")
@@ -89,11 +85,12 @@ async def update_stage(
     application_id: UUID,
     request: UpdateStageRequest,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.moderate))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.moderate))],
+) -> dict[str, object]:
     """Move application to a new stage."""
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(CandidateApplication).where(
-        CandidateApplication.id == application_id, CandidateApplication.company_id == current_user.company_id
+        CandidateApplication.id == application_id, CandidateApplication.company_id == company_id
     )
     result = await session.execute(stmt)
     application = result.scalar_one_or_none()
@@ -104,11 +101,10 @@ async def update_stage(
     application.current_stage = request.new_stage
     await session.commit()
 
-    # Trigger Mail Automation for the new stage
     from app.services.enterprise.automation_service import trigger_automations
 
     await trigger_automations(application.id, request.new_stage, session)
-    await session.commit()  # Save any creations triggered by automations!
+    await session.commit()
 
     return {"message": "Stage updated successfully", "new_stage": request.new_stage}
 
@@ -116,25 +112,25 @@ async def update_stage(
 @router.get("/stages")
 async def get_stages(
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
-    job_id: UUID = None,
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    job_id: UUID | None = None,
+) -> list[Any]:
     """Return defined stages for the Kanban board."""
-
     if not job_id:
         return []
 
     try:
         from app.models.enterprise.job import JobRequirement
 
+        company_id = getattr(current_user, "company_id", None)
         stmt = select(JobRequirement).where(
-            JobRequirement.id == job_id, JobRequirement.company_id == current_user.company_id
+            JobRequirement.id == job_id, JobRequirement.company_id == company_id
         )
         result = await session.execute(stmt)
         job = result.scalar_one_or_none()
 
         if job and job.workflow_stages:
-            return job.workflow_stages
+            return list(cast("list[Any]", job.workflow_stages))
 
     except Exception as e:
         print(f"Error in get_stages: {e}")
@@ -146,14 +142,14 @@ async def get_stages(
 async def bulk_delete_applications(
     application_ids: list[UUID],
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.delete))],
-):
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.delete))],
+) -> dict[str, object]:
     """Bulk delete applications."""
     from sqlalchemy import delete
 
+    company_id = getattr(current_user, "company_id", None)
     stmt = delete(CandidateApplication).where(
-        CandidateApplication.id.in_(application_ids),
-        CandidateApplication.company_id == current_user.company_id,
+        CandidateApplication.id.in_(application_ids), CandidateApplication.company_id == company_id
     )
     await session.execute(stmt)
     await session.commit()

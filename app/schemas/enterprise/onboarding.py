@@ -56,7 +56,7 @@ class OnboardingActivityResponse(BaseModel):
     action: str
     performed_by: str
     timestamp: datetime
-    metadata_info: dict | None = None
+    metadata_info: dict[str, Any] | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -92,11 +92,11 @@ class OnboardingResponse(BaseModel):
     template_id: UUID | None = None
     template: OnboardingTemplateResponse | None = None
 
-    job_info: dict | None = None
-    personal_info: dict | None = None
-    education_info: dict | None = None
-    other_info: dict | None = None
-    form_data: dict | None = None
+    job_info: dict[str, Any] | None = None
+    personal_info: dict[str, Any] | None = None
+    education_info: dict[str, Any] | None = None
+    other_info: dict[str, Any] | None = None
+    form_data: dict[str, Any] | None = None
 
     candidate_email: str | None = None
     job_title: str | None = None
@@ -124,11 +124,11 @@ class OnboardingInitiateRequest(BaseModel):
 
 class OnboardingUpdateRequest(BaseModel):
     status_id: int | None = None
-    job_info: dict | None = None
-    personal_info: dict | None = None
-    education_info: dict | None = None
-    other_info: dict | None = None
-    form_data: dict | None = None
+    job_info: dict[str, Any] | None = None
+    personal_info: dict[str, Any] | None = None
+    education_info: dict[str, Any] | None = None
+    other_info: dict[str, Any] | None = None
+    form_data: dict[str, Any] | None = None
 
 
 class OnboardingResubmitRequest(BaseModel):

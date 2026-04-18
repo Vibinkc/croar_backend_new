@@ -164,7 +164,7 @@ class X360Report(BaseModel):
     cycle_id: UUID
     template_name: str
     category_scores: list[CategoryScore]
-    text_responses: list[dict]  # {category, question, relation, answer}
+    text_responses: list[dict[str, object]]  # {category, question, relation, answer}
     ai_evaluation: X360AIEvaluation | None = None
     total_assignments: int
     completed_assignments: int

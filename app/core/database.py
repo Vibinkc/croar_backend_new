@@ -1,7 +1,14 @@
 import contextlib
 from collections.abc import AsyncIterator
+from typing import Any
 
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.settings import get_settings
@@ -61,7 +68,7 @@ DBSessionManager = db_manager
 SQLALCHEMY_DATABASE_URL = db_manager.url
 
 
-def get_engine(url: str, **kwargs) -> AsyncEngine:
+def get_engine(url: str, **kwargs: Any) -> AsyncEngine:
     return create_async_engine(url, **kwargs)
 
 
@@ -71,23 +78,23 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 
 async def get_management_db() -> AsyncIterator[AsyncSession]:
-    """Alias for get_db"""
+    """Alias for get_db."""
     async with db_manager.session() as session:
         yield session
 
 
 async def get_enterprise_db() -> AsyncIterator[AsyncSession]:
-    """Alias for get_db"""
+    """Alias for get_db."""
     async with db_manager.session() as session:
         yield session
 
 
 async def get_shared_db() -> AsyncIterator[AsyncSession]:
-    """Alias for get_db"""
+    """Alias for get_db."""
     async with db_manager.session() as session:
         yield session
 
 
-async def get_db_connect():
+async def get_db_connect() -> AsyncIterator[AsyncConnection]:
     async with db_manager.engine.connect() as conn:
         yield conn

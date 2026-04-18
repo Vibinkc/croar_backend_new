@@ -1,14 +1,19 @@
-from fastapi import HTTPException, Request, status
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from fastapi import HTTPException, Request, Response, status
 from loguru import logger
 from starlette.middleware.base import BaseHTTPMiddleware
 
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, max_size: int):
+    def __init__(self, app: Any, max_size: int) -> None:
         super().__init__(app)
         self.max_size = max_size
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(
+        self, request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         if request.method in ("POST", "PUT", "PATCH"):
             content_length = request.headers.get("content-length")
             if content_length:

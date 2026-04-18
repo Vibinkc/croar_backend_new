@@ -1,5 +1,5 @@
 from datetime import UTC
-from typing import Annotated, Any
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,17 +22,18 @@ router = APIRouter(prefix="/automation", tags=["Mail Automation"])
 async def list_automations(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
     ],
     job_id: UUID | None = None,
-):
+) -> list[MailAutomation]:
     """List all mail automations, optionally filtered by job."""
-    stmt = select(MailAutomation).where(MailAutomation.company_id == current_user.company_id)
+    company_id = getattr(current_user, "company_id", None)
+    stmt = select(MailAutomation).where(MailAutomation.company_id == company_id)
     if job_id:
         stmt = stmt.where(MailAutomation.job_requirement_id == job_id)
     stmt = stmt.order_by(MailAutomation.created_at.desc())
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post("/mail", response_model=MailAutomationResponse, status_code=201)
@@ -40,13 +41,13 @@ async def create_automation(
     request: MailAutomationCreate,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
     ],
-):
+) -> MailAutomation:
     """Create a new mail automation rule."""
-    # Validate job exists
+    company_id = getattr(current_user, "company_id", None)
     job_stmt = select(JobRequirement).where(
-        JobRequirement.id == request.job_requirement_id, JobRequirement.company_id == current_user.company_id
+        JobRequirement.id == request.job_requirement_id, JobRequirement.company_id == company_id
     )
     job_result = await session.execute(job_stmt)
     if not job_result.scalar_one_or_none():
@@ -56,7 +57,7 @@ async def create_automation(
     if data.get("send_at") and data["send_at"].tzinfo:
         data["send_at"] = data["send_at"].astimezone(UTC).replace(tzinfo=None)
 
-    automation = MailAutomation(**data, company_id=current_user.company_id)
+    automation = MailAutomation(**data, company_id=cast("UUID", company_id))
     session.add(automation)
     await session.commit()
     await session.refresh(automation)
@@ -69,12 +70,13 @@ async def update_automation(
     request: MailAutomationUpdate,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
     ],
-):
+) -> MailAutomation:
     """Update an automation rule (including toggling is_enabled)."""
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(MailAutomation).where(
-        MailAutomation.id == automation_id, MailAutomation.company_id == current_user.company_id
+        MailAutomation.id == automation_id, MailAutomation.company_id == company_id
     )
     result = await session.execute(stmt)
     automation = result.scalar_one_or_none()
@@ -98,12 +100,13 @@ async def delete_automation(
     automation_id: UUID,
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
     ],
-):
+) -> dict[str, str]:
     """Delete a mail automation rule."""
+    company_id = getattr(current_user, "company_id", None)
     stmt = select(MailAutomation).where(
-        MailAutomation.id == automation_id, MailAutomation.company_id == current_user.company_id
+        MailAutomation.id == automation_id, MailAutomation.company_id == company_id
     )
     result = await session.execute(stmt)
     automation = result.scalar_one_or_none()

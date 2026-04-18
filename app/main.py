@@ -1,3 +1,4 @@
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -28,7 +29,7 @@ _settings = get_settings()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup logic
     print("Croar Backend Starting...")
 
@@ -50,9 +51,9 @@ app = FastAPI(
 )
 
 # Exception Handlers
-app.add_exception_handler(AppException, app_exception_handler)
-app.add_exception_handler(RequestValidationError, validation_exception_handler)
-app.add_exception_handler(SQLAlchemyError, database_exception_handler)
+app.add_exception_handler(AppException, app_exception_handler)  # type: ignore
+app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore
+app.add_exception_handler(SQLAlchemyError, database_exception_handler)  # type: ignore
 app.add_exception_handler(Exception, generic_exception_handler)
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
@@ -78,10 +79,10 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {"message": "Welcome to Croar API", "version": "1.0.0"}
 
 
 @app.get("/health")
-async def health():
+async def health() -> dict[str, str]:
     return {"status": "ok"}

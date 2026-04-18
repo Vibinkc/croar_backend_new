@@ -15,10 +15,12 @@ class CandidateBase(BaseModel):
 
     @field_validator("skills", mode="before")
     @classmethod
-    def ensure_list(cls, v):
+    def ensure_list(cls, v: Any) -> list[str]:
         if v is None:
             return []
-        return v
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        return [str(v)]
 
     class Config:
         from_attributes = True

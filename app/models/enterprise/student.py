@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 
 from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, String, func, text
@@ -10,7 +11,7 @@ from . import EnterpriseBase
 class Student(EnterpriseBase):
     __tablename__ = "enterprise_students"
 
-    id: Mapped[UUID] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("uuid_generate_v4()"), index=True
     )
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)

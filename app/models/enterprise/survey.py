@@ -10,19 +10,19 @@ from sqlalchemy.sql import text
 from . import EnterpriseBase
 
 
-class SurveyQuestionType(str, enum.Enum):
+class SurveyQuestionType(enum.StrEnum):
     RATING = "RATING"
     TEXT = "TEXT"
     MCQ = "MCQ"
 
 
-class SurveyInstanceStatus(str, enum.Enum):
+class SurveyInstanceStatus(enum.StrEnum):
     DRAFT = "DRAFT"
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"
 
 
-class SurveyInviteStatus(str, enum.Enum):
+class SurveyInviteStatus(enum.StrEnum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
 

@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -20,32 +20,37 @@ router = APIRouter(prefix="/onboarding-automation", tags=["Enterprise: Onboardin
 @router.get("/", response_model=list[OnboardingAutomationResponse])
 async def list_onboarding_automations(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))],
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.read))
+    ],
     job_id: uuid.UUID | None = None,
-):
+) -> list[object]:
     query = (
         select(OnboardingAutomation)
         .options(
             selectinload(OnboardingAutomation.template), selectinload(OnboardingAutomation.email_template)
         )
-        .where(OnboardingAutomation.company_id == current_user.company_id)
+        .where(OnboardingAutomation.company_id == getattr(current_user, "company_id", None))
     )
     if job_id:
         query = query.where(OnboardingAutomation.job_requirement_id == str(job_id))
 
     query = query.order_by(OnboardingAutomation.created_at.desc())
     result = await db.execute(query)
-    automations = result.scalars().all()
-    return automations
+    return list(result.scalars().all())
 
 
 @router.post("/", response_model=OnboardingAutomationResponse)
 async def create_onboarding_automation(
     automation_in: OnboardingAutomationCreate,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.create))],
-):
-    new_automation = OnboardingAutomation(**automation_in.model_dump(), company_id=current_user.company_id)
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.create))
+    ],
+) -> object:
+    new_automation = OnboardingAutomation(
+        **automation_in.model_dump(), company_id=getattr(current_user, "company_id", None)
+    )
     db.add(new_automation)
     await db.commit()
     await db.refresh(new_automation)
@@ -67,11 +72,13 @@ async def update_onboarding_automation(
     automation_id: uuid.UUID,
     update_data: OnboardingAutomationUpdate,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.update))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.update))
+    ],
+) -> object:
     stmt = select(OnboardingAutomation).where(
-        OnboardingAutomation.id == str(automation_id),
-        OnboardingAutomation.company_id == current_user.company_id,
+        OnboardingAutomation.id == automation_id,
+        OnboardingAutomation.company_id == getattr(current_user, "company_id", None),
     )
     result = await db.execute(stmt)
     automation = result.scalar_one_or_none()
@@ -92,7 +99,7 @@ async def update_onboarding_automation(
         .options(
             selectinload(OnboardingAutomation.template), selectinload(OnboardingAutomation.email_template)
         )
-        .where(OnboardingAutomation.id == str(automation_id))
+        .where(OnboardingAutomation.id == automation_id)
     )
     result = await db.execute(stmt)
     return result.scalar_one()
@@ -102,11 +109,13 @@ async def update_onboarding_automation(
 async def delete_onboarding_automation(
     automation_id: uuid.UUID,
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.delete))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.delete))
+    ],
+) -> dict[str, str]:
     stmt = select(OnboardingAutomation).where(
-        OnboardingAutomation.id == str(automation_id),
-        OnboardingAutomation.company_id == current_user.company_id,
+        OnboardingAutomation.id == automation_id,
+        OnboardingAutomation.company_id == getattr(current_user, "company_id", None),
     )
     result = await db.execute(stmt)
     automation = result.scalar_one_or_none()

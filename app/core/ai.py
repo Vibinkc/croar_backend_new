@@ -1,5 +1,5 @@
 import json
-from typing import Any
+from typing import cast
 
 from openai import AsyncOpenAI
 
@@ -23,7 +23,7 @@ async def analyze_text_with_llm(prompt: str) -> str:
             ],
             response_format={"type": "json_object"},
         )
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content or "{}"
         return content
     except Exception as e:
         print(f"CRITICAL: OpenAI Call Error: {e}")
@@ -41,7 +41,7 @@ async def analyze_text_with_llm(prompt: str) -> str:
         )
 
 
-async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, Any]:
+async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, object]:
     """
     Analyzes resume or JD and detects technical domains with weightages.
     """
@@ -75,6 +75,7 @@ Common domains include:
 - Cybersecurity
 - UI/UX Design
 - Quality Assurance
+- Target Management
 
 Focus on the top 3-6 most relevant domains based on the {source_type}.
 Weightages must be integers and sum to exactly 100.
@@ -85,14 +86,14 @@ Set "coding_needed" to true ONLY if the text explicitly mentions programming lan
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
 
-        domains = response_data.get("domains", {})
+        domains = cast("dict[str, int]", response_data.get("domains", {}))
 
         total = sum(domains.values())
         if total != 100 and total > 0:
             domains = {k: round((v / total) * 100) for k, v in domains.items()}
             diff = 100 - sum(domains.values())
             if diff != 0:
-                max_domain = max(domains, key=domains.get)
+                max_domain = max(domains, key=lambda k: domains[k])
                 domains[max_domain] += diff
 
         return {
@@ -108,7 +109,7 @@ Set "coding_needed" to true ONLY if the text explicitly mentions programming lan
 
 async def generate_aptitude_questions(
     domain: str, count: int, difficulty: str, context: str
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Generates aptitude questions for a specific domain.
     """
@@ -150,12 +151,12 @@ IMPORTANT:
     try:
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
-        questions = response_data.get("questions", [])
+        questions = cast("list[dict[str, object]]", response_data.get("questions", []))
 
         valid_questions = []
         for q in questions:
             if all(k in q for k in ["question_text", "type", "options", "correct_answer", "explanation"]):
-                if q["correct_answer"] in q["options"]:
+                if q["correct_answer"] in cast("list[object]", q["options"]):
                     valid_questions.append(q)
 
         return valid_questions[:count]
@@ -165,7 +166,7 @@ IMPORTANT:
 
 async def generate_coding_questions(
     domain: str, count: int, difficulty: str, context: str
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Generates coding questions for a specific domain.
     """
@@ -223,7 +224,7 @@ Return ONLY a JSON object with this structure:
             response_str = response_str.split("```")[1].split("```")[0].strip()
 
         response_data = json.loads(response_str)
-        questions = response_data.get("questions", [])
+        questions = cast("list[dict[str, object]]", response_data.get("questions", []))
         return questions[:count]
     except Exception as e:
         print(f"Error in generate_coding_questions: {e}")
@@ -236,13 +237,13 @@ async def generate_job_description_ai(
     location: str = "",
     experience_min: str = "",
     experience_max: str = "",
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Generates or enhances a job description based on title and existing content.
     """
     is_enhancement = len(existing_description.strip()) > 10
 
-    prompt = f"""You are an expert technical recruiter and HR consultant. 
+    prompt = f"""You are an expert technical recruiter and HR consultant.
 Your goal is to {"enhance and fine-tune the existing job description" if is_enhancement else "generate a professional, high-impact job description from scratch"} for the role of '{title}'.
 
 Context:
@@ -252,7 +253,7 @@ Context:
 {f"- Existing Draft: {existing_description}" if is_enhancement else ""}
 
 Requirements:
-1. Provide a comprehensive JD in professional HTML format. 
+1. Provide a comprehensive JD in professional HTML format.
 2. Suggest a market-competitive salary range (Minimum and Maximum) in LPA.
 3. Suggest a list of 5-8 top required skills.
 
@@ -265,11 +266,10 @@ Return ONLY a JSON object:
   "skills": ["Skill1", "Skill2", ...]
 }}
 """
-
     try:
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
-        return response_data
+        return cast("dict[str, object]", response_data)
     except Exception as e:
         print(f"Error in generate_job_description_ai: {e}")
         return {
@@ -283,13 +283,13 @@ Return ONLY a JSON object:
 
 async def generate_interview_questions(
     topic: str, count: int, difficulty: str, context: str = ""
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """
     Generates interactive interview questions for a 1-on-1 AI interview.
     """
     prompt = f"""You are an elite technical interviewer. Generate {count} high-quality interview questions for the topic: {topic}.
 
-**STRICT REQUIREMENT:** The Difficulty Level of the questions MUST strictly be: {difficulty}. 
+**STRICT REQUIREMENT:** The Difficulty Level of the questions MUST strictly be: {difficulty}.
 Adjust the technical depth, complexity, and expected knowledge strictly in alignment with a '{difficulty}' level candidate. Beginner questions should be fundamental, while Expert questions should explore deep systemic knowledge, edge cases, and complex architecture.
 
 Context: {context}
@@ -317,7 +317,7 @@ Return ONLY a JSON object with this structure:
     try:
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
-        return response_data.get("questions", [])[:count]
+        return cast("list[dict[str, object]]", response_data.get("questions", []))[:count]
     except Exception as e:
         print(f"Error in generate_interview_questions: {e}")
         return []

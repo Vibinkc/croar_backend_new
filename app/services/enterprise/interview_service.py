@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import re
 import uuid
 from datetime import date, datetime, time, timedelta
+from typing import Any, cast
 
 from fastapi.concurrency import run_in_threadpool
 from google.oauth2 import service_account
@@ -10,6 +12,7 @@ from googleapiclient.discovery import build
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.email_templates import wrap_in_celebratory_template
 from app.core.settings import settings as _settings
 from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.enterprise.communication import EmailLog, EmailTemplate
@@ -36,12 +39,12 @@ async def generate_google_meet_link(
             logger.warning("Google credentials not found. Cannot generate Google Meet link.")
             return None
 
-        creds = service_account.Credentials.from_service_account_file(
+        creds = service_account.Credentials.from_service_account_file(  # type: ignore[no-untyped-call]
             creds_path, scopes=["https://www.googleapis.com/auth/calendar"]
         )
         service = build("calendar", "v3", credentials=creds)
 
-        event = {
+        event: dict[str, object] = {
             "summary": f"Interview: {job_title}",
             "start": {"dateTime": start_time.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Asia/Kolkata"},
             "end": {"dateTime": end_time.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "Asia/Kolkata"},
@@ -55,13 +58,14 @@ async def generate_google_meet_link(
         }
 
         # We run the synchronous Google API call in a threadpool
-        def _create_event():
-            return (
-                service.events().insert(calendarId="primary", body=event, conferenceDataVersion=1).execute()
+        def _create_event() -> dict[str, Any]:
+            return cast(
+                "dict[str, Any]",
+                service.events().insert(calendarId="primary", body=event, conferenceDataVersion=1).execute(),
             )
 
         created_event = await run_in_threadpool(_create_event)
-        meet_link = created_event.get("hangoutLink")
+        meet_link = cast("str | None", created_event.get("hangoutLink"))
 
         if meet_link:
             return meet_link
@@ -91,22 +95,12 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
 
     if automation.start_date:
         parsed_start = automation.start_date
-        if isinstance(parsed_start, str):
-            try:
-                parsed_start = date.fromisoformat(parsed_start)
-            except ValueError:
-                parsed_start = None
         if parsed_start:
             start_d = max(start_d, parsed_start)
 
     end_d = start_d + timedelta(days=60)  # safety max
     if automation.end_date:
         parsed_end = automation.end_date
-        if isinstance(parsed_end, str):
-            try:
-                parsed_end = date.fromisoformat(parsed_end)
-            except ValueError:
-                parsed_end = None
         if parsed_end and parsed_end >= start_d:
             end_d = parsed_end
 
@@ -116,7 +110,7 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
     end_t = parse_time(automation.end_time)
 
     # NEW: if time_slots provided, use them instead of arbitrary 30-min increments
-    custom_times = []
+    custom_times: list[time] = []
     if automation.time_slots:
         custom_times = [parse_time(t) for t in automation.time_slots]
         custom_times.sort()
@@ -124,7 +118,7 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
     days_checked = 0
     while target_date <= end_d and days_checked < 60:
         days_checked += 1
-        # Skip weekends (optional, but good practice). 5 and 6 are Sat/Sun
+        # Skip weekends. 5 and 6 are Sat/Sun
         if target_date.weekday() >= 5:
             target_date += timedelta(days=1)
             continue
@@ -135,7 +129,7 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
 
         count_stmt = select(func.count(InterviewSchedule.id)).where(
             and_(
-                InterviewSchedule.automation_id == str(automation.id),
+                InterviewSchedule.automation_id == automation.id,
                 InterviewSchedule.scheduled_time >= start_of_day,
                 InterviewSchedule.scheduled_time <= end_of_day,
             )
@@ -144,14 +138,12 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
         existing_count = count_res.scalar() or 0
 
         if existing_count < automation.daily_limit:
-            # We have room today! Find an exact 30-min slot starting from `start_t`
-
             # Get existing times today for this automation to avoid clashes
             times_stmt = (
                 select(InterviewSchedule.scheduled_time)
                 .where(
                     and_(
-                        InterviewSchedule.automation_id == str(automation.id),
+                        InterviewSchedule.automation_id == automation.id,
                         InterviewSchedule.scheduled_time >= start_of_day,
                         InterviewSchedule.scheduled_time <= end_of_day,
                     )
@@ -159,16 +151,14 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
                 .order_by(InterviewSchedule.scheduled_time)
             )
             times_res = await db.execute(times_stmt)
-            existing_times = [r[0] for r in times_res.all()]
+            existing_times = [cast("datetime", r[0]) for r in times_res.all()]
 
             if custom_times:
                 for ct in custom_times:
                     candidate_slot_dt = datetime.combine(target_date, ct)
                     conflict = False
                     for et in existing_times:
-                        if abs((et - candidate_slot_dt).total_seconds()) < (
-                            automation.duration * 60
-                        ):  # exact duration overlap
+                        if abs((et - candidate_slot_dt).total_seconds()) < (automation.duration * 60):
                             conflict = True
                             break
                     if not conflict:
@@ -178,12 +168,9 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
                 end_limit_dt = datetime.combine(target_date, end_t)
 
                 while candidate_slot_dt + timedelta(minutes=automation.duration) <= end_limit_dt:
-                    # Basic overlap check
                     conflict = False
                     for et in existing_times:
-                        if abs((et - candidate_slot_dt).total_seconds()) < (
-                            automation.duration * 60
-                        ):  # exact duration overlap
+                        if abs((et - candidate_slot_dt).total_seconds()) < (automation.duration * 60):
                             conflict = True
                             break
 
@@ -194,15 +181,14 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
 
         target_date += timedelta(days=1)
 
-    # Fallback if the range is fully booked or exhausted
-    if automation.time_slots and custom_times:
+    if custom_times:
         return datetime.combine(end_d + timedelta(days=1), custom_times[0])
     return datetime.combine(end_d + timedelta(days=1), start_t)
 
 
 async def schedule_candidate_interview(
     db: AsyncSession, application: CandidateApplication, automation: InterviewAutomation
-):
+) -> InterviewSchedule | None:
     """
     Schedules an interview for a candidate based on the automation rules.
     """
@@ -211,17 +197,17 @@ async def schedule_candidate_interview(
         select(InterviewSchedule)
         .where(
             and_(
-                InterviewSchedule.application_id == str(application.id),
-                InterviewSchedule.automation_id == str(automation.id),
+                InterviewSchedule.application_id == application.id,
+                InterviewSchedule.automation_id == automation.id,
             )
         )
         .limit(1)
     )
     existing_res = await db.execute(existing_stmt)
     if existing_res.scalar_one_or_none():
-        return None  # Already scheduled
+        return None
 
-    # Fetch Candidate and Job to get emails and titles early
+    # Fetch Candidate and Job
     cand_stmt = select(Candidate).where(Candidate.id == application.candidate_id)
     cand_res = await db.execute(cand_stmt)
     candidate = cand_res.scalar_one_or_none()
@@ -237,7 +223,7 @@ async def schedule_candidate_interview(
     end_slot = next_slot + timedelta(minutes=automation.duration)
 
     # Determine interviewer email
-    recruiter_email = _settings.mailer_sender_email
+    recruiter_email = str(_settings.mailer_sender_email)
     if automation.interviewer_email:
         recruiter_email = automation.interviewer_email
     else:
@@ -249,14 +235,14 @@ async def schedule_candidate_interview(
 
     if automation.interview_type == "AI":
         base_url = _settings.frontend_url
-        meet_link = f"{base_url}/interview/ai/{application.id}"
+        meet_link: str | None = f"{base_url}/interview/ai/{application.id}"
     elif automation.google_meet_link:
         meet_link = automation.google_meet_link
     else:
         meet_link = await generate_google_meet_link(
             start_time=next_slot,
             end_time=end_slot,
-            candidate_email=candidate.email,
+            candidate_email=str(candidate.email),
             interviewer_email=recruiter_email,
             job_title=job.title,
         )
@@ -265,9 +251,10 @@ async def schedule_candidate_interview(
         automation_id=automation.id,
         application_id=application.id,
         interview_id=automation.interview_template_id if automation.interview_type == "AI" else None,
-        scheduled_time=next_slot,
+        scheduled_time=cast("Any", next_slot),
         meeting_link=meet_link,
         status="SCHEDULED",
+        company_id=application.company_id,
     )
     db.add(schedule)
     await db.commit()
@@ -283,7 +270,7 @@ async def send_interview_invite(
     application: CandidateApplication,
     automation: InterviewAutomation,
     schedule: InterviewSchedule,
-):
+) -> None:
     # Fetch Candidate
     cand_stmt = select(Candidate).where(Candidate.id == application.candidate_id)
     cand_res = await db.execute(cand_stmt)
@@ -298,33 +285,36 @@ async def send_interview_invite(
         return
 
     subject = f"Interview Scheduled: {job.title}"
-    body = f"Hello {candidate.full_name},\n\nYour interview for {job.title} has been scheduled.\n\nTime: {schedule.scheduled_time.strftime('%Y-%m-%d %H:%M')}\nLink: {schedule.meeting_link}\n\nBest regards,\nHiring Team"
+    scheduled_time_str = (
+        schedule.scheduled_time.strftime("%Y-%m-%d %H:%M") if schedule.scheduled_time else "TBD"
+    )
+    body = f"Hello {candidate.full_name or 'Candidate'},\n\nYour interview for {job.title} has been scheduled.\n\nTime: {scheduled_time_str}\nLink: {schedule.meeting_link}\n\nBest regards,\nHiring Team"
 
     if automation.email_template_id:
         tpl_stmt = select(EmailTemplate).where(EmailTemplate.id == automation.email_template_id)
-        res = await db.execute(tpl_stmt)
-        template = res.scalar_one_or_none()
+        res_tpl = await db.execute(tpl_stmt)
+        template = res_tpl.scalar_one_or_none()
         if template:
-            comp_stmt = select(Company).limit(1)
-            res = await db.execute(comp_stmt)
-            company = res.scalar_one_or_none()
+            comp_stmt = select(Company).where(Company.id == application.company_id)
+            comp_res = await db.execute(comp_stmt)
+            company = comp_res.scalar_one_or_none()
             company_name = company.name if company else "Our Company"
 
-            agent_stmt = select(HiringAgent).limit(1)
-            res = await db.execute(agent_stmt)
-            agent = res.scalar_one_or_none()
+            agent_stmt = select(HiringAgent).where(HiringAgent.company_id == application.company_id).limit(1)
+            agent_res = await db.execute(agent_stmt)
+            agent = agent_res.scalar_one_or_none()
             recruiter_name = (
                 f"{agent.first_name} {agent.last_name or ''}".strip() if agent else "Recruiting Team"
             )
 
-            replacements = {
+            replacements: dict[str, str] = {
                 "candidate_name": candidate.full_name or "Candidate",
                 "job_title": job.title,
                 "company_name": company_name,
                 "recruiter_name": recruiter_name,
-                "meeting_link": schedule.meeting_link,
-                "interview_link": schedule.meeting_link,
-                "interview_time": schedule.scheduled_time.strftime("%Y-%m-%d %H:%M"),
+                "meeting_link": str(schedule.meeting_link),
+                "interview_link": str(schedule.meeting_link),
+                "interview_time": scheduled_time_str,
             }
 
             subject = template.subject or subject
@@ -335,12 +325,9 @@ async def send_interview_invite(
                     subject = subject.replace(placeholder, str(val))
                     body = body.replace(placeholder, str(val))
 
-            # Advanced: Detect [URL]Label and convert to Button
-            import re
-
             button_pattern = r"\[(https?://[^\s\]]+)\]([^\n\r<]+)"
 
-            def make_button(m):
+            def make_button(m: Any) -> str:
                 url = m.group(1)
                 label = m.group(2).strip()
                 return f'<center><a href="{url}" style="display:inline-block;padding:14px 30px;background-color:#6e8efb;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:bold;margin:20px 0;">{label}</a></center>'
@@ -350,36 +337,34 @@ async def send_interview_invite(
             if str(schedule.meeting_link) not in str(body):
                 body = str(body) + f"\n\n---\nJoin the meeting here: {schedule.meeting_link}"
 
-            # Convert newlines to HTML and wrap in celebratory template
             body_html = body.replace("\n", "<br>")
-            from app.core.email_templates import wrap_in_celebratory_template
-
             body = wrap_in_celebratory_template(body_html, title="Interview Invitation!")
 
     # Save EmailLogs
     log_candidate = EmailLog(
         candidate_id=candidate.id,
         application_id=application.id,
-        recipient_email=candidate.email,
+        recipient_email=str(candidate.email),
         sender_email=_settings.mailer_sender_email,
         subject=subject,
         body=body,
         status="SENT",
         direction="outbound",
-        sent_at=datetime.utcnow(),
+        sent_at=cast("Any", datetime.now()),
+        company_id=application.company_id,
     )
     db.add(log_candidate)
 
     # Send to Interviewer (Recruiter)
-    recruiter_email = _settings.mailer_sender_email
-    agent_stmt = select(HiringAgent).limit(1)
-    agent_res = await db.execute(agent_stmt)
-    agent_found = agent_res.scalar_one_or_none()
-
+    recruiter_email = str(_settings.mailer_sender_email)
     if automation.interviewer_email:
         recruiter_email = automation.interviewer_email
-    elif agent_found and agent_found.email:
-        recruiter_email = agent_found.email
+    else:
+        agent_stmt = select(HiringAgent).where(HiringAgent.company_id == application.company_id).limit(1)
+        agent_res = await db.execute(agent_stmt)
+        agent_found = agent_res.scalar_one_or_none()
+        if agent_found and agent_found.email:
+            recruiter_email = agent_found.email
 
     log_recruiter = EmailLog(
         candidate_id=candidate.id,
@@ -390,15 +375,16 @@ async def send_interview_invite(
         body=f"You have an upcoming interview with {candidate.full_name} ({candidate.email}).\n\n{body}",
         status="SENT",
         direction="outbound",
-        sent_at=datetime.utcnow(),
+        sent_at=cast("Any", datetime.now()),
+        company_id=application.company_id,
     )
     db.add(log_recruiter)
 
     await db.commit()
 
-    def do_send_emails():
+    def do_send_emails() -> None:
         try:
-            send_smtp_email(candidate.email, subject, body)
+            send_smtp_email(str(candidate.email), subject, body)
             send_smtp_email(
                 recruiter_email,
                 f"[Interviewer] {subject}",

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import TIMESTAMP, Column, Date, ForeignKey, String, Table, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -32,13 +33,13 @@ class Project(EnterpriseBase):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="Active")
-    start_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
-    end_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    start_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    end_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
 
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False
     )
-    kanban_columns: Mapped[list] = mapped_column(
+    kanban_columns: Mapped[list[str]] = mapped_column(
         JSONB,
         nullable=False,
         server_default=text('\'["Planning", "Development", "Testing", "Done"]\'::jsonb'),
@@ -49,11 +50,11 @@ class Project(EnterpriseBase):
     members = relationship("Employee", secondary=project_members, backref="projects")
     tasks = relationship("ProjectTask", back_populates="project", cascade="all, delete-orphan")
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
-    deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
 
 class ProjectTask(EnterpriseBase):
@@ -73,7 +74,7 @@ class ProjectTask(EnterpriseBase):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     column: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="Pending")
-    due_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
 
     company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=True
@@ -83,7 +84,7 @@ class ProjectTask(EnterpriseBase):
     project = relationship("Project", back_populates="tasks")
     assignee = relationship("Employee", backref="assigned_tasks")
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )

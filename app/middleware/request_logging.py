@@ -1,11 +1,14 @@
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 
-from fastapi import Request
+from fastapi import Request, Response
 from loguru import logger
 
 
-async def request_logging_middleware(request: Request, call_next):
+async def request_logging_middleware(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
     request_id = str(uuid.uuid4())
     request.state.request_id = request_id
 

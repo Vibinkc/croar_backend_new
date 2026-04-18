@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
@@ -34,7 +34,7 @@ router = APIRouter()
 _settings = get_settings()
 
 
-async def get_current_user_optional(db: DBSessionDep, request: Request) -> Any | None:
+async def get_current_user_optional(db: DBSessionDep, request: Request) -> object | None:
     """Optional version of get_current_user for polymorphic portal access."""
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
@@ -45,7 +45,7 @@ async def get_current_user_optional(db: DBSessionDep, request: Request) -> Any |
         from app.models.enterprise.user_role import EnterpriseUser
 
         payload = jwt.decode(token, _settings.secret_key, algorithms=[_settings.algorithm])
-        email: str = payload.get("sub")
+        email: str = cast("str", payload.get("sub"))
         if not email:
             return None
         stmt = select(EnterpriseUser).where(EnterpriseUser.email == email)
@@ -61,12 +61,20 @@ async def create_scenario(
     request: SimulationScenarioCreate,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
     ],
-):
-    data = request.model_dump()
-    data["company_id"] = current_user.company_id
-    new_sc = SimulationScenario(**data)
+) -> SimulationScenario:
+    new_sc = SimulationScenario(
+        title=request.title,
+        description=request.description,
+        category=request.category,
+        character_name=request.character_name,
+        character_role=request.character_role,
+        system_prompt=request.system_prompt,
+        initial_message=request.initial_message,
+        difficulty=request.difficulty,
+        company_id=cast("UUID", getattr(current_user, "company_id", None)),
+    )
     db.add(new_sc)
     await db.commit()
     await db.refresh(new_sc)
@@ -76,11 +84,15 @@ async def create_scenario(
 @router.get("/scenarios", response_model=list[SimulationScenarioSchema])
 async def list_scenarios(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
-):
-    stmt = select(SimulationScenario).where(SimulationScenario.company_id == current_user.company_id)
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> list[SimulationScenario]:
+    stmt = select(SimulationScenario).where(
+        SimulationScenario.company_id == getattr(current_user, "company_id", None)
+    )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.put("/scenarios/{scenario_id}", response_model=SimulationScenarioSchema)
@@ -89,11 +101,12 @@ async def update_scenario(
     request: SimulationScenarioUpdate,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.update))
     ],
-):
+) -> SimulationScenario:
     stmt = select(SimulationScenario).where(
-        SimulationScenario.id == scenario_id, SimulationScenario.company_id == current_user.company_id
+        SimulationScenario.id == scenario_id,
+        SimulationScenario.company_id == getattr(current_user, "company_id", None),
     )
     res = await db.execute(stmt)
     sc = res.scalar_one_or_none()
@@ -115,11 +128,12 @@ async def delete_scenario(
     scenario_id: UUID,
     db: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.delete))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.delete))
     ],
-):
+) -> dict[str, str]:
     stmt = delete(SimulationScenario).where(
-        SimulationScenario.id == scenario_id, SimulationScenario.company_id == current_user.company_id
+        SimulationScenario.id == scenario_id,
+        SimulationScenario.company_id == getattr(current_user, "company_id", None),
     )
     await db.execute(stmt)
     await db.commit()
@@ -130,10 +144,10 @@ async def delete_scenario(
 async def ai_generate_scenario(
     request: AIGenerateScenarioRequest,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.generate))
     ],
-):
-    prompt = f"""You are an elite Organizational Psychologist and HR Training Expert. 
+) -> SimulationScenarioCreate:
+    prompt = f"""You are an elite Organizational Psychologist and HR Training Expert.
 Your goal is to blueprint a high-fidelity behavioral role-play scenario for an employee.
 
 User Request: {request.prompt}
@@ -173,23 +187,24 @@ async def create_assignments(
     db: DBSessionDep,
     background_tasks: BackgroundTasks,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
     ],
-):
+) -> list[SimulationAssignment]:
     # Fetch scenario details for the email and verify ownership
     sc_stmt = select(SimulationScenario).where(
-        SimulationScenario.id == request.scenario_id, SimulationScenario.company_id == current_user.company_id
+        SimulationScenario.id == request.scenario_id,
+        SimulationScenario.company_id == getattr(current_user, "company_id", None),
     )
     sc_res = await db.execute(sc_stmt)
     scenario = sc_res.scalar_one_or_none()
     if not scenario:
         raise HTTPException(status_code=404, detail="Scenario not found")
 
-    assignments = []
+    assignments: list[SimulationAssignment] = []
     for emp_id in request.employee_ids:
         # Fetch employee details and verify they belong to the same company
         emp_stmt = select(Employee).where(
-            Employee.id == emp_id, Employee.company_id == current_user.company_id
+            Employee.id == emp_id, Employee.company_id == getattr(current_user, "company_id", None)
         )
         emp_res = await db.execute(emp_stmt)
         emp = emp_res.scalar_one_or_none()
@@ -202,7 +217,7 @@ async def create_assignments(
             employee_id=emp_id,
             due_date=request.due_date,
             status="PENDING",
-            company_id=current_user.company_id,
+            company_id=cast("UUID", getattr(current_user, "company_id", None)),
         )
         db.add(new_assign)
         assignments.append(new_assign)
@@ -231,13 +246,19 @@ async def create_assignments(
         .options(selectinload(SimulationAssignment.scenario))
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
 
 
 @router.get("/assignments/me", response_model=list[SimulationAssignmentSchema])
-async def list_my_assignments(db: DBSessionDep, current_user: Annotated[Any, Depends(get_current_user)]):
+async def list_my_assignments(
+    db: DBSessionDep, current_user: Annotated[object, Depends(get_current_user)]
+) -> list[SimulationAssignment]:
     # Determine if logged-in user is an employee
-    emp_stmt = select(Employee).where(Employee.email == current_user.email)
+    email = getattr(current_user, "email", None)
+    if not email:
+        return []
+
+    emp_stmt = select(Employee).where(Employee.email == email)
     emp_res = await db.execute(emp_stmt)
     employee = emp_res.scalar_one_or_none()
 
@@ -249,13 +270,29 @@ async def list_my_assignments(db: DBSessionDep, current_user: Annotated[Any, Dep
         select(SimulationAssignment)
         .where(
             SimulationAssignment.employee_id == employee.id,
-            SimulationAssignment.company_id == current_user.company_id,
+            SimulationAssignment.company_id == getattr(current_user, "company_id", None),
             SimulationAssignment.status != "COMPLETED",
         )
         .options(selectinload(SimulationAssignment.scenario))
     )
     res = await db.execute(stmt)
-    return res.scalars().all()
+    return list(res.scalars().all())
+
+
+@router.get("/assignments/all", response_model=list[SimulationAssignmentSchema])
+async def list_all_assignments(
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> list[SimulationAssignment]:
+    stmt = (
+        select(SimulationAssignment)
+        .where(SimulationAssignment.company_id == getattr(current_user, "company_id", None))
+        .options(selectinload(SimulationAssignment.scenario), selectinload(SimulationAssignment.employee))
+    )
+    res = await db.execute(stmt)
+    return list(res.scalars().all())
 
 
 # Session Management (Employee/Admin)
@@ -263,12 +300,12 @@ async def list_my_assignments(db: DBSessionDep, current_user: Annotated[Any, Dep
 async def start_session(
     request: SimulationSessionCreate,
     db: DBSessionDep,
-    current_user: Any | None = Depends(get_current_user_optional),
-):
+    current_user: object | None = Depends(get_current_user_optional),
+) -> SimulationSession:
     # Verify scenario
     sc_stmt = select(SimulationScenario).where(SimulationScenario.id == request.scenario_id)
     if current_user:
-        sc_stmt = sc_stmt.where(SimulationScenario.company_id == current_user.company_id)
+        sc_stmt = sc_stmt.where(SimulationScenario.company_id == getattr(current_user, "company_id", None))
 
     sc_res = await db.execute(sc_stmt)
     scenario = sc_res.scalar_one_or_none()
@@ -289,14 +326,14 @@ async def start_session(
 
     if not session_user_id and current_user:
         # Check if the logged-in agent is actually an employee
-        emp_stmt = select(Employee).where(Employee.email == current_user.email)
+        emp_stmt = select(Employee).where(Employee.email == getattr(current_user, "email", ""))
         emp_res = await db.execute(emp_stmt)
         employee = emp_res.scalar_one_or_none()
         if employee:
             session_user_id = employee.id
         else:
             # Fallback to User (Admin/Recruiter taking simulation for testing)
-            hiring_agent_id = current_user.id
+            hiring_agent_id = cast("UUID | None", getattr(current_user, "id", None))
     elif not session_user_id and not current_user:
         raise HTTPException(status_code=401, detail="Authentication required to start session")
 
@@ -333,11 +370,11 @@ async def start_session(
 
 @router.get("/sessions/{session_id}", response_model=SimulationSessionSchema)
 async def get_session(
-    session_id: UUID, db: DBSessionDep, current_user: Any | None = Depends(get_current_user_optional)
-):
+    session_id: UUID, db: DBSessionDep, current_user: object | None = Depends(get_current_user_optional)
+) -> SimulationSession:
     stmt = select(SimulationSession).where(SimulationSession.id == session_id)
     if current_user:
-        stmt = stmt.where(SimulationSession.company_id == current_user.company_id)
+        stmt = stmt.where(SimulationSession.company_id == getattr(current_user, "company_id", None))
 
     stmt = stmt.options(selectinload(SimulationSession.scenario))
     res = await db.execute(stmt)
@@ -352,11 +389,11 @@ async def simulation_chat(
     session_id: UUID,
     payload: SimulationChatMessage,
     db: DBSessionDep,
-    current_user: Any | None = Depends(get_current_user_optional),
-):
+    current_user: object | None = Depends(get_current_user_optional),
+) -> SimulationChatResponse:
     stmt = select(SimulationSession).where(SimulationSession.id == session_id)
     if current_user:
-        stmt = stmt.where(SimulationSession.company_id == current_user.company_id)
+        stmt = stmt.where(SimulationSession.company_id == getattr(current_user, "company_id", None))
 
     stmt = stmt.options(selectinload(SimulationSession.scenario))
     res = await db.execute(stmt)
@@ -384,10 +421,10 @@ async def simulation_chat(
         reply_data = json.loads(ai_reply)
         if isinstance(reply_data, dict):
             # Try to find 'reply' or use the first value in the dictionary
-            actual_reply = reply_data.get("reply")
+            actual_reply = reply_data.get("reply", ai_reply)
             if not actual_reply:
                 actual_reply = next(iter(reply_data.values()), ai_reply)
-    except:
+    except Exception:
         actual_reply = ai_reply
 
     history.append({"role": "assistant", "content": str(actual_reply)})
@@ -400,11 +437,11 @@ async def simulation_chat(
 
 @router.post("/sessions/{session_id}/complete", response_model=SimulationSessionSchema)
 async def complete_simulation(
-    session_id: UUID, db: DBSessionDep, current_user: Any | None = Depends(get_current_user_optional)
-):
+    session_id: UUID, db: DBSessionDep, current_user: object | None = Depends(get_current_user_optional)
+) -> SimulationSession:
     stmt = select(SimulationSession).where(SimulationSession.id == session_id)
     if current_user:
-        stmt = stmt.where(SimulationSession.company_id == current_user.company_id)
+        stmt = stmt.where(SimulationSession.company_id == getattr(current_user, "company_id", None))
 
     stmt = stmt.options(selectinload(SimulationSession.scenario))
     res = await db.execute(stmt)
@@ -413,15 +450,15 @@ async def complete_simulation(
         raise HTTPException(status_code=404, detail="Session not found or access denied")
 
     # SUBSTANCE CHECK: ensure sufficient interaction before triggering LLM evaluation
-    user_messages = [m for m in sess.conversation if m.role == "user"]
+    user_messages = [m for m in sess.conversation if m.get("role") == "user"]
     if len(user_messages) < 3:
         raise HTTPException(
             status_code=400,
             detail="INSUFFICIENT_INTERACTION: Please engage in at least 3 exchanges with the AI Agent before requesting a behavioral audit.",
         )
 
-    chat_context = "\n".join([f"{m['role']}: {m['content']}" for m in sess.conversation])
-    eval_prompt = f"""You are an elite Performance Coach and Behavioral Psychologist. 
+    "\n".join([f"{m['role']}: {m['content']}" for m in sess.conversation])
+    eval_prompt = f"""You are an elite Performance Coach and Behavioral Psychologist.
 Analyze this role-play simulation:
 Scenario: {sess.scenario.title}
 Character: {sess.scenario.character_name}
@@ -470,14 +507,17 @@ Return ONLY a JSON object:
 @router.get("/results", response_model=list[SimulationResultSchema])
 async def list_simulation_results(
     db: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> list[dict[str, object]]:
     """Admin Dashboard view for all simulation results."""
     stmt = (
         select(SimulationSession)
         .join(SimulationScenario)
         .where(
-            SimulationSession.status == "COMPLETED", SimulationScenario.company_id == current_user.company_id
+            SimulationSession.status == "COMPLETED",
+            SimulationScenario.company_id == getattr(current_user, "company_id", None),
         )
         .options(selectinload(SimulationSession.scenario), selectinload(SimulationSession.employee))
         .order_by(SimulationSession.completed_at.desc())
@@ -502,4 +542,5 @@ async def list_simulation_results(
                 "completed_at": s.completed_at,
             }
         )
+
     return results

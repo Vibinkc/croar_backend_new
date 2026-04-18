@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -11,7 +12,7 @@ from . import EnterpriseBase
 class OnboardingTemplate(EnterpriseBase):
     __tablename__ = "onboarding_templates"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
@@ -21,17 +22,17 @@ class OnboardingTemplate(EnterpriseBase):
     sections: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
     # Configuration for required documents
-    required_documents: Mapped[list[dict]] = mapped_column(JSONB, nullable=False, default=list)
+    required_documents: Mapped[list[dict[str, object]]] = mapped_column(JSONB, nullable=False, default=list)
 
     # Detailed form configuration for fields within each section
-    form_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    form_config: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
@@ -48,44 +49,44 @@ class OnboardingStatus(EnterpriseBase):
 class Onboarding(EnterpriseBase):
     __tablename__ = "onboardings"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    application_id: Mapped[str] = mapped_column(
+    application_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("candidate_applications.id", ondelete="CASCADE"), nullable=False
     )
     onboarding_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
 
     status_id: Mapped[int] = mapped_column(SmallInteger, ForeignKey("onboarding_statuses.id"), nullable=False)
-    template_id: Mapped[str | None] = mapped_column(
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboarding_templates.id", ondelete="SET NULL"), nullable=True
     )
 
     # Information Capture
-    job_info: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    personal_info: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    education_info: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    other_info: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    form_data: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    job_info: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    personal_info: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    education_info: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    other_info: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    form_data: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     rejected_fields: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default="[]"
     )
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    initiation_date: Mapped[TIMESTAMP] = mapped_column(
+    initiation_date: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now()
     )
-    completed_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
-    deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
     application = relationship("CandidateApplication", back_populates="onboarding")
     status = relationship("OnboardingStatus")
@@ -95,44 +96,27 @@ class Onboarding(EnterpriseBase):
     tasks = relationship("OnboardingTask", back_populates="onboarding", cascade="all, delete-orphan")
     notes = relationship("OnboardingNote", back_populates="onboarding", cascade="all, delete-orphan")
 
-    @property
-    def candidate_email(self) -> str | None:
-        if self.application and self.application.candidate:
-            return self.application.candidate.email
-        return None
-
-    @property
-    def job_title(self) -> str | None:
-        if self.application and self.application.job_requirement:
-            return self.application.job_requirement.title
-        return None
-
 
 class OnboardingDocument(EnterpriseBase):
     __tablename__ = "onboarding_documents"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    onboarding_id: Mapped[str] = mapped_column(
+    onboarding_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboardings.id", ondelete="CASCADE"), nullable=False
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    doc_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(50), default="Pending"
+    )  # Pending, Uploaded, Verified, Rejected
+    rejection_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    status: Mapped[str] = mapped_column(String(50), default="Pending")
-    due_date: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
-    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    company_id: Mapped[str | None] = mapped_column(
+    uploaded_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
-    )
-
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
-        TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
     onboarding = relationship("Onboarding", back_populates="documents")
@@ -141,20 +125,22 @@ class OnboardingDocument(EnterpriseBase):
 class OnboardingActivity(EnterpriseBase):
     __tablename__ = "onboarding_activities"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    onboarding_id: Mapped[str] = mapped_column(
+    onboarding_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboardings.id", ondelete="CASCADE"), nullable=False
     )
 
-    action: Mapped[str] = mapped_column(Text, nullable=False)
+    activity_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
     performed_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    timestamp: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    metadata_info: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    company_id: Mapped[str | None] = mapped_column(
+
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
+
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
 
     onboarding = relationship("Onboarding", back_populates="activities")
 
@@ -162,26 +148,24 @@ class OnboardingActivity(EnterpriseBase):
 class OnboardingTask(EnterpriseBase):
     __tablename__ = "onboarding_tasks"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    onboarding_id: Mapped[str] = mapped_column(
+    onboarding_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboardings.id", ondelete="CASCADE"), nullable=False
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    priority: Mapped[str] = mapped_column(String(20), default="Medium")
     status: Mapped[str] = mapped_column(String(50), default="Pending")
+    due_date: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
-    due_date: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
-
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
@@ -191,21 +175,21 @@ class OnboardingTask(EnterpriseBase):
 class OnboardingNote(EnterpriseBase):
     __tablename__ = "onboarding_notes"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    onboarding_id: Mapped[str] = mapped_column(
+    onboarding_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboardings.id", ondelete="CASCADE"), nullable=False
     )
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
     author_name: Mapped[str] = mapped_column(String(255), nullable=False)
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
 
     onboarding = relationship("Onboarding", back_populates="notes")
 
@@ -213,31 +197,31 @@ class OnboardingNote(EnterpriseBase):
 class OnboardingAutomation(EnterpriseBase):
     __tablename__ = "onboarding_automations"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    job_requirement_id: Mapped[str] = mapped_column(
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False
     )
 
     stage_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     stage_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    template_id: Mapped[str | None] = mapped_column(
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("onboarding_templates.id", ondelete="SET NULL"), nullable=True
     )
-    email_template_id: Mapped[str | None] = mapped_column(
+    email_template_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("email_templates.id", ondelete="SET NULL"), nullable=True
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     auto_move: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 

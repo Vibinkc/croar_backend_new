@@ -1,7 +1,7 @@
 import os
 import shutil
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -18,18 +18,19 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 async def upload_company_logo(
     session: DBSessionDep,
     current_user: Annotated[
-        Any, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
+        object, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
     ],
     file: UploadFile = File(...),
-):
+) -> dict[str, str]:
     """
     Upload an organization logo.
     """
-    if not file.content_type.startswith("image/"):
+    content_type = file.content_type or ""
+    if not content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
 
     # Generate unique filename
-    ext = os.path.splitext(file.filename)[1]
+    ext = os.path.splitext(cast("str", file.filename))[1]
     filename = f"logo_{datetime.now().strftime('%Y%m%d%H%M%S')}{ext}"
     file_path = os.path.join(UPLOAD_DIR, filename)
 

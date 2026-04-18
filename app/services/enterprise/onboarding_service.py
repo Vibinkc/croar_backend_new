@@ -1,8 +1,10 @@
 import random
 import string
 from datetime import datetime
+from typing import Any, cast
 from uuid import UUID
 
+from fastapi import BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,10 +32,17 @@ def generate_onboarding_code() -> str:
 
 
 async def log_onboarding_activity(
-    session: AsyncSession, onboarding_id: UUID, action: str, performed_by: str, metadata: dict | None = None
-):
+    session: AsyncSession,
+    onboarding_id: UUID,
+    description: str,
+    performed_by: str,
+    activity_type: str = "SYSTEM",
+) -> None:
     activity = OnboardingActivity(
-        onboarding_id=onboarding_id, action=action, performed_by=performed_by, metadata_info=metadata
+        onboarding_id=onboarding_id,
+        description=description,
+        performed_by=performed_by,
+        activity_type=activity_type,
     )
     session.add(activity)
     await session.flush()
@@ -47,7 +56,7 @@ async def _prepare_onboarding_email(
     frontend_url = _settings.frontend_url
     onboarding_url = f"{frontend_url}/onboarding/{onboarding.id}"
 
-    job_title = onboarding.job_title or "your position"
+    job_title = "your position"
     company_name = "Our Company"
     company_address = "N/A"
 
@@ -57,15 +66,17 @@ async def _prepare_onboarding_email(
         from app.models.enterprise.job import JobRequirement
 
         comp_stmt = (
-            select(Company)
-            .join(JobRequirement)
+            select(Company, JobRequirement.title)
+            .join(JobRequirement, JobRequirement.company_id == Company.id)
             .where(JobRequirement.id == onboarding.application.job_requirement_id)
         )
         comp_res = await session.execute(comp_stmt)
-        comp_obj = comp_res.scalar_one_or_none()
-        if comp_obj:
+        row = comp_res.first()
+        if row:
+            comp_obj, j_title = row
             company_name = comp_obj.name
             company_address = comp_obj.location or "N/A"
+            job_title = j_title or "your position"
 
     replacements = {
         "candidate_name": candidate.full_name or candidate.email,
@@ -100,8 +111,8 @@ async def initiate_onboarding_process(
     template_id: UUID | None = None,
     email_template_id: UUID | None = None,
     performed_by: str = "System",
-    background_tasks=None,
-):
+    background_tasks: BackgroundTasks | None = None,
+) -> Onboarding | None:
     """
     Core logic to initiate onboarding for a candidate.
     Returns the created Onboarding object or raises Exception.
@@ -154,15 +165,21 @@ async def initiate_onboarding_process(
         onboarding_code=generate_onboarding_code(),
         status_id=initial_status.id,
         template_id=template.id if template else None,
-        initiation_date=datetime.now(),
+        initiation_date=cast("Any", datetime.now()),
     )
     session.add(onboarding)
     await session.flush()
 
     # 5. Create Documents from Template if available
     if template and template.required_documents:
-        for doc_cfg in template.required_documents:
-            doc = OnboardingDocument(onboarding_id=onboarding.id, name=doc_cfg["name"], status="Pending")
+        required_docs = template.required_documents
+        for doc_cfg in required_docs:
+            doc = OnboardingDocument(
+                onboarding_id=onboarding.id,
+                name=cast("str", doc_cfg.get("name", "Document")),
+                status="Pending",
+                company_id=company_id,
+            )
             session.add(doc)
 
     # 6. Log initial activity
@@ -173,14 +190,9 @@ async def initiate_onboarding_process(
         performed_by,
     )
 
-    # Move to Onboarding Stage logic removed.
-    # The candidate's stage is now managed by the specific workflow round mapping
-    # to avoid conflicting moves or accidental 'Rejected' stage placement.
-
     # Send Email Notification
     candidate = application.candidate
     if candidate:
-        # Re-fetch template to get the relationship if needed, or just fetch if provided
         email_template = None
         if email_template_id:
             from app.models.enterprise.communication import EmailTemplate
@@ -193,16 +205,15 @@ async def initiate_onboarding_process(
         onboarding_url = f"{frontend_url}/onboarding/{onboarding.id}"
 
         # Default content
-        # Note: onboarding_url placeholder is replaced by _prepare_onboarding_email
         subject = "Welcome! Your Onboarding Process has Started"
-        body = """
+        body = f"""
         <html>
             <body>
                 <h2>Welcome to the Team!</h2>
-                <p>Hello {{candidate_name}},</p>
+                <p>Hello {candidate.full_name or "Candidate"},</p>
                 <p>We are excited to start your onboarding process. Please click the link below to complete your profile and upload necessary documents:</p>
-                <p><a href="{{onboarding_url}}" style="padding: 10px 20px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 8px;">Complete Onboarding</a></p>
-                <p>Or copy and paste this link: {{onboarding_url}}</p>
+                <p><a href="{onboarding_url}" style="padding: 10px 20px; background-color: #4f46e5; color: white; text-decoration: none; border-radius: 8px;">Complete Onboarding</a></p>
+                <p>Or copy and paste this link: {onboarding_url}</p>
                 <p>Best regards,<br>HR Team</p>
             </body>
         </html>
@@ -228,8 +239,11 @@ async def initiate_onboarding_process(
 
 
 async def send_onboarding_resubmit_email(
-    session: AsyncSession, onboarding: Onboarding, reason: str, background_tasks=None
-):
+    session: AsyncSession,
+    onboarding: Onboarding,
+    reason: str,
+    background_tasks: BackgroundTasks | None = None,
+) -> None:
     subject = "Action Required: Onboarding Correction Needed"
     body = f"""
     Hello {onboarding.application.candidate.full_name},
@@ -255,7 +269,9 @@ async def send_onboarding_resubmit_email(
         await run_in_threadpool(send_smtp_email, onboarding.application.candidate.email, subject, body)
 
 
-async def send_onboarding_welcome_email(session: AsyncSession, onboarding: Onboarding, background_tasks=None):
+async def send_onboarding_welcome_email(
+    session: AsyncSession, onboarding: Onboarding, background_tasks: BackgroundTasks | None = None
+) -> None:
     subject = "Congratulations! You're Officially Hired!"
     body = f"""
     Hello {onboarding.application.candidate.full_name},

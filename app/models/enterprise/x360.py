@@ -10,12 +10,12 @@ from sqlalchemy.sql import text
 from . import EnterpriseBase
 
 
-class QuestionType(str, enum.Enum):
+class QuestionType(enum.StrEnum):
     RATING = "RATING"
     TEXT = "TEXT"
 
 
-class QuestionCategory(str, enum.Enum):
+class QuestionCategory(enum.StrEnum):
     PERFORMANCE = "PERFORMANCE"
     ENGAGEMENT = "ENGAGEMENT"
     CORE_VALUES = "CORE_VALUES"
@@ -31,20 +31,20 @@ class QuestionCategory(str, enum.Enum):
     PROBLEM_SOLVING = "PROBLEM_SOLVING"
 
 
-class RelationType(str, enum.Enum):
+class RelationType(enum.StrEnum):
     SELF = "SELF"
     MANAGER = "MANAGER"
     PEER = "PEER"
     REPORT = "REPORT"
 
 
-class CycleStatus(str, enum.Enum):
+class CycleStatus(enum.StrEnum):
     DRAFT = "DRAFT"
     ACTIVE = "ACTIVE"
     CLOSED = "CLOSED"
 
 
-class AssignmentStatus(str, enum.Enum):
+class AssignmentStatus(enum.StrEnum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
 

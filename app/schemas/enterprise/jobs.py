@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, field_validator
@@ -42,18 +43,20 @@ class JobRequirementCreate(BaseModel):
     salary_currency: str | None = "INR"
     salary_frequency: str | None = "Yearly"
     notice_period_max: int | None = None
-    application_fields: list[dict] | None = []
-    workflow_stages: list[dict] | None = []
+    application_fields: list[dict[str, Any]] | None = []
+    workflow_stages: list[dict[str, Any]] | None = []
     status_id: int = 1
     company_id: UUID | None = None
     target_platforms: list[str] | None = []
 
     @field_validator("required_skills", "target_platforms", mode="before")
     @classmethod
-    def ensure_list(cls, v):
+    def ensure_list(cls, v: Any) -> list[str]:
         if v is None:
             return []
-        return v
+        if isinstance(v, list):
+            return [str(item) for item in v]
+        return [str(v)]
 
 
 class JobRequirementResponse(JobRequirementCreate):
@@ -90,8 +93,8 @@ class JobRequirementUpdate(BaseModel):
     salary_currency: str | None = None
     salary_frequency: str | None = None
     notice_period_max: int | None = None
-    application_fields: list[dict] | None = None
-    workflow_stages: list[dict] | None = None
+    application_fields: list[dict[str, Any]] | None = None
+    workflow_stages: list[dict[str, Any]] | None = None
     status_id: int | None = None
     company_id: UUID | None = None
 

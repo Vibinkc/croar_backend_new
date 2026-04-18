@@ -21,7 +21,7 @@ router = APIRouter(prefix="/public/onboarding", tags=["Public Onboarding"])
 
 
 @router.get("/{token}", response_model=OnboardingResponse)
-async def get_public_onboarding(token: UUID, session: DBSessionDep):
+async def get_public_onboarding(token: UUID, session: DBSessionDep) -> object:
     """Get onboarding details for candidate using unique token (UUID)."""
     stmt = (
         select(Onboarding)
@@ -59,7 +59,7 @@ async def get_public_onboarding(token: UUID, session: DBSessionDep):
 
 
 @router.post("/{token}/submit")
-async def submit_onboarding_info(token: UUID, request: Request, session: DBSessionDep):
+async def submit_onboarding_info(token: UUID, request: Request, session: DBSessionDep) -> dict[str, str]:
     """Submit onboarding information from the public form."""
     stmt = select(Onboarding).where(Onboarding.id == token)
     result = await session.execute(stmt)
@@ -111,7 +111,7 @@ async def submit_onboarding_info(token: UUID, request: Request, session: DBSessi
 @router.post("/{token}/upload/{doc_id}")
 async def upload_onboarding_document(
     token: UUID, doc_id: UUID, file: Annotated[UploadFile, File()], session: DBSessionDep
-):
+) -> dict[str, str]:
     """Upload a requested document."""
     # 1. Verify onboarding and document link
     stmt = select(OnboardingDocument).where(
@@ -127,7 +127,7 @@ async def upload_onboarding_document(
     upload_dir = os.path.join("uploads", "onboarding", str(token))
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_path = os.path.join(upload_dir, file.filename)
+    file_path = os.path.join(upload_dir, str(file.filename or "unnamed"))
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
@@ -151,7 +151,7 @@ async def upload_onboarding_document(
 @router.post("/{token}/upload-dynamic/{field_name}")
 async def upload_dynamic_onboarding_file(
     token: UUID, field_name: str, file: Annotated[UploadFile, File()], session: DBSessionDep
-):
+) -> dict[str, str]:
     """Upload a file for a dynamic field."""
     # Verify onboarding
     stmt = select(Onboarding).where(Onboarding.id == token)
@@ -165,7 +165,7 @@ async def upload_dynamic_onboarding_file(
     upload_dir = os.path.join("uploads", "onboarding", str(token), "dynamic")
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_path = os.path.join(upload_dir, f"{field_name}_{file.filename}")
+    file_path = os.path.join(upload_dir, f"{field_name}_{file.filename or 'unnamed'}")
     with open(file_path, "wb") as f:
         f.write(await file.read())
 

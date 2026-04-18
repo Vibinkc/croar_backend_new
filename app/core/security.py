@@ -1,5 +1,5 @@
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import cast
 
 import bcrypt
 from jose import jwt
@@ -22,22 +22,22 @@ def get_password_hash(password: str) -> str:
 
 
 def create_access_token(
-    subject: str | Any, expires_delta: timedelta | None = None, extra_claims: dict[str, Any] | None = None
+    subject: object, expires_delta: timedelta | None = None, extra_claims: dict[str, object] | None = None
 ) -> str:
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
         expire = datetime.now(UTC) + timedelta(minutes=_settings.access_token_expire_minutes)
 
-    to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
+    to_encode: dict[str, object] = {"exp": expire, "sub": str(subject), "type": "access"}
     if extra_claims:
         to_encode.update(extra_claims)
 
-    encoded_jwt = jwt.encode(to_encode, _settings.secret_key, algorithm=_settings.algorithm)
+    encoded_jwt = cast("str", jwt.encode(to_encode, _settings.secret_key, algorithm=_settings.algorithm))
     return encoded_jwt
 
 
-def create_refresh_token(subject: str | Any, expires_delta: timedelta | None = None) -> str:
+def create_refresh_token(subject: object, expires_delta: timedelta | None = None) -> str:
     if expires_delta:
         expire = datetime.now(UTC) + expires_delta
     else:
@@ -45,9 +45,11 @@ def create_refresh_token(subject: str | Any, expires_delta: timedelta | None = N
         expire = datetime.now(UTC) + timedelta(days=7)
 
     to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
-    encoded_jwt = jwt.encode(to_encode, _settings.secret_key, algorithm=_settings.algorithm)
+    encoded_jwt = cast("str", jwt.encode(to_encode, _settings.secret_key, algorithm=_settings.algorithm))
     return encoded_jwt
 
 
-def decode_token(token: str) -> dict[str, Any]:
-    return jwt.decode(token, _settings.secret_key, algorithms=[_settings.algorithm])
+def decode_token(token: str) -> dict[str, object]:
+    return cast(
+        "dict[str, object]", jwt.decode(token, _settings.secret_key, algorithms=[_settings.algorithm])
+    )

@@ -1,3 +1,4 @@
+from typing import cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
@@ -12,25 +13,27 @@ router = APIRouter()
 
 
 @router.get("/companies", response_model=list[CompanyResponse])
-async def list_companies(db: AsyncSession = Depends(get_db)):
+async def list_companies(db: AsyncSession = Depends(get_db)) -> list[object]:
     """List all companies."""
-    return await EnterpriseService.get_companies(db)
+    return cast("list[object]", await EnterpriseService.get_companies(db))
 
 
 @router.get("/jobs", response_model=list[JobRequirementResponse])
-async def list_jobs(db: AsyncSession = Depends(get_db)):
+async def list_jobs(db: AsyncSession = Depends(get_db)) -> list[object]:
     """List all job requirements."""
-    return await EnterpriseService.get_jobs(db)
+    return cast("list[object]", await EnterpriseService.get_jobs(db))
 
 
 @router.post("/jobs", response_model=JobRequirementResponse)
-async def create_job(job_data: JobRequirementCreate, db: AsyncSession = Depends(get_db)):
+async def create_job(job_data: JobRequirementCreate, db: AsyncSession = Depends(get_db)) -> object:
     """Create a new job requirement."""
     return await EnterpriseService.create_job_requirement(db, job_data.model_dump())
 
 
 @router.post("/jobs/{job_id}/publish")
-async def publish_job(job_id: UUID, request: PublishJobRequest, db: AsyncSession = Depends(get_db)):
+async def publish_job(
+    job_id: UUID, request: PublishJobRequest, db: AsyncSession = Depends(get_db)
+) -> dict[str, object]:
     """Publish a job to multiple platforms."""
     results = []
     for platform in request.platforms:

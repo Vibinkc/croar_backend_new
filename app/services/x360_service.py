@@ -1,4 +1,6 @@
+import json
 import uuid
+from typing import Any, cast
 
 from openai import AsyncOpenAI
 from sqlalchemy import and_, func, select
@@ -26,7 +28,7 @@ client = AsyncOpenAI(api_key=_settings.openai_api_key)
 
 
 class X360Service:
-    async def _get_ai_evaluation(self, responses: list[dict]):
+    async def _get_ai_evaluation(self, responses: list[dict[str, object]]) -> dict[str, object] | None:
         """
         Takes a list of text responses and returns an AI-calculated score and summary.
         """
@@ -40,9 +42,9 @@ class X360Service:
         Provide:
         1. A 'Competency Score' out of 10 (where 10 is exceptional).
         2. A brief 'Executive Summary' (max 3 sentences) of the feedback.
-        
+
         Return in JSON format: {{"score": float, "summary": str}}
-        
+
         Feedback:
         {content}
         """
@@ -53,20 +55,24 @@ class X360Service:
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"},
             )
-            import json
-
-            return json.loads(response.choices[0].message.content)
+            msg_content = response.choices[0].message.content
+            if not msg_content:
+                return None
+            data = json.loads(msg_content)
+            return cast("dict[str, object]", data)
         except Exception as e:
             print(f"AI Evaluation Error: {e}")
             return None
 
-    async def start_cycle(self, db: AsyncSession, cycle_id: uuid.UUID, ratee_ids: list[uuid.UUID]):
+    async def start_cycle(
+        self, db: AsyncSession, cycle_id: uuid.UUID, ratee_ids: list[uuid.UUID]
+    ) -> X360AssessmentCycle | None:
         """
         Generates assignments for a cycle.
         For each ratee, creates:
         1. Self-assessment (Relation: SELF)
         2. Manager-assessment (Relation: MANAGER)
-        3. Peer-assessments (Relation: PEER) - from RaterMap or random peers in same dept
+        3. Peer-assessments (Relation: PEER) - from RaterMap or random peers in same dept.
         """
         stmt = select(X360AssessmentCycle).where(X360AssessmentCycle.id == cycle_id)
         result = await db.execute(stmt)
@@ -114,7 +120,7 @@ class X360Service:
         ratee_id: uuid.UUID,
         rater_id: uuid.UUID,
         relation: RelationType,
-    ):
+    ) -> None:
         # Check if exists to avoid doubles
         chk = select(X360AssessmentAssignment).where(
             and_(
@@ -130,8 +136,8 @@ class X360Service:
 
         # Get company_id from cycle first
         stmt = select(X360AssessmentCycle.company_id).where(X360AssessmentCycle.id == cycle_id)
-        res = await db.execute(stmt)
-        c_id = res.scalar_one_or_none()
+        res_comp = await db.execute(stmt)
+        c_id = res_comp.scalar_one_or_none()
 
         assignment = X360AssessmentAssignment(
             cycle_id=cycle_id,
@@ -143,7 +149,7 @@ class X360Service:
         )
         db.add(assignment)
 
-    async def notify_raters(self, db: AsyncSession, cycle_id: uuid.UUID):
+    async def notify_raters(self, db: AsyncSession, cycle_id: uuid.UUID) -> None:
         stmt = (
             select(X360AssessmentAssignment)
             .where(
@@ -179,7 +185,9 @@ class X360Service:
                 # For real production, use background tasks
                 send_smtp_email(ass.rater.email, subject, body)
 
-    async def get_report(self, db: AsyncSession, employee_id: uuid.UUID, cycle_id: uuid.UUID):
+    async def get_report(
+        self, db: AsyncSession, employee_id: uuid.UUID, cycle_id: uuid.UUID
+    ) -> dict[str, Any] | None:
         # 1. Fetch Cycle and Template with Questions
         cycle_stmt = (
             select(X360AssessmentCycle)
@@ -215,10 +223,10 @@ class X360Service:
         assignments = assign_res.scalars().all()
 
         # 3. Aggregate results
-        category_scores: dict[str, dict[str, list[int]]] = {}  # category -> relation -> [values]
-        text_responses = []
+        category_scores: dict[str, dict[RelationType, list[int]]] = {}  # category -> relation -> [values]
+        text_responses: list[dict[str, Any]] = []
 
-        total_cnt = await db.execute(
+        total_cnt_res = await db.execute(
             select(func.count(X360AssessmentAssignment.id)).where(
                 and_(
                     X360AssessmentAssignment.cycle_id == cycle_id,
@@ -226,6 +234,7 @@ class X360Service:
                 )
             )
         )
+        total_cnt = total_cnt_res.scalar() or 0
         comp_cnt = len(assignments)
 
         for ass in assignments:
@@ -237,10 +246,10 @@ class X360Service:
                         category_scores[cat] = {}
                     if rel not in category_scores[cat]:
                         category_scores[cat][rel] = []
-                    category_scores[cat][rel].append(resp.answer_value)
+                    category_scores[cat][rel].append(int(cast("Any", resp.answer_value)))
                 elif resp.question.type == QuestionType.TEXT and resp.answer_text:
                     # Anonymize peer/report comments
-                    rater_label = rel.value
+                    rater_label = str(rel.value)
                     if rel in [RelationType.PEER, RelationType.REPORT]:
                         rater_label = f"Anonymous {rel.value}"
 
@@ -263,7 +272,7 @@ class X360Service:
             mgr_scores = rel_data.get(RelationType.MANAGER, [])
             peer_scores = rel_data.get(RelationType.PEER, [])
 
-            def avg(lst):
+            def avg(lst: list[int]) -> float | None:
                 return sum(lst) / len(lst) if lst else None
 
             all_vals = [v for l in rel_data.values() for v in l]
@@ -285,7 +294,7 @@ class X360Service:
             "category_scores": formatted_scores,
             "text_responses": text_responses,
             "ai_evaluation": ai_evaluation,
-            "total_assignments": total_cnt.scalar(),
+            "total_assignments": total_cnt,
             "completed_assignments": comp_cnt,
         }
 

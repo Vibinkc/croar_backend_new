@@ -1,4 +1,4 @@
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,12 +16,13 @@ router = APIRouter(prefix="/candidates", tags=["Enterprise Candidates"])
 async def get_candidate(
     candidate_id: UUID,
     session: DBSessionDep,
-    current_user: Annotated[Any, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))],
-):
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+) -> Candidate:
     """Get candidate details by ID."""
-    stmt = select(Candidate).where(
-        Candidate.id == candidate_id, Candidate.company_id == current_user.company_id
-    )
+    company_id = getattr(current_user, "company_id", None)
+    stmt = select(Candidate).where(Candidate.id == candidate_id, Candidate.company_id == company_id)
     result = await session.execute(stmt)
     candidate = result.scalar_one_or_none()
 

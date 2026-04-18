@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
@@ -35,6 +36,28 @@ class EmailTemplateResponse(EmailTemplateBase):
         from_attributes = True
 
 
+class EmailLogResponse(BaseModel):
+    id: UUID
+    direction: str
+    sender_email: str | None
+    recipient_email: str
+    subject: str
+    body: str
+    status: str
+    is_read: bool
+    error_message: str | None
+    sent_at: datetime
+    message_id: str | None
+    template_id: UUID | None
+    candidate_id: UUID | None
+    application_id: UUID | None
+    automation_id: UUID | None
+    company_id: UUID | None
+
+    class Config:
+        from_attributes = True
+
+
 class EmailSendRequest(BaseModel):
     recipient_ids: list[UUID] | None = Field(None, description="List of Candidate IDs")
     recipient_emails: list[str] | None = Field(None, description="List of direct email addresses")
@@ -44,7 +67,7 @@ class EmailSendRequest(BaseModel):
     # Overrides
     subject: str | None = Field(None)
     body: str | None = Field(None)
-    custom_variables: dict | None = Field({}, description="Key-value pairs for custom variables")
+    custom_variables: dict[str, Any] | None = Field({}, description="Key-value pairs for custom variables")
 
 
 class EmailDraftRequest(BaseModel):

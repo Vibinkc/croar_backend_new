@@ -1,6 +1,7 @@
+import contextlib
 import json
 import traceback
-from typing import Annotated
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -14,16 +15,18 @@ from app.models.enterprise.job import JobRequirement, JobStatus
 router = APIRouter(prefix="/public/jobs", tags=["Public Jobs"])
 
 
-@router.get("/list")
+@router.get("/list", response_model=list[Any])
 async def list_active_jobs(
     session: DBSessionDep, company_id: UUID | None = None, company_slug: str | None = None
-):
+) -> list[JobRequirement]:
     """Publicly list active jobs for a specific company."""
     if not company_id and not company_slug:
         return []
 
-    stmt = select(JobRequirement).where(
-        JobRequirement.status == JobStatus.OPEN, JobRequirement.deleted_at == None
+    stmt = (
+        select(JobRequirement)
+        .join(JobStatus)
+        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at is None)
     )
 
     if company_id:
@@ -31,16 +34,16 @@ async def list_active_jobs(
     if company_slug:
         from app.models.enterprise.company import Company
 
-        stmt = stmt.join(Company).where(Company.slug == company_slug)
+        stmt = stmt.join(Company, JobRequirement.company_id == Company.id).where(Company.slug == company_slug)
 
     stmt = stmt.order_by(JobRequirement.created_at.desc())
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
-@router.get("/{job_id}")
-async def get_public_job(job_id: UUID, session: DBSessionDep):
+@router.get("/{job_id}", response_model=dict[str, Any])
+async def get_public_job(job_id: UUID, session: DBSessionDep) -> dict[str, Any]:
     """Get job details publicly."""
     stmt = (
         select(JobRequirement)
@@ -63,10 +66,10 @@ async def get_public_job(job_id: UUID, session: DBSessionDep):
     }
 
 
-@router.post("/{job_id}/apply")
+@router.post("/{job_id}/apply", response_model=dict[str, Any])
 async def apply_to_job(
-    request: Request, job_id: UUID, resume: Annotated[UploadFile, File()] = None, session: DBSessionDep = None
-):
+    request: Request, job_id: UUID, session: DBSessionDep, resume: Annotated[UploadFile | None, File()] = None
+) -> dict[str, Any]:
     """Allow anyone to apply to a job through a public form with AI analysis."""
     import pypdfium2 as pdfium
 
@@ -83,25 +86,20 @@ async def apply_to_job(
     try:
         form_data = await request.form()
     except Exception:
-        form_data = {}
+        form_data = {}  # type: ignore
 
-    all_fields = {}
+    all_fields: dict[str, str] = {}
     final_resume = resume
 
     if hasattr(form_data, "items"):
         for k, v in form_data.items():
             is_file = hasattr(v, "filename") and hasattr(v, "file")
             if is_file:
+                fv = cast("UploadFile", v)
                 if not final_resume:
-                    if (
-                        k == "resume"
-                        or "resume" in k.lower()
-                        or "cv" in k.lower()
-                        or "file" in k.lower()
-                        or not final_resume
-                    ):
-                        final_resume = v
-                all_fields[k] = f"FILE: {v.filename}"
+                    if k == "resume" or "resume" in k.lower() or "cv" in k.lower() or "file" in k.lower():
+                        final_resume = fv
+                all_fields[k] = f"FILE: {fv.filename}"
             else:
                 all_fields[k] = str(v)
 
@@ -129,24 +127,22 @@ async def apply_to_job(
                     text_parts.append(textpage.get_text_range())
                 resume_text = "\n".join(text_parts)
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     resume_text = content.decode("utf-8", errors="ignore")
-                except Exception:
-                    pass
         except Exception:
             traceback.print_exc()
 
     # 3. AI Analysis
-    ai_details = {}
-    ai_analysis = {}
-    ai_feedback = {}
-    ai_score = 0
+    ai_details: dict[str, Any] = {}
+    ai_analysis: dict[str, Any] = {}
+    ai_feedback: dict[str, Any] = {}
+    ai_score = 0.0
 
     if resume_text:
         try:
             prompt = f"""
-            You are an expert recruiter and ATS system. 
-            
+            You are an expert recruiter and ATS system.
+
             TASK 1: EXTRACT CANDIDATE DETAILS
             Extract the following from the RESUME TEXT:
             - Full Name (if not clearly stated, use 'Candidate')
@@ -162,14 +158,14 @@ async def apply_to_job(
             - Fit Reason: Why are they a good fit? (Be specific about matching skills/experience).
             - Not Fit Reason / Gap Analysis: What is missing or weak? (Be specific).
             - Highlights: 3-4 bullet points of their best qualifications.
-            
+
             JOB TITLE: {job.title}
             JOB DESCRIPTION:
             {job.description}
-            
+
             RESUME TEXT:
             {resume_text[:12000]}
-            
+
             OUTPUT JSON FORMAT:
             {{
                 "candidate_details": {{
@@ -191,24 +187,24 @@ async def apply_to_job(
             """
 
             ai_response_str = await analyze_text_with_llm(prompt)
-            data = json.loads(ai_response_str)
+            data_ai = json.loads(ai_response_str)
 
-            ai_details = data.get("candidate_details", {})
-            ai_analysis = data.get("analysis", {})
+            ai_details = data_ai.get("candidate_details", {})
+            ai_analysis = data_ai.get("analysis", {})
 
             ai_feedback = ai_analysis
-            ai_score = ai_analysis.get("score", 0)
+            ai_score = float(ai_analysis.get("score", 0))
 
             if (
                 not full_name_form
                 and ai_details.get("full_name")
                 and ai_details.get("full_name") != "Candidate"
             ):
-                full_name_form = ai_details.get("full_name")
+                full_name_form = str(ai_details.get("full_name"))
             if not email_form and ai_details.get("email"):
-                email_form = ai_details.get("email")
+                email_form = str(ai_details.get("email"))
             if not skills_form and ai_details.get("skills"):
-                skills_form = ", ".join(ai_details.get("skills"))
+                skills_form = ", ".join(cast("list[str]", ai_details.get("skills")))
 
         except Exception:
             traceback.print_exc()
@@ -217,13 +213,17 @@ async def apply_to_job(
         raise HTTPException(status_code=400, detail="Email could not be extracted from form or resume")
 
     # 4. Check if candidate exists or create new
-    stmt = select(Candidate).where(Candidate.email == email_form)
-    result = await session.execute(stmt)
-    candidate = result.scalar_one_or_none()
+    cand_stmt = select(Candidate).where(Candidate.email == email_form)
+    cand_res = await session.execute(cand_stmt)
+    candidate = cand_res.scalar_one_or_none()
 
-    skills_list = [s.strip() for s in skills_form.split(",")] if skills_form else ai_details.get("skills", [])
+    skills_list = (
+        [s.strip() for s in skills_form.split(",")]
+        if skills_form
+        else cast("list[str]", ai_details.get("skills", []))
+    )
 
-    candidate_updates = {
+    candidate_updates: dict[str, Any] = {
         "full_name": full_name_form or "Candidate",
         "email": email_form,
         "skills": skills_list,
@@ -243,10 +243,11 @@ async def apply_to_job(
         for k, v in candidate_updates.items():
             if v is not None:
                 setattr(candidate, k, v)
-        if candidate.parsed_data:
-            candidate.parsed_data.update(candidate_updates["parsed_data"] or {})
-        else:
-            candidate.parsed_data = candidate_updates["parsed_data"]
+
+        current_parsed = cast("dict[str, Any]", candidate.parsed_data) or {}
+        new_parsed = cast("dict[str, Any]", candidate_updates["parsed_data"]) or {}
+        current_parsed.update(new_parsed)
+        candidate.parsed_data = current_parsed
 
         session.add(candidate)
         await session.flush()
@@ -259,7 +260,10 @@ async def apply_to_job(
     existing_app = res_app.scalar_one_or_none()
 
     if existing_app:
-        return {"message": "You have already applied to this position", "application_id": existing_app.id}
+        return {
+            "message": "You have already applied to this position",
+            "application_id": str(existing_app.id),
+        }
 
     application = CandidateApplication(
         candidate_id=candidate.id,
@@ -269,7 +273,7 @@ async def apply_to_job(
         ai_match_score=ai_score,
         ai_feedback=ai_feedback,
         company_id=job.company_id,
-        applied_at=func.now(),
+        applied_at=cast("Any", func.now()),
     )
     session.add(application)
     await session.commit()
@@ -278,8 +282,6 @@ async def apply_to_job(
     # 6. Trigger Mail Automation (Stage 1 is initial application)
     from app.services.enterprise.automation_service import trigger_automations
 
-    # We can't easily get BackgroundTasks here since it's not in the path params,
-    # but we can import it or just let the service handle it (it already has a fallback)
     await trigger_automations(application.id, 1, session)
 
-    return {"message": "Application submitted successfully", "application_id": application.id}
+    return {"message": "Application submitted successfully", "application_id": str(application.id)}

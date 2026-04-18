@@ -20,7 +20,7 @@ class JobStatus(EnterpriseBase):
 class JobRequirement(EnterpriseBase):
     __tablename__ = "job_requirements"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
@@ -44,11 +44,11 @@ class JobRequirement(EnterpriseBase):
 
     notice_period_max: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    application_fields: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
-    workflow_stages: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    application_fields: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
+    workflow_stages: Mapped[list[dict[str, object]] | None] = mapped_column(JSONB, nullable=True)
 
     status_id: Mapped[int] = mapped_column(SmallInteger, ForeignKey("job_statuses.id"), nullable=False)
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
@@ -60,6 +60,7 @@ class JobRequirement(EnterpriseBase):
 
     status = relationship("JobStatus")
     company = relationship("Company")
+    postings = relationship("JobPosting", back_populates="job_requirement", cascade="all, delete-orphan")
     assessment_automations = relationship(
         "AssessmentAutomation", back_populates="job", cascade="all, delete-orphan"
     )
@@ -72,11 +73,11 @@ class JobRequirement(EnterpriseBase):
 class JobPosting(EnterpriseBase):
     __tablename__ = "job_postings"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    job_requirement_id: Mapped[str] = mapped_column(
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False
     )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -89,4 +90,4 @@ class JobPosting(EnterpriseBase):
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
-    job_requirement = relationship("JobRequirement", backref="postings")
+    job_requirement = relationship("JobRequirement", back_populates="postings")

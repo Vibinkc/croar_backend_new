@@ -1,3 +1,5 @@
+from typing import cast
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,6 +37,7 @@ class Settings(BaseSettings):
 
     # External APIs
     openai_api_key: str | None = Field(None, validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field("gpt-4o-mini", validation_alias="OPENAI_MODEL")
 
     # Mail Configuration
     mailer_sender_email: str | None = Field(None, validation_alias="MAILER_SENDER_EMAIL")
@@ -67,7 +70,7 @@ class Settings(BaseSettings):
             import json
 
             try:
-                return json.loads(v)
+                return cast("list[str]", json.loads(v))
             except Exception:
                 pass
         return [i.strip() for i in v.split(",") if i.strip()]
@@ -78,5 +81,5 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def get_settings():
+def get_settings() -> Settings:
     return settings

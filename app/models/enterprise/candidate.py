@@ -20,11 +20,11 @@ class ApplicationStatus(EnterpriseBase):
 class Candidate(EnterpriseBase):
     __tablename__ = "candidates"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    user_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -40,9 +40,9 @@ class Candidate(EnterpriseBase):
     skills: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=True)
     resume_file_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     source_platform: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    parsed_data: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    parsed_data: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
@@ -56,14 +56,14 @@ class Candidate(EnterpriseBase):
 class CandidateApplication(EnterpriseBase):
     __tablename__ = "candidate_applications"
 
-    id: Mapped[str] = mapped_column(
+    id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
 
-    candidate_id: Mapped[str] = mapped_column(
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("candidates.id", ondelete="CASCADE"), nullable=False
     )
-    job_requirement_id: Mapped[str] = mapped_column(
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False
     )
     status_id: Mapped[int] = mapped_column(
@@ -75,11 +75,11 @@ class CandidateApplication(EnterpriseBase):
     experience_fit: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     ranking_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    ai_feedback: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    ai_feedback: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     current_stage: Mapped[int] = mapped_column(Integer, default=1)
     applied_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
-    company_id: Mapped[str | None] = mapped_column(
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
