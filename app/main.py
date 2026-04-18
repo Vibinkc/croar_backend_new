@@ -79,7 +79,7 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    return {"message": "Welcome to Croar API", "version": "1.0.0"}
+    return {"message": "Welcome to Academik API", "version": "1.0.0"}
 
 
 @app.get("/health")
