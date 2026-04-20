@@ -58,12 +58,20 @@ class ProjectTaskUpdate(BaseModel):
     employee_id: UUID | None = None
 
 
+class ProjectSummary(BaseModel):
+    id: UUID
+    name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ProjectTaskOut(ProjectTaskBase):
     id: UUID
     project_id: UUID
     created_at: datetime
     updated_at: datetime
     assignee: EmployeeSummary | None = None
+    project: ProjectSummary | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

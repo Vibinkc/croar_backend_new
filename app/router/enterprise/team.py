@@ -30,7 +30,7 @@ async def list_org_roles(
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id == tenant_id, not Role.is_system)
+        .where(Role.tenant_id == tenant_id, Role.is_system == False)
         .order_by(Role.role_rank.asc())
     )
 
@@ -45,7 +45,7 @@ async def list_available_permissions(
     """List all permissions that can be assigned to roles."""
     tenant_id = getattr(current_user, "company_id", None)
     stmt = select(Permission).where(
-        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id is None)),
+        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id == None)),
         Permission.module != ModuleScope.platform,
     )
     result = await session.execute(stmt)
@@ -111,7 +111,7 @@ async def update_org_role(
         .where(
             Role.id == role_id,
             Role.tenant_id == tenant_id,
-            not Role.is_system,  # Cannot edit system roles
+            Role.is_system == False,  # Cannot edit system roles
         )
     )
     result = await session.execute(stmt)
@@ -148,7 +148,7 @@ async def delete_org_role(
     stmt = select(Role).where(
         Role.id == role_id,
         Role.tenant_id == tenant_id,
-        not Role.is_system,  # Cannot delete system roles
+        Role.is_system == False,  # Cannot delete system roles
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()

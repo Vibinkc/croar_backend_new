@@ -147,7 +147,7 @@ async def create_template(
     stmt = (
         select(X360AssessmentTemplate)
         .where(X360AssessmentTemplate.id == new_tpl.id)
-        .options(selectinload(X360AssessmentTemplate.questions))
+        .options(selectinload(X360AssessmentTemplate.questions).selectinload(X360TemplateQuestion.question))
     )
     res = await db.execute(stmt)
     return res.scalar_one()
@@ -161,7 +161,7 @@ async def list_templates(
     stmt = (
         select(X360AssessmentTemplate)
         .where(X360AssessmentTemplate.company_id == getattr(current_user, "company_id", None))
-        .options(selectinload(X360AssessmentTemplate.questions))
+        .options(selectinload(X360AssessmentTemplate.questions).selectinload(X360TemplateQuestion.question))
         .order_by(X360AssessmentTemplate.created_at.desc())
     )
     res = await db.execute(stmt)
@@ -205,7 +205,7 @@ async def update_template(
     stmt_reload = (
         select(X360AssessmentTemplate)
         .where(X360AssessmentTemplate.id == template_id)
-        .options(selectinload(X360AssessmentTemplate.questions))
+        .options(selectinload(X360AssessmentTemplate.questions).selectinload(X360TemplateQuestion.question))
     )
     res_reload = await db.execute(stmt_reload)
     return res_reload.scalar_one()
@@ -359,24 +359,45 @@ async def get_dashboard_stats(
     res_cycles = await db.execute(cycles_stmt)
     active_cycles = res_cycles.scalar() or 0
 
-    # 2. Total Pending Assessments
-    pending_stmt = select(func.count(X360AssessmentAssignment.id)).where(
-        and_(
-            X360AssessmentAssignment.company_id == company_id,
-            X360AssessmentAssignment.status == AssignmentStatus.PENDING,
-        )
-    )
-    res_pending = await db.execute(pending_stmt)
-    pending_assessments = res_pending.scalar() or 0
+    # 2. Total Pending My Assessments
+    from app.models.enterprise.employee import Employee
 
-    # 3. Participation Rate (Optional - setting placeholder)
-    # 4. Critical Feedback Alerts (Placeholder)
+    email = getattr(current_user, "email", None)
+    emp_stmt = select(Employee.id).where(Employee.email == email)
+    emp_res = await db.execute(emp_stmt)
+    employee_id = emp_res.scalar_one_or_none()
+
+    pending_my = 0
+    completed_my = 0
+    if employee_id:
+        pending_stmt = select(func.count(X360AssessmentAssignment.id)).where(
+            and_(
+                X360AssessmentAssignment.rater_id == employee_id,
+                X360AssessmentAssignment.status == AssignmentStatus.PENDING,
+            )
+        )
+        res_p = await db.execute(pending_stmt)
+        pending_my = res_p.scalar() or 0
+
+        completed_stmt = select(func.count(X360AssessmentAssignment.id)).where(
+            and_(
+                X360AssessmentAssignment.rater_id == employee_id,
+                X360AssessmentAssignment.status == AssignmentStatus.COMPLETED,
+            )
+        )
+        res_c = await db.execute(completed_stmt)
+        completed_my = res_c.scalar() or 0
+
+    # 4. Total Participants
+    part_stmt = select(func.count(Employee.id)).where(Employee.company_id == company_id)
+    res_part = await db.execute(part_stmt)
+    total_participants = res_part.scalar() or 0
 
     return {
         "active_cycles": int(active_cycles),
-        "pending_assessments": int(pending_assessments),
-        "participation_rate": 85,  # Placeholder
-        "critical_alerts": 2,  # Placeholder
+        "pending_my_assignments": int(pending_my),
+        "completed_my_assignments": int(completed_my),
+        "total_participants": int(total_participants),
     }
 
 
@@ -418,7 +439,11 @@ async def get_my_assessments(
             X360AssessmentAssignment.rater_id == employee.id,
             X360AssessmentAssignment.status == AssignmentStatus.PENDING,
         )
-        .options(selectinload(X360AssessmentAssignment.ratee), selectinload(X360AssessmentAssignment.cycle))
+        .options(
+            selectinload(X360AssessmentAssignment.ratee),
+            selectinload(X360AssessmentAssignment.rater),
+            selectinload(X360AssessmentAssignment.cycle),
+        )
     )
     res = await db.execute(stmt)
     return list(res.scalars().all())
@@ -440,7 +465,8 @@ async def get_assessment_details(
         .options(
             selectinload(X360AssessmentAssignment.cycle)
             .selectinload(X360AssessmentCycle.template)
-            .selectinload(X360AssessmentTemplate.questions),
+            .selectinload(X360AssessmentTemplate.questions)
+            .selectinload(X360TemplateQuestion.question),
             selectinload(X360AssessmentAssignment.ratee),
         )
     )
@@ -452,7 +478,14 @@ async def get_assessment_details(
     questions = []
     if assignment.cycle and assignment.cycle.template:
         for q in assignment.cycle.template.questions:
-            questions.append({"id": q.id, "text": q.text, "type": q.type, "category": q.category})
+            questions.append(
+                {
+                    "id": q.question.id,
+                    "text": q.question.text,
+                    "type": q.question.type,
+                    "category": q.question.category,
+                }
+            )
 
     return {
         "id": assignment.id,
@@ -518,7 +551,8 @@ async def get_portal_assessment_details(assignment_id: UUID, db: DBSessionDep) -
         .options(
             selectinload(X360AssessmentAssignment.cycle)
             .selectinload(X360AssessmentCycle.template)
-            .selectinload(X360AssessmentTemplate.questions),
+            .selectinload(X360AssessmentTemplate.questions)
+            .selectinload(X360TemplateQuestion.question),
             selectinload(X360AssessmentAssignment.ratee),
         )
     )
@@ -530,7 +564,14 @@ async def get_portal_assessment_details(assignment_id: UUID, db: DBSessionDep) -
     questions = []
     if assignment.cycle and assignment.cycle.template:
         for q in assignment.cycle.template.questions:
-            questions.append({"id": q.id, "text": q.text, "type": q.type, "category": q.category})
+            questions.append(
+                {
+                    "id": q.question.id,
+                    "text": q.question.text,
+                    "type": q.question.type,
+                    "category": q.question.category,
+                }
+            )
 
     return {
         "id": assignment.id,

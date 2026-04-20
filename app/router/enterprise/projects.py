@@ -33,8 +33,19 @@ async def create_project(
     )
     db.add(new_project)
     await db.commit()
-    await db.refresh(new_project)
-    return new_project
+
+    # Reload with relations
+    stmt = (
+        select(Project)
+        .where(Project.id == new_project.id)
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
+    )
+    res = await db.execute(stmt)
+    return res.scalar_one()
 
 
 @router.get("/", response_model=list[ProjectSchema])
@@ -42,7 +53,15 @@ async def list_projects(
     db: DBSessionDep,
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.read))],
 ) -> list[Project]:
-    stmt = select(Project).where(Project.company_id == getattr(current_user, "company_id", None))
+    stmt = (
+        select(Project)
+        .where(Project.company_id == getattr(current_user, "company_id", None))
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
+    )
     res = await db.execute(stmt)
     return list(res.scalars().all())
 
@@ -56,7 +75,11 @@ async def get_project(
     stmt = (
         select(Project)
         .where(Project.id == project_id, Project.company_id == getattr(current_user, "company_id", None))
-        .options(selectinload(Project.tasks), selectinload(Project.members))
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
     )
     res = await db.execute(stmt)
     project = res.scalar_one_or_none()
@@ -87,8 +110,19 @@ async def update_project(
         setattr(project, key, value)
 
     await db.commit()
-    await db.refresh(project)
-    return project
+
+    # Reload with relations
+    stmt_reload = (
+        select(Project)
+        .where(Project.id == project.id)
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
 
 
 # Task Management
@@ -121,8 +155,15 @@ async def create_project_task(
     )
     db.add(new_task)
     await db.commit()
-    await db.refresh(new_task)
-    return new_task
+
+    # Reload with relation
+    stmt_reload = (
+        select(ProjectTask)
+        .where(ProjectTask.id == new_task.id)
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
 
 
 @router.get("/{project_id}/tasks", response_model=list[ProjectTaskSchema])
@@ -131,9 +172,27 @@ async def list_project_tasks(
     db: DBSessionDep,
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.read))],
 ) -> list[ProjectTask]:
-    stmt = select(ProjectTask).where(
-        ProjectTask.project_id == project_id,
-        ProjectTask.company_id == getattr(current_user, "company_id", None),
+    stmt = (
+        select(ProjectTask)
+        .where(
+            ProjectTask.project_id == project_id,
+            ProjectTask.company_id == getattr(current_user, "company_id", None),
+        )
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
+    )
+    res = await db.execute(stmt)
+    return list(res.scalars().all())
+
+
+@router.get("/tasks/all", response_model=list[ProjectTaskSchema])
+async def list_all_company_tasks(
+    db: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.read))],
+) -> list[ProjectTask]:
+    stmt = (
+        select(ProjectTask)
+        .where(ProjectTask.company_id == getattr(current_user, "company_id", None))
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
     )
     res = await db.execute(stmt)
     return list(res.scalars().all())
@@ -153,8 +212,13 @@ async def list_my_tasks(
     if not emp_id:
         return []
 
-    stmt = select(ProjectTask).where(
-        ProjectTask.employee_id == emp_id, ProjectTask.company_id == getattr(current_user, "company_id", None)
+    stmt = (
+        select(ProjectTask)
+        .where(
+            ProjectTask.employee_id == emp_id,
+            ProjectTask.company_id == getattr(current_user, "company_id", None),
+        )
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
     )
     res = await db.execute(stmt)
     return list(res.scalars().all())
@@ -183,12 +247,17 @@ async def update_project_task(
 
     if task.status == "Done" or task.column == "Done":
         task.status = "Done"
-        # We don't have a completed_at on ProjectTask yet, but if we did, we'd set it here.
-        # task.completed_at = cast(Any, datetime.now())
 
     await db.commit()
-    await db.refresh(task)
-    return task
+
+    # Reload with relation
+    stmt_reload = (
+        select(ProjectTask)
+        .where(ProjectTask.id == task.id)
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
 
 
 @router.patch("/tasks/{task_id}/move", response_model=ProjectTaskSchema)
@@ -213,5 +282,12 @@ async def move_task(
         task.status = "Done"
 
     await db.commit()
-    await db.refresh(task)
-    return task
+
+    # Reload with relation
+    stmt_reload = (
+        select(ProjectTask)
+        .where(ProjectTask.id == task.id)
+        .options(selectinload(ProjectTask.assignee), selectinload(ProjectTask.project))
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
