@@ -8,7 +8,13 @@ from sqlalchemy.orm import selectinload
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.project import Project, ProjectTask
 from app.models.shared.constants import ModuleScope, PermissionAction
-from app.schemas.enterprise.projects import ProjectCreate, ProjectTaskCreate, ProjectTaskUpdate, ProjectUpdate
+from app.schemas.enterprise.projects import (
+    ProjectCreate,
+    ProjectMemberAdd,
+    ProjectTaskCreate,
+    ProjectTaskUpdate,
+    ProjectUpdate,
+)
 from app.schemas.enterprise.projects import ProjectOut as ProjectSchema
 from app.schemas.enterprise.projects import ProjectTaskOut as ProjectTaskSchema
 
@@ -112,6 +118,110 @@ async def update_project(
     await db.commit()
 
     # Reload with relations
+    stmt_reload = (
+        select(Project)
+        .where(Project.id == project.id)
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
+
+
+@router.delete("/{project_id}", status_code=204)
+async def delete_project(
+    project_id: UUID,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.delete))
+    ],
+) -> None:
+    stmt = select(Project).where(
+        Project.id == project_id, Project.company_id == getattr(current_user, "company_id", None)
+    )
+    res = await db.execute(stmt)
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    await db.delete(project)
+    await db.commit()
+    return
+
+
+@router.post("/{project_id}/members", response_model=ProjectSchema)
+async def add_project_member(
+    project_id: UUID,
+    request: ProjectMemberAdd,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.update))
+    ],
+) -> Project:
+    from app.models.enterprise.employee import Employee
+
+    stmt = (
+        select(Project)
+        .where(Project.id == project_id, Project.company_id == getattr(current_user, "company_id", None))
+        .options(selectinload(Project.members))
+    )
+    res = await db.execute(stmt)
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    emp_stmt = select(Employee).where(
+        Employee.id == request.employee_id, Employee.company_id == project.company_id
+    )
+    emp_res = await db.execute(emp_stmt)
+    employee = emp_res.scalar_one_or_none()
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if employee not in project.members:
+        project.members.append(employee)
+        await db.commit()
+
+    # Reload with all relations
+    stmt_reload = (
+        select(Project)
+        .where(Project.id == project.id)
+        .options(
+            selectinload(Project.tasks).selectinload(ProjectTask.assignee),
+            selectinload(Project.tasks).selectinload(ProjectTask.project),
+            selectinload(Project.members),
+        )
+    )
+    res_reload = await db.execute(stmt_reload)
+    return res_reload.scalar_one()
+
+
+@router.delete("/{project_id}/members/{employee_id}", response_model=ProjectSchema)
+async def remove_project_member(
+    project_id: UUID,
+    employee_id: UUID,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.update))
+    ],
+) -> Project:
+    stmt = (
+        select(Project)
+        .where(Project.id == project_id, Project.company_id == getattr(current_user, "company_id", None))
+        .options(selectinload(Project.members))
+    )
+    res = await db.execute(stmt)
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project.members = [m for m in project.members if m.id != employee_id]
+    await db.commit()
+
+    # Reload with all relations
     stmt_reload = (
         select(Project)
         .where(Project.id == project.id)
