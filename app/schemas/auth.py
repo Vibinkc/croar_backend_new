@@ -63,3 +63,17 @@ class UserInTeam(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     roles: list[RoleSchema] = []
+
+
+class EnterpriseSignUpRequest(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    company_name: str
+
+
+class EnterpriseSignUpResponse(BaseModel):
+    message: str
+    user_id: UUID
+    company_id: UUID

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from .applications import router as applications_router
 from .assessment import router as assessment_router
 from .assessment_templates import router as assessment_templates_router
+from .audio import router as audio_router
 from .automation import router as automation_router
 from .candidate_assessment import router as candidate_assessment_router
 from .candidate_interview import router as candidate_interview_router
@@ -22,6 +23,8 @@ from .projects import router as projects_router
 from .public import router as public_router
 from .public_onboarding import router as public_onboarding_router
 from .simulation import router as simulation_router
+from .sourcing import router as sourcing_router
+from .sourcing_chat import router as sourcing_chat_router
 from .survey import router as survey_router
 from .team import router as team_router
 from .upload import router as upload_router
@@ -54,3 +57,6 @@ router.include_router(x360_router)
 router.include_router(survey_router)
 router.include_router(simulation_router, prefix="/simulations", tags=["Simulations"])
 router.include_router(team_router)
+router.include_router(sourcing_router)
+router.include_router(sourcing_chat_router)
+router.include_router(audio_router)

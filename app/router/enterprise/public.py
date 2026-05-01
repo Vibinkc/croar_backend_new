@@ -281,6 +281,23 @@ async def apply_to_job(
     await session.commit()
     await session.refresh(application)
 
+    # 5.1. Update Shortlist Status if applicable
+    try:
+        import os
+
+        from pymongo import MongoClient
+
+        MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+        MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
+        client = MongoClient(MONGO_URI)
+        db = client[MONGO_DB_NAME]
+        coll = db["project_shortlists"]
+
+        # Match by job_id and email
+        coll.update_one({"job_id": str(job.id), "profile.email": email_form}, {"$set": {"status": "applied"}})
+    except Exception as e:
+        print(f"Error updating shortlist status: {e}")
+
     # 6. Trigger Mail Automation (Stage 1 is initial application)
     from app.services.enterprise.automation_service import trigger_automations
 

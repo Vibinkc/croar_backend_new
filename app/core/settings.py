@@ -39,6 +39,24 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(None, validation_alias="OPENAI_API_KEY")
     openai_model: str = Field("gpt-4o-mini", validation_alias="OPENAI_MODEL")
 
+    # Google SSO
+    google_client_id: str | None = Field(None, validation_alias="GOOGLE_CLIENT_ID")
+    google_client_secret: str | None = Field(None, validation_alias="GOOGLE_CLIENT_SECRET")
+
+    # Google Indexing API (for Google Jobs)
+    google_service_account_json: str | None = Field(None, validation_alias="GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    # Microsoft SSO
+    ms_client_id: str | None = Field(None, validation_alias="MS_CLIENT_ID")
+    ms_client_secret: str | None = Field(None, validation_alias="MS_CLIENT_SECRET")
+    ms_tenant_id: str = Field("common", validation_alias="MS_TENANT_ID")
+
+    # Product Hunt API
+    producthunt_developer_token: str | None = Field(None, validation_alias="PRODUCTHUNT_DEVELOPER_TOKEN")
+
+    # TwitterAPI.io (third-party Twitter/X data API)
+    twitterapi_io_key: str | None = Field(None, validation_alias="TWITTERAPI_IO_KEY")
+
     # Mail Configuration
     mailer_sender_email: str | None = Field(None, validation_alias="MAILER_SENDER_EMAIL")
     smtp_address: str = Field("smtp.gmail.com", validation_alias="SMTP_ADDRESS")
@@ -57,7 +75,7 @@ class Settings(BaseSettings):
 
     # CORS Settings
     cors_origins: str = Field(
-        "http://localhost:3000,http://3.94.202.48,http://3.94.202.48:3000,https://app.croar.co,https://api.croar.co",
+        "http://localhost:3000,http://100.31.6.242,http://100.31.6.242:3000,http://3.94.202.48,http://3.94.202.48:3000,https://app.croar.co,https://api.croar.co",
         validation_alias="CORS_ORIGINS",
     )
 
@@ -79,6 +97,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+print(f"LOADED GOOGLE_CLIENT_ID: {settings.google_client_id}")
 
 
 def get_settings() -> Settings:

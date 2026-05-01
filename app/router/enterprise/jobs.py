@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.ai import generate_job_description_ai
 from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.core.settings import settings
 from app.models.enterprise.assessment import AssessmentAutomation
 from app.models.enterprise.candidate import CandidateApplication
 from app.models.enterprise.communication import MailAutomation
@@ -24,6 +25,7 @@ from app.schemas.enterprise.jobs import (
     PublishJobRequest,
     WorkflowGenerationRequest,
 )
+from app.services.enterprise.google_jobs import google_jobs_service
 from app.services.enterprise.hiring_agent import hiring_agent_service
 
 router = APIRouter(prefix="/jobs", tags=["Enterprise Jobs"])
@@ -278,6 +280,11 @@ async def delete_job(
     # 2. Soft-delete the job requirement
     job.deleted_at = cast("Any", datetime.now())
     await session.commit()
+
+    # 3. Notify Google Jobs of deletion
+    job_url = f"{settings.frontend_url}/jobs/{job_id}"
+    await google_jobs_service.notify_job_update(job_url, update_type="URL_DELETED")
+
     return {"message": "Job and related automations deleted successfully"}
 
 
@@ -318,6 +325,12 @@ async def publish_job(
             session.add(new_posting)
 
     await session.commit()
+
+    # Notify Google Jobs if selected
+    if "Google Jobs" in request.platforms:
+        job_url = f"{settings.frontend_url}/jobs/{job_id}"
+        await google_jobs_service.notify_job_update(job_url, update_type="URL_UPDATED")
+
     return {"message": f"Job published to {len(request.platforms)} platforms"}
 
 

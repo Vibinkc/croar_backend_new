@@ -85,3 +85,14 @@ async def root() -> dict[str, str]:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# Alias for sourcing search to prevent 404s from legacy paths
+from app.router.enterprise.sourcing import search_profiles as sourcing_search
+
+
+@app.get("/search")
+async def legacy_search(
+    q: str, location: str = None, platform: str = "github", page: int = 1, page_size: int = 15
+):
+    return await sourcing_search(q, location, platform, page, page_size)
