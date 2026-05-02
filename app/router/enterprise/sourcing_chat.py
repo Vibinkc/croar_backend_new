@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from pymongo import MongoClient
 from sqlalchemy import select
@@ -145,6 +145,7 @@ async def shortlist_candidate(
         "job_id": data.get("job_id"),
         "job_title": data.get("job_title"),
         "profile": data.get("profile"),
+        "source": data.get("source", "AI Sourcing"),
         "company_id": company_id,
         "shortlisted_at": datetime.now().isoformat(),
         "status": "Shortlisted",
@@ -159,7 +160,11 @@ async def shortlist_candidate(
         {"$set": shortlist_entry},
         upsert=True,
     )
-    return {"status": "success", "shortlist_id": shortlist_entry["shortlist_id"]}
+    return {
+        "status": "success",
+        "shortlist_id": shortlist_entry["shortlist_id"],
+        "source": shortlist_entry["source"],
+    }
 
 
 @router.get("/shortlisted")
@@ -195,6 +200,103 @@ async def remove_shortlisted_candidate(shortlist_id: str):
     return {"status": "deleted"}
 
 
+@router.post("/shortlisted/{shortlist_id}/move")
+async def move_shortlisted_candidate(
+    shortlist_id: str,
+    data: dict,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.update))
+    ],
+):
+    """Move a shortlisted candidate to a different job requirement."""
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB_NAME]
+    coll = db["project_shortlists"]
+
+    target_job_id = data.get("job_id")
+    target_job_title = data.get("job_title")
+
+    if not target_job_id or not target_job_title:
+        return {"error": "Target job details required"}
+
+    # Update the shortlist entry
+    result = coll.update_one(
+        {"shortlist_id": shortlist_id}, {"$set": {"job_id": target_job_id, "job_title": target_job_title}}
+    )
+
+    if result.matched_count == 0:
+        return {"error": "Shortlist entry not found"}
+
+    return {"status": "success", "message": f"Moved to {target_job_title}"}
+
+
+@router.get("/engagement/{shortlist_id}")
+async def get_engagement_details(shortlist_id: str):
+    """Fetch job and candidate details for the engagement form (Public)."""
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB_NAME]
+    coll = db["project_shortlists"]
+
+    shortlist = coll.find_one({"shortlist_id": shortlist_id}, {"_id": 0})
+    if not shortlist:
+        return {"error": "Engagement not found"}
+
+    return shortlist
+
+
+class CandidateInterestRequest(BaseModel):
+    previous_company: str
+    current_salary: str
+    expected_salary: str
+    notice_period: str
+    total_experience: str
+    relevant_experience: str
+    work_preference: str  # Remote, Hybrid, On-site
+    top_skills: str
+    reason_for_change: str | None = None
+    other_details: dict[str, Any] | None = None
+
+
+@router.post("/engagement/{shortlist_id}/interest")
+async def save_candidate_interest(shortlist_id: str, data: CandidateInterestRequest):
+    """Save candidate basic info to a new master collection and update shortlist status."""
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB_NAME]
+
+    # 1. Update the specific Shortlist entry
+    shortlist_coll = db["project_shortlists"]
+    shortlist = shortlist_coll.find_one({"shortlist_id": shortlist_id})
+
+    if not shortlist:
+        return {"error": "Shortlist entry not found"}
+
+    interest_data = data.dict()
+    interest_data["interest_filled_at"] = datetime.now().isoformat()
+
+    shortlist_coll.update_one(
+        {"shortlist_id": shortlist_id},
+        {"$set": {"candidate_interest": interest_data, "status": "Interest Expressed"}},
+    )
+
+    # 2. Save/Update to the NEW Master Collection: candidate_engagement_data
+    # We use the email as the unique identifier for the candidate's master profile
+    engagement_coll = db["candidate_engagement_data"]
+    candidate_email = shortlist.get("profile", {}).get("email")
+
+    if candidate_email:
+        master_data = {
+            "email": candidate_email,
+            "full_name": shortlist.get("profile", {}).get("full_name"),
+            "basic_info": interest_data,
+            "last_updated": datetime.now().isoformat(),
+            "profile_url": shortlist.get("profile", {}).get("profile_url"),
+        }
+
+        engagement_coll.update_one({"email": candidate_email}, {"$set": master_data}, upsert=True)
+
+    return {"status": "success", "message": "Interest saved and profile enriched"}
+
+
 class SendJDRequest(BaseModel):
     email: str
     full_name: str
@@ -224,10 +326,19 @@ async def send_job_description(
     company_name = company.name if company else "Our Company"
     company_logo = company.logo_url if company else None
 
-    # Generate public application link with pre-filled email
-    app_link = (
-        f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/jobs/{request.job_id}?email={request.email}"
-    )
+    from app.core.settings import settings
+
+    # Generate public engagement link
+    # Find the shortlist entry to get the shortlist_id
+    client = MongoClient(MONGO_URI)
+    db = client[MONGO_DB_NAME]
+    coll = db["project_shortlists"]
+
+    shortlist = coll.find_one({"job_id": request.job_id, "profile.email": request.email}, {"shortlist_id": 1})
+    shortlist_id = shortlist.get("shortlist_id") if shortlist else "unknown"
+
+    app_link = f"{settings.frontend_url}/engagement/{shortlist_id}"
+    print(f"DEBUG: Generated engagement link: {app_link}")
 
     subject = f"Opportunity: {request.job_title} at {company_name}"
 

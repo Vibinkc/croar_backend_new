@@ -412,6 +412,7 @@ async def send_emails(
             "{{recruiter_name}}": str(recruiter_name),
             "{{company_address}}": str(company_address),
             "{{company_logo}}": str(company_logo or ""),
+            "{{frontend_url}}": str(_settings.frontend_url),
         }
 
         if request.custom_variables:

@@ -32,6 +32,7 @@ class ApplicationResponse(BaseModel):
     job_requirement_id: UUID
     status_id: int
     current_stage: int
+    source: str | None = None
     ai_match_score: float | None
     ai_feedback: dict[str, Any] | None = None
     assessment_score: int | None = None

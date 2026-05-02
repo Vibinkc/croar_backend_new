@@ -98,6 +98,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 print(f"LOADED GOOGLE_CLIENT_ID: {settings.google_client_id}")
+print(f"LOADED FRONTEND_URL: {settings.frontend_url}")
 
 
 def get_settings() -> Settings:

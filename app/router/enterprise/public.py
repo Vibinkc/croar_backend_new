@@ -267,11 +267,35 @@ async def apply_to_job(
             "application_id": str(existing_app.id),
         }
 
+    # Determine original source from MongoDB shortlist if possible
+    original_source = all_fields.get("source")
+    if not original_source:
+        try:
+            import os
+
+            from pymongo import MongoClient
+
+            MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+            MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
+            client = MongoClient(MONGO_URI)
+            db = client[MONGO_DB_NAME]
+            shortlist = db["project_shortlists"].find_one(
+                {"job_id": str(job.id), "profile.email": email_form}
+            )
+            if shortlist and shortlist.get("source"):
+                original_source = shortlist.get("source")
+        except Exception:
+            pass
+
+    if not original_source:
+        original_source = "Job Portal"
+
     application = CandidateApplication(
         candidate_id=candidate.id,
         job_requirement_id=job.id,
         status_id=1,
         current_stage=1,
+        source=original_source,
         ai_match_score=ai_score,
         ai_feedback=ai_feedback,
         company_id=job.company_id,

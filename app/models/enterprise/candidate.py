@@ -77,6 +77,7 @@ class CandidateApplication(EnterpriseBase):
 
     ai_feedback: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     current_stage: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str | None] = mapped_column(String(50), nullable=True)
     applied_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
     company_id: Mapped[uuid.UUID | None] = mapped_column(
