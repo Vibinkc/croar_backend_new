@@ -78,7 +78,7 @@ async def create_job(
     # Eager load for response
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.postings))
+        .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
         .where(JobRequirement.id == new_job.id)
     )
     result = await session.execute(stmt)
