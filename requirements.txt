@@ -159,6 +159,9 @@ nbconvert==7.16.6
 nbformat==5.10.4
 
 openai==2.30.0
+langchain-openai
+langchain-core
+langgraph
 
 packaging==25.0
 
