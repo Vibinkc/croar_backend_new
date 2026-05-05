@@ -18,6 +18,7 @@ from app.models.enterprise import (
     OnboardingAutomation, Onboarding,
     Employee, Department
 )
+from app.models.shared.agents import AgentAction, ApprovalRequest
 from app.models.shared.super_admin import SuperAdmin
 from app.models.shared.auth import Role, Permission, role_permissions, user_roles
 from app.models.user import User as DefaultUser

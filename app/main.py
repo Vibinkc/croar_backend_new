@@ -22,7 +22,7 @@ from app.core.settings import get_settings
 from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
-from app.router import auth, enterprise, platform
+from app.router import agents, auth, enterprise, platform
 
 # Setup Logging
 setup_logging()
@@ -72,6 +72,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(enterprise.router, prefix="/api/v1/enterprise", tags=["Enterprise"])
 app.include_router(platform.router, prefix="/api/v1/super-admin", tags=["Platform Admin"])
+app.include_router(agents.router, prefix="/api/v1", tags=["Agent OS"])
 
 # Static Files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
