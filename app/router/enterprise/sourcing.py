@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, BackgroundTasks
 from pydantic import BaseModel
 
 from app.services.enterprise.sourcing_service import sourcing_service
@@ -145,11 +145,52 @@ async def search_profiles(
     return enriched_single_profiles
 
 
+async def background_scrape_for_query(query: str, location: str | None = None):
+    print(f"DEBUG: Starting background automated scraper for query='{query}', location='{location}'")
+    page_size = 15
+    max_pages = 3  # Scrape up to 3 pages in background to populate DB
+    
+    # Run across all top platforms in background
+    platforms_to_scrape = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
+    import asyncio
+    
+    for platform_name in platforms_to_scrape:
+        provider = sourcing_service.providers.get(platform_name)
+        if not provider:
+            continue
+            
+        for page in range(1, max_pages + 1):
+            try:
+                profiles = await asyncio.to_thread(provider.search, query, location, page, page_size)
+                if profiles:
+                    import os
+                    from pymongo import MongoClient
+                    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+                    MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
+                    mongo_client = MongoClient(MONGO_URI)
+                    mongo_db = mongo_client[MONGO_DB_NAME]
+                    profiles_collection = mongo_db["candidate_profiles"]
+                    
+                    for prof in profiles:
+                        url = prof.get("profile_url")
+                        if url:
+                            profiles_collection.update_one(
+                                {"profile_url": url}, {"$set": prof}, upsert=True
+                            )
+                else:
+                    break
+            except Exception as e:
+                print(f"DEBUG: Background scraper error for {platform_name} page {page}: {e}")
+                break
+    print(f"DEBUG: Background automated scraper completed for query='{query}'")
+
+
 @router.get("/chat_db")
 async def chat_mongodb_profiles(
     q: str = Query(..., description="The chat prompt query"),
     page: int = Query(1, description="Page index"),
     limit: int = Query(10, description="Items per page"),
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Search and summarize matching candidates directly from the local MongoDB store.
@@ -287,9 +328,13 @@ async def chat_mongodb_profiles(
                 profiles = external_results
                 total_count = len(profiles)
 
+            # Trigger background scraper to ingest more candidates in parallel
+            if background_tasks and search_query:
+                background_tasks.add_task(background_scrape_for_query, search_query, location_str)
+
         if not profiles:
             return {
-                "response": "No matching profiles indexed. Trigger background automated scrapers or loosen standard keyword bindings.",
+                "response": "No matching profiles indexed\nTrigger background automated scrapers or loosen standard keyword bindings.",
                 "profiles": [],
             }
 
