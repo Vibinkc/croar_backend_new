@@ -232,9 +232,64 @@ async def chat_mongodb_profiles(
                 doc.pop("_id")
             profiles.append(doc)
 
+        is_external_fallback = False
+        if not profiles:
+            is_external_fallback = True
+            print(f"DEBUG: No local profiles found for search query: '{q}'. Triggering external fallback.")
+
+            # Determine platform(s) to search
+            target_platform = gpt_data.get("platform")
+            location_str = gpt_data.get("location")
+            search_query = " ".join(
+                gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])
+            )
+            if not search_query.strip():
+                search_query = q
+
+            external_results = []
+            import asyncio
+
+            # If a specific platform is provided and valid, query it. Otherwise query top platforms.
+            if target_platform and target_platform.lower() in sourcing_service.providers:
+                try:
+                    external_results = await asyncio.to_thread(
+                        sourcing_service.search,
+                        target_platform.lower(),
+                        search_query,
+                        location_str,
+                        page,
+                        limit,
+                    )
+                except Exception as ex_err:
+                    print(f"DEBUG: External sourcing failed for platform '{target_platform}': {ex_err}")
+            else:
+                top_platforms = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
+
+                async def fetch_platform(p):
+                    try:
+                        return await asyncio.to_thread(
+                            sourcing_service.search, p, search_query, location_str, page, limit
+                        )
+                    except Exception as ex_err:
+                        print(f"DEBUG: External sourcing failed for platform '{p}': {ex_err}")
+                        return []
+
+                results_list = await asyncio.gather(*(fetch_platform(p) for p in top_platforms))
+                for res in results_list:
+                    if res:
+                        external_results.extend(res)
+
+            if external_results:
+                for prof in external_results:
+                    url = prof.get("profile_url")
+                    if url:
+                        coll.update_one({"profile_url": url}, {"$set": prof}, upsert=True)
+                profiles = external_results
+                total_count = len(profiles)
+
         if not profiles:
             return {
-                "response": "No matching candidate profiles were discovered inside localized databases for your specifications.",
+                "response": "No matching candidate profiles were discovered inside localized databases or external platforms for your specifications.",
                 "profiles": [],
             }
 
@@ -279,11 +334,11 @@ async def chat_mongodb_profiles(
         enrichment_tasks = [generate_summary(p) for p in profiles]
         summarized_profiles = await asyncio.gather(*enrichment_tasks)
 
-        return {
-            "response": f"I queried the database clusters and flagged {total_count} matching profiles. Here are the most recent matches including those with direct contact info.",
-            "profiles": summarized_profiles,
-            "total_count": total_count,
-        }
+        response_msg = f"I queried the database clusters and flagged {total_count} matching profiles. Here are the most recent matches including those with direct contact info."
+        if is_external_fallback:
+            response_msg = f"No matching candidates were found locally, so I queried external platforms and found {total_count} matches. These have been saved to the database."
+
+        return {"response": response_msg, "profiles": summarized_profiles, "total_count": total_count}
     except Exception as e:
         return {"response": f"Localized database evaluation issue: {e}", "profiles": []}
 
