@@ -145,13 +145,16 @@ async def search_profiles(
     return enriched_single_profiles
 
 
-async def background_scrape_for_query(query: str, location: str | None = None):
-    print(f"DEBUG: Starting background automated scraper for query='{query}', location='{location}'")
+async def background_scrape_for_query(query: str, location: str | None = None, platform: str | None = None):
+    print(f"DEBUG: Starting background automated scraper for query='{query}', location='{location}', platform='{platform}'")
     page_size = 15
     max_pages = 3  # Scrape up to 3 pages in background to populate DB
     
-    # Run across all top platforms in background
-    platforms_to_scrape = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
+    if platform and platform.lower() in sourcing_service.providers:
+        platforms_to_scrape = [platform.lower()]
+    else:
+        platforms_to_scrape = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
+        
     import asyncio
     
     for platform_name in platforms_to_scrape:
@@ -273,12 +276,8 @@ async def chat_mongodb_profiles(
                 doc.pop("_id")
             profiles.append(doc)
 
-        is_external_fallback = False
         if not profiles:
-            is_external_fallback = True
-            print(f"DEBUG: No local profiles found for search query: '{q}'. Triggering external fallback.")
-
-            # Determine platform(s) to search
+            # Determine platform(s) to search for background scraper
             target_platform = gpt_data.get("platform")
             location_str = gpt_data.get("location")
             search_query = " ".join(
@@ -287,52 +286,15 @@ async def chat_mongodb_profiles(
             if not search_query.strip():
                 search_query = q
 
-            external_results = []
-            import asyncio
-
-            # If a specific platform is provided and valid, query it. Otherwise query top platforms.
-            if target_platform and target_platform.lower() in sourcing_service.providers:
-                try:
-                    external_results = await asyncio.to_thread(
-                        sourcing_service.search,
-                        target_platform.lower(),
-                        search_query,
-                        location_str,
-                        page,
-                        limit,
-                    )
-                except Exception as ex_err:
-                    print(f"DEBUG: External sourcing failed for platform '{target_platform}': {ex_err}")
-            else:
-                top_platforms = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
-
-                async def fetch_platform(p):
-                    try:
-                        return await asyncio.to_thread(
-                            sourcing_service.search, p, search_query, location_str, page, limit
-                        )
-                    except Exception as ex_err:
-                        print(f"DEBUG: External sourcing failed for platform '{p}': {ex_err}")
-                        return []
-
-                results_list = await asyncio.gather(*(fetch_platform(p) for p in top_platforms))
-                for res in results_list:
-                    if res:
-                        external_results.extend(res)
-
-            if external_results:
-                for prof in external_results:
-                    url = prof.get("profile_url")
-                    if url:
-                        coll.update_one({"profile_url": url}, {"$set": prof}, upsert=True)
-                profiles = external_results
-                total_count = len(profiles)
-
             # Trigger background scraper to ingest more candidates in parallel
             if background_tasks and search_query:
-                background_tasks.add_task(background_scrape_for_query, search_query, location_str)
+                background_tasks.add_task(
+                    background_scrape_for_query, 
+                    search_query, 
+                    location_str, 
+                    target_platform
+                )
 
-        if not profiles:
             return {
                 "response": "No matching profiles indexed\nTrigger background automated scrapers or loosen standard keyword bindings.",
                 "profiles": [],
@@ -380,8 +342,6 @@ async def chat_mongodb_profiles(
         summarized_profiles = await asyncio.gather(*enrichment_tasks)
 
         response_msg = f"I queried the database clusters and flagged {total_count} matching profiles. Here are the most recent matches including those with direct contact info."
-        if is_external_fallback:
-            response_msg = f"No matching candidates were found locally, so I queried external platforms and found {total_count} matches. These have been saved to the database."
 
         return {"response": response_msg, "profiles": summarized_profiles, "total_count": total_count}
     except Exception as e:
