@@ -289,7 +289,7 @@ async def chat_mongodb_profiles(
 
         if not profiles:
             return {
-                "response": "No matching candidate profiles were discovered inside localized databases or external platforms for your specifications.",
+                "response": "No matching profiles indexed. Trigger background automated scrapers or loosen standard keyword bindings.",
                 "profiles": [],
             }
 
