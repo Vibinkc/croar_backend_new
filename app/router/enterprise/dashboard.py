@@ -24,19 +24,19 @@ async def get_dashboard_stats(
 
     # 1. Active Jobs Count
     jobs_stmt = select(func.count(JobRequirement.id)).where(
-        JobRequirement.company_id == company_id, JobRequirement.deleted_at is None
+        JobRequirement.company_id == company_id, JobRequirement.deleted_at == None
     )
     jobs_count = (await session.execute(jobs_stmt)).scalar() or 0
 
     # 2. Total Candidates Count
     candidates_stmt = select(func.count(Candidate.id)).where(
-        Candidate.company_id == company_id, Candidate.deleted_at is None
+        Candidate.company_id == company_id, Candidate.deleted_at == None
     )
     candidates_count = (await session.execute(candidates_stmt)).scalar() or 0
 
     # 3. Total Applications Count
     apps_stmt = select(func.count(CandidateApplication.id)).where(
-        CandidateApplication.company_id == company_id, CandidateApplication.deleted_at is None
+        CandidateApplication.company_id == company_id, CandidateApplication.deleted_at == None
     )
     apps_count = (await session.execute(apps_stmt)).scalar() or 0
 
@@ -52,7 +52,7 @@ async def get_dashboard_stats(
     high_value_stmt = select(func.count(CandidateApplication.id)).where(
         CandidateApplication.company_id == company_id,
         CandidateApplication.ai_match_score >= 80,
-        CandidateApplication.deleted_at is None,
+        CandidateApplication.deleted_at == None,
     )
     high_value_count = (await session.execute(high_value_stmt)).scalar() or 0
 
