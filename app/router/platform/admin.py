@@ -111,13 +111,13 @@ async def create_tenant(
             is_system=True,
             role_rank=1,
         )
-        session.add(admin_role)
-        await session.flush()
-
-        # Assign all non-platform permissions to this role
+        # Assign all non-platform permissions to this role BEFORE adding/flushing to avoid lazy loading trigger
         perm_stmt = select(Permission).where(Permission.module != ModuleScope.platform)
         perms = (await session.execute(perm_stmt)).scalars().all()
         admin_role.permissions = perms
+
+        session.add(admin_role)
+        await session.flush()
 
     # 3. Create Admin User for the company
     new_user = EnterpriseUser(
@@ -129,11 +129,11 @@ async def create_tenant(
         company_id=new_company.id,
         is_active=True,
     )
+    # Assign roles BEFORE adding/flushing to prevent database lazy load queries
+    new_user.roles = [admin_role]
+
     session.add(new_user)
     await session.flush()
-
-    # Link to role
-    new_user.roles.append(admin_role)
 
     await session.commit()
     await session.refresh(new_company)
