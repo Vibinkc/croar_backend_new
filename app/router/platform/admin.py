@@ -59,18 +59,42 @@ async def list_tenants(session: DBSessionDep, _admin: Annotated[object, platform
 async def create_tenant(
     session: DBSessionDep,
     _admin: Annotated[object, platform_admin_dep],
-    org_data: CompanyCreate,
-    admin_email: str = Body(...),
-    admin_password: str = Body(...),
+    body: dict[str, Any] = Body(...),
 ) -> object:
     """Create a new tenant and its first admin user."""
     import re
 
-    # 1. Create Company
-    slug = re.sub(r"[^a-zA-Z0-9]", "-", org_data.name.lower())
-    slug = re.sub(r"-+", "-", slug).strip("-")
+    # Resolve org_data and admin fields
+    if "org_data" in body:
+        org_dict = body["org_data"]
+        admin_email = body.get("admin_email")
+        admin_password = body.get("admin_password")
+        admin_profile_image = body.get("admin_profile_image")
+    else:
+        org_dict = body
+        admin_email = body.get("admin_email")
+        admin_password = body.get("admin_password")
+        admin_profile_image = body.get("admin_profile_image")
 
-    new_company = Company(slug=slug, **org_data.model_dump())
+    if not admin_email or not admin_password:
+        raise HTTPException(status_code=400, detail="admin_email and admin_password are required")
+
+    org_name = org_dict.get("name")
+    if not org_name:
+        raise HTTPException(status_code=400, detail="Organization name is required")
+
+    # 1. Create Company
+    slug = org_dict.get("slug")
+    if not slug:
+        slug = re.sub(r"[^a-zA-Z0-9]", "-", org_name.lower())
+        slug = re.sub(r"-+", "-", slug).strip("-")
+
+    company_fields = {
+        "name", "logo_url", "industry", "location", "config", "is_consultancy", "parent_id"
+    }
+    filtered_org = {k: v for k, v in org_dict.items() if k in company_fields}
+
+    new_company = Company(slug=slug, **filtered_org)
     session.add(new_company)
     await session.flush()  # Get company ID
 
@@ -100,7 +124,8 @@ async def create_tenant(
         email=admin_email,
         password_hash=get_password_hash(admin_password),
         first_name="Admin",
-        last_name=org_data.name,
+        last_name=new_company.name,
+        profile_image=admin_profile_image,
         company_id=new_company.id,
         is_active=True,
     )
