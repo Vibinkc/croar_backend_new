@@ -84,25 +84,27 @@ async def generate_questions_ai(
         categories_str += f", {request.custom_category}"
 
     prompt = f"""You are an elite Performance Management Consultant.
-Generate {request.count} high-fidelity 360-degree feedback questions
-for the following categories: {categories_str}.
-The target audience is employees in a modern, fast-paced organization.
+    Generate {request.count} high-fidelity 360-degree feedback questions
+    for the following categories: {categories_str}.
+    The target audience is employees in a modern, fast-paced organization.
 
-Requirements:
-- Questions must be professional, unbiased, and actionable.
-- Mix of RATING (1-5) and TEXT (open-ended).
-- For RATING, no options needed.
+    Requirements:
+    - Questions must be professional, unbiased, and actionable.
+    - Mix of RATING (1-5) and TEXT (open-ended).
+    - For RATING, no options needed.
 
-Return ONLY a JSON list of objects:
-[
-  {{
-    "category": "category name",
-    "text": "The question text",
-    "type": "RATING" | "TEXT"
-  }},
-  ...
-]
-"""
+    Return ONLY a JSON object with a "questions" key containing a list of question objects:
+    {{
+      "questions": [
+        {{
+          "category": "category name",
+          "text": "The question text",
+          "type": "RATING" or "TEXT"
+        }},
+        ...
+      ]
+    }}
+    """
     try:
         from app.core.ai import analyze_text_with_llm
 
@@ -115,7 +117,14 @@ Return ONLY a JSON list of objects:
             response_str = response_str.split("```")[1].split("```")[0].strip()
 
         data = json.loads(response_str)
-        return [X360AIGeneratedQuestion(**q) for q in cast("list[dict[str, object]]", data)]
+        if isinstance(data, dict) and "questions" in data:
+            questions_list = data["questions"]
+        elif isinstance(data, list):
+            questions_list = data
+        else:
+            questions_list = []
+
+        return [X360AIGeneratedQuestion(**q) for q in questions_list]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI Generation failed: {e!s}") from e
 
