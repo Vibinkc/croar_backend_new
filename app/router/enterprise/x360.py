@@ -72,7 +72,7 @@ async def list_questions(
     return list(res.scalars().all())
 
 
-@router.post("/ai-generate", response_model=list[X360AIGeneratedQuestion])
+@router.post("/questions/ai-generate", response_model=list[X360AIGeneratedQuestion])
 async def generate_questions_ai(
     request: X360AIGenerateRequest,
     _current_user: Annotated[
