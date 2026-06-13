@@ -462,6 +462,9 @@ async def search_profiles(
     if has_contact:
         profiles = [p for p in profiles if _has_contact(p)]
 
+    # Surface candidates with a direct email first (stable: keeps relevance within groups).
+    profiles.sort(key=lambda p: 0 if p.get("email") else 1)
+
     return await enrich_profiles(profiles)
 
 
@@ -501,6 +504,9 @@ async def chat_search_profiles(
             profiles = await backfill_contacts(profiles)
         if has_contact:
             profiles = [p for p in profiles if _has_contact(p)]
+
+        # Surface candidates with a direct email first.
+        profiles.sort(key=lambda p: 0 if p.get("email") else 1)
 
         if not profiles:
             return {
