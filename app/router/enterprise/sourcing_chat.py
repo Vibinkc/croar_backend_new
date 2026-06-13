@@ -17,6 +17,15 @@ router = APIRouter(prefix="/sourcing/chat", tags=["Sourcing Chat"])
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
 
+# A single shared client reuses one connection pool for the whole process. Previously a
+# new MongoClient (with its own pool + monitor threads) was created on every request,
+# which leaks threads and exhausts connections under load.
+_mongo_client = MongoClient(MONGO_URI)
+
+
+def _db():
+    return _mongo_client[MONGO_DB_NAME]
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -41,8 +50,7 @@ async def save_chat_session(
     ],
 ):
     """Save or update a chat session in the sourcing_chat_history collection, tagged by company."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["sourcing_chat_history"]
 
     company_id = str(getattr(current_user, "company_id", ""))
@@ -69,12 +77,13 @@ async def list_chat_sessions(
     ],
 ):
     """List all saved chat sessions for the current company."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["sourcing_chat_history"]
 
     company_id = str(getattr(current_user, "company_id", ""))
-    sessions = list(coll.find({"company_id": company_id}, {"_id": 0, "messages": 0}).sort("updated_at", -1))
+    sessions = list(
+        coll.find({"company_id": company_id}, {"_id": 0, "messages": 0}).sort("updated_at", -1).limit(200)
+    )
     return sessions
 
 
@@ -86,8 +95,7 @@ async def get_chat_session(
     ],
 ):
     """Retrieve a specific chat session, verifying company ownership."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["sourcing_chat_history"]
 
     company_id = str(getattr(current_user, "company_id", ""))
@@ -98,13 +106,18 @@ async def get_chat_session(
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_chat_session(session_id: str):
-    """Delete a chat session."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+async def delete_chat_session(
+    session_id: str,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+):
+    """Delete a chat session (scoped to the caller's company)."""
+    db = _db()
     coll = db["sourcing_chat_history"]
 
-    coll.delete_one({"session_id": session_id})
+    company_id = str(getattr(current_user, "company_id", ""))
+    coll.delete_one({"session_id": session_id, "company_id": company_id})
     return {"status": "deleted"}
 
 
@@ -134,17 +147,20 @@ async def shortlist_candidate(
     ],
 ):
     """Save a candidate profile to a job in MongoDB."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]  # Keeping collection name or renaming to job_shortlists
 
     company_id = str(getattr(current_user, "company_id", ""))
+
+    profile = data.get("profile")
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=400, detail="A candidate 'profile' object is required")
 
     shortlist_entry = {
         "shortlist_id": str(uuid.uuid4()),
         "job_id": data.get("job_id"),
         "job_title": data.get("job_title"),
-        "profile": data.get("profile"),
+        "profile": profile,
         "source": data.get("source", "AI Sourcing"),
         "company_id": company_id,
         "shortlisted_at": datetime.now().isoformat(),
@@ -152,7 +168,7 @@ async def shortlist_candidate(
     }
 
     # Avoid duplicate shortlists for same profile in same job for same company
-    profile_url = shortlist_entry["profile"].get("profile_url")
+    profile_url = profile.get("profile_url")
     job_id = shortlist_entry["job_id"]
 
     coll.update_one(
@@ -175,8 +191,7 @@ async def list_shortlisted_candidates(
     job_id: str | None = None,
 ):
     """List all shortlisted candidates, filtered by company and optionally by job."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]
 
     company_id = str(getattr(current_user, "company_id", ""))
@@ -185,18 +200,23 @@ async def list_shortlisted_candidates(
     if job_id:
         query["job_id"] = job_id
 
-    shortlists = list(coll.find(query, {"_id": 0}).sort("shortlisted_at", -1))
+    shortlists = list(coll.find(query, {"_id": 0}).sort("shortlisted_at", -1).limit(500))
     return shortlists
 
 
 @router.delete("/shortlisted/{shortlist_id}")
-async def remove_shortlisted_candidate(shortlist_id: str):
-    """Remove a candidate from the shortlist."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+async def remove_shortlisted_candidate(
+    shortlist_id: str,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+):
+    """Remove a candidate from the shortlist (scoped to the caller's company)."""
+    db = _db()
     coll = db["project_shortlists"]
 
-    coll.delete_one({"shortlist_id": shortlist_id})
+    company_id = str(getattr(current_user, "company_id", ""))
+    coll.delete_one({"shortlist_id": shortlist_id, "company_id": company_id})
     return {"status": "deleted"}
 
 
@@ -209,8 +229,7 @@ async def move_shortlisted_candidate(
     ],
 ):
     """Move a shortlisted candidate to a different job requirement."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]
 
     target_job_id = data.get("job_id")
@@ -233,8 +252,7 @@ async def move_shortlisted_candidate(
 @router.get("/engagement/{shortlist_id}")
 async def get_engagement_details(shortlist_id: str):
     """Fetch job and candidate details for the engagement form (Public)."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]
 
     shortlist = coll.find_one({"shortlist_id": shortlist_id}, {"_id": 0})
@@ -260,8 +278,7 @@ class CandidateInterestRequest(BaseModel):
 @router.post("/engagement/{shortlist_id}/interest")
 async def save_candidate_interest(shortlist_id: str, data: CandidateInterestRequest):
     """Save candidate basic info to a new master collection and update shortlist status."""
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
 
     # 1. Update the specific Shortlist entry
     shortlist_coll = db["project_shortlists"]
@@ -330,8 +347,7 @@ async def send_job_description(
 
     # Generate public engagement link
     # Find the shortlist entry to get the shortlist_id
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]
 
     shortlist = coll.find_one({"job_id": request.job_id, "profile.email": request.email}, {"shortlist_id": 1})
@@ -344,24 +360,24 @@ async def send_job_description(
 
     body = f"""
     <p>Hello {request.full_name},</p>
-    
+
     <p>I hope this email finds you well.</p>
-    
+
     <p>We've been following your impressive professional background and believe your skills would be a fantastic match for the <strong>{request.job_title}</strong> position at <strong>{company_name}</strong>.</p>
-    
+
     <p>We are currently looking for talented individuals to join our team, and we'd love for you to review the role and consider exploring this opportunity with us.</p>
-    
+
     <div style="margin: 30px 0; padding: 25px; background-color: #f8fafc; border-radius: 16px; border: 1px solid #e2e8f0; text-align: center;">
         <h3 style="margin-top: 0; color: #1e293b; font-size: 18px;">{request.job_title}</h3>
         <p style="color: #64748b; margin-bottom: 20px;">Review the full job description and share your details with us below:</p>
-        
+
         <a href="{app_link}" style="display: inline-block; padding: 14px 28px; background-color: #7C3AED; color: #ffffff; text-decoration: none; border-radius: 12px; font-weight: bold; font-size: 14px; box-shadow: 0 4px 6px -1px rgba(124, 58, 237, 0.2);">View Job & Apply Now</a>
-        
+
         {f"<p style='margin-top: 20px; font-size: 11px; color: #94a3b8;'>Reference Profile: <a href='{request.profile_url}' style='color: #7C3AED;'>View Profile</a></p>" if request.profile_url else ""}
     </div>
-    
+
     <p>If you have any questions before applying, feel free to reply to this email directly.</p>
-    
+
     <p>Best regards,<br>
     <strong>The Recruiting Team</strong><br>
     {company_name}</p>
@@ -375,8 +391,7 @@ async def send_job_description(
         raise HTTPException(status_code=500, detail=f"Failed to send email: {error}")
 
     # Update status in MongoDB
-    client = MongoClient(MONGO_URI)
-    db = client[MONGO_DB_NAME]
+    db = _db()
     coll = db["project_shortlists"]
 
     coll.update_one(

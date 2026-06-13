@@ -96,9 +96,19 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
+_INSECURE_DEFAULT_SECRET = "your-super-secret-key-for-development"  # nosec B105  # gated: rejected in non-debug
+
 settings = Settings()
-print(f"LOADED GOOGLE_CLIENT_ID: {settings.google_client_id}")
-print(f"LOADED FRONTEND_URL: {settings.frontend_url}")
+
+# Refuse to run in production with the public default JWT signing key (anyone who
+# knows it can forge tokens for any user). In dev we only warn.
+if settings.secret_key == _INSECURE_DEFAULT_SECRET:
+    if settings.app_env.lower() in ("production", "prod") or not settings.debug:
+        raise RuntimeError(
+            "SECRET_KEY is unset/insecure. Set a strong random SECRET_KEY env var before "
+            "running outside local development."
+        )
+    print("WARNING: using the insecure default SECRET_KEY — set SECRET_KEY for any non-local use.")
 
 
 def get_settings() -> Settings:

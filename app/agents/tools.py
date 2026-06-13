@@ -1,14 +1,16 @@
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enterprise.job import JobRequirement
 from app.services.enterprise.hiring_agent import hiring_agent_service
 from app.services.enterprise.onboarding_service import initiate_onboarding_process
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -68,7 +70,7 @@ async def create_job_requisition(
     location: str = "Remote",
     min_exp: int = 0,
     max_exp: int = 10,
-    skills: list[str] = [],
+    skills: list[str] | None = None,
     workflow_rounds: list[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -77,6 +79,7 @@ async def create_job_requisition(
     Use this to finalize the JD and make the job LIVE.
     """
     session: AsyncSession = config["configurable"]["session"]
+    skills = skills or []
     try:
         # Default rounds if none provided
         rounds = workflow_rounds or ["Screening", "Technical Interview", "Final Review"]

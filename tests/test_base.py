@@ -1,11 +1,15 @@
-# ** Base Modules
+"""Smoke tests for the app's health/root endpoints."""
+
 from fastapi import status
 
-# ** App Modules
-from app.main import client
+
+def test_health(client):
+    resp = client.get("/health")
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json() == {"status": "ok"}
 
 
-def test_home() -> None:
-    response = client.get("/api/health")
-    assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"message": "All Healthy"}
+def test_root(client):
+    resp = client.get("/")
+    assert resp.status_code == status.HTTP_200_OK
+    assert "Croar" in resp.json().get("message", "")

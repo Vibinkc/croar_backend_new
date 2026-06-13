@@ -14,7 +14,9 @@ router = APIRouter(prefix="/audio", tags=["Audio"])
 @router.post("/transcribe")
 async def transcribe_audio(
     file: UploadFile = File(...),
-    user: Annotated[dict, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))] = None,
+    user: Annotated[
+        dict | None, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ] = None,
 ):
     try:
         # Save uploaded file to a temporary file
@@ -34,4 +36,4 @@ async def transcribe_audio(
         return {"text": transcript.text}
     except Exception as e:
         print(f"Transcription error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e

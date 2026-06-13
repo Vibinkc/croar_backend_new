@@ -1,11 +1,420 @@
+import asyncio
+import ipaddress
+import json
+import os
+import re
+import socket
 from typing import Any
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query
+from openai import OpenAI
 from pydantic import BaseModel
 
 from app.services.enterprise.sourcing_service import sourcing_service
 
 router = APIRouter(prefix="/sourcing", tags=["Sourcing"])
+
+# Per-platform live-search timeout (seconds). A slow or failing provider is skipped
+# after this, so it can never stall the rest of the fan-out.
+PLATFORM_TIMEOUT = float(os.getenv("SOURCING_PLATFORM_TIMEOUT", "10"))
+# Cap on concurrent OpenAI enrichment calls so a wide fan-out doesn't burst rate limits.
+ENRICH_CONCURRENCY = int(os.getenv("SOURCING_ENRICH_CONCURRENCY", "10"))
+# Cap on how many providers we hit concurrently, and how many profiles we keep before
+# the (per-profile) OpenAI enrichment — keeps a `platform=all` search bounded in
+# latency and cost instead of fanning out unbounded work.
+PROVIDER_CONCURRENCY = int(os.getenv("SOURCING_PROVIDER_CONCURRENCY", "8"))
+MAX_ENRICH_PROFILES = int(os.getenv("SOURCING_MAX_ENRICH_PROFILES", "40"))
+
+# SSRF guard: only these hosts may be fetched by the URL-taking scrape endpoints.
+_ALLOWED_HOST_SUFFIXES = (
+    "github.com",
+    "githubusercontent.com",
+    "gitlab.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "stackoverflow.com",
+    "stackexchange.com",
+    "dev.to",
+    "medium.com",
+    "kaggle.com",
+    "leetcode.com",
+    "hackerrank.com",
+    "producthunt.com",
+    "wellfound.com",
+    "angel.co",
+    "behance.net",
+    "dribbble.com",
+    "crunchbase.com",
+    "hashnode.com",
+    "hashnode.dev",
+    "researchgate.net",
+    "levels.fyi",
+    "google.com",
+    "arxiv.org",
+    "reddit.com",
+    "ycombinator.com",
+    "openstreetmap.org",
+)
+
+
+def _is_public_host(host: str) -> bool:
+    """True only if every resolved address for `host` is a public IP (blocks SSRF)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return False
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
+def validate_scrape_url(url: str) -> str | None:
+    """Normalize + SSRF-check a user-supplied profile URL. Returns None if disallowed."""
+    if not url:
+        return None
+    if not url.startswith("http"):
+        url = f"https://{url.lstrip('/')}"
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    host = parsed.hostname.lower()
+    if not any(host == s or host.endswith("." + s) for s in _ALLOWED_HOST_SUFFIXES):
+        return None
+    if not _is_public_host(host):
+        return None
+    return url
+
+
+_DEFAULT_ENRICH_PROMPT = (
+    "You are an AI recruitment assistant. Summarize the candidate in 1-2 powerful "
+    "sentences using strong, concrete signals from their profile."
+)
+
+
+async def _search_single_platform(
+    platform_name: str, query: str, location: str | None, page: int, page_size: int
+) -> list[dict[str, Any]]:
+    """Run one provider's (blocking) search in a thread, bounded by PLATFORM_TIMEOUT."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(sourcing_service.search, platform_name, query, location, page, page_size),
+            timeout=PLATFORM_TIMEOUT,
+        )
+    except Exception as e:
+        print(f"DEBUG: Sourcing platform '{platform_name}' skipped: {e}")
+        return []
+
+
+async def search_all_platforms(
+    query: str, location: str | None = None, page: int = 1, page_size: int = 15
+) -> list[dict[str, Any]]:
+    """Fan out a live search across ALL registered sourcing providers, concurrently.
+
+    Every provider is queried in parallel with a per-platform timeout; whatever responds
+    in time is merged. No local store / cache is involved — results are always fresh.
+    """
+    platform_names = list(sourcing_service.providers.keys())
+    semaphore = asyncio.Semaphore(PROVIDER_CONCURRENCY)
+
+    async def bounded(p: str) -> list[dict[str, Any]]:
+        async with semaphore:
+            return await _search_single_platform(p, query, location, page, page_size)
+
+    results = await asyncio.gather(*(bounded(p) for p in platform_names))
+    merged: list[dict[str, Any]] = []
+    for res in results:
+        if res:
+            merged.extend(res)
+    merged = sanitize_profiles(merged)
+    print(f"DEBUG: Live fan-out across {len(platform_names)} platforms returned {len(merged)} profiles")
+    return merged
+
+
+def sanitize_profiles(profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop malformed provider rows and coerce required fields.
+
+    `SourcingProfile` requires non-null `full_name` and `profile_url`; a single provider
+    returning `None` for either would otherwise 500 the entire (response_model) request.
+    """
+    clean: list[dict[str, Any]] = []
+    for p in profiles:
+        if not isinstance(p, dict) or not p.get("profile_url"):
+            continue
+        if not p.get("full_name"):
+            p["full_name"] = p.get("username") or "Unknown"
+        clean.append(p)
+    return clean
+
+
+async def enrich_profiles(
+    profiles: list[dict[str, Any]], system_prompt: str = _DEFAULT_ENRICH_PROMPT
+) -> list[dict[str, Any]]:
+    """Attach an AI-generated `ai_summary` to each profile, concurrently but rate-bounded.
+
+    Enrichment is capped at MAX_ENRICH_PROFILES so a wide `platform=all` fan-out cannot
+    trigger hundreds of OpenAI completions in a single request.
+    """
+    if not profiles:
+        return profiles
+
+    profiles = profiles[:MAX_ENRICH_PROFILES]
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    semaphore = asyncio.Semaphore(ENRICH_CONCURRENCY)
+
+    async def enrich_one(prof: dict[str, Any]) -> dict[str, Any]:
+        async with semaphore:
+            try:
+
+                def call_gpt() -> str:
+                    contact = f"Email: {prof.get('email')}" if prof.get("email") else "Contact: Not available"
+                    completion = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Name: {prof.get('full_name')}\n"
+                                    f"Headline: {prof.get('headline')}\n"
+                                    f"Location: {prof.get('location')}\n"
+                                    f"Platform: {prof.get('platform')}\n"
+                                    f"Skills: {prof.get('skills')}\n{contact}"
+                                ),
+                            },
+                        ],
+                        max_tokens=150,
+                    )
+                    return (completion.choices[0].message.content or "").strip()
+
+                prof["ai_summary"] = await asyncio.to_thread(call_gpt)
+            except Exception:
+                prof["ai_summary"] = (
+                    f"{prof.get('full_name')}, based in {prof.get('location') or 'Global'}, "
+                    f"is a professional on {prof.get('platform') or 'sourcing channels'} "
+                    "with established capabilities."
+                )
+        return prof
+
+    return await asyncio.gather(*(enrich_one(p) for p in profiles))
+
+
+def _as_str_list(v: Any) -> list[str]:
+    if isinstance(v, list):
+        return [str(x) for x in v if x is not None]
+    if v in (None, ""):
+        return []
+    return [str(v)]
+
+
+def _normalize_constraints(data: Any) -> dict[str, Any]:
+    """Force the LLM output into the shapes the callers assume (lists / str|None)."""
+    out: dict[str, Any] = dict(data) if isinstance(data, dict) else {}
+    out["role_keywords"] = _as_str_list(out.get("role_keywords"))
+    out["seniority_keywords"] = _as_str_list(out.get("seniority_keywords"))
+    out["platform"] = out["platform"] if isinstance(out.get("platform"), str) else None
+    out["location"] = out["location"] if isinstance(out.get("location"), str) else None
+    return out
+
+
+def parse_search_constraints(q: str) -> dict[str, Any]:
+    """Use the LLM to turn a natural-language sourcing request into structured constraints."""
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    try:
+        completion = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an AI recruitment database assistant. Extract explicit structured "
+                        "search conditions from the user's natural language request as strict raw JSON "
+                        "(no markdown wrapping):\n"
+                        '{"role_keywords": ["frontend", "developer"], '
+                        '"platform": "linkedin" | "github" | a free-form string | null, '
+                        '"location": "london" | a free-form string | null, '
+                        '"seniority_keywords": ["senior", "lead"]}'
+                    ),
+                },
+                {"role": "user", "content": f"Extract constraints from: '{q}'"},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=200,
+        )
+        return _normalize_constraints(json.loads((completion.choices[0].message.content or "").strip()))
+    except Exception:
+        return _normalize_constraints({"role_keywords": q.lower().split()})
+
+
+# ---------------------------------------------------------------------------
+# Contact details (free): use what providers already return, and best-effort
+# deep-scrape a bounded number of em-less profiles to backfill an email/socials.
+# ---------------------------------------------------------------------------
+
+# How long a single contact deep-scrape may take, and how many em-less profiles
+# to backfill per search (keeps Oxylabs cost / latency bounded).
+CONTACT_SCRAPE_TIMEOUT = float(os.getenv("SOURCING_CONTACT_TIMEOUT", "15"))
+CONTACT_ENRICH_LIMIT = int(os.getenv("SOURCING_CONTACT_ENRICH_LIMIT", "8"))
+
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+# Substrings that mark a regex hit as noise rather than a real contact email.
+_EMAIL_BLOCKLIST = (
+    "noreply",
+    "no-reply",
+    "users.noreply",
+    "example.com",
+    "sentry",
+    "wixpress",
+    "godaddy",
+    "@2x",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+)
+_SOCIAL_MARKERS = ("linkedin.com/in", "github.com/", "gitlab.com/", "twitter.com/", "x.com/")
+
+
+def _pick_email(candidates: list[str]) -> str | None:
+    """Return the first plausible real email from regex/mailto candidates."""
+    for raw in candidates:
+        email = raw.strip().strip(".,;:()<>[]\"'")
+        low = email.lower()
+        if "@" not in low or any(bad in low for bad in _EMAIL_BLOCKLIST):
+            continue
+        return email
+    return None
+
+
+def _scrape_contacts(url: str) -> dict[str, Any]:
+    """Best-effort fetch of a profile page to extract email + social links.
+
+    Uses Oxylabs (rendered HTML) when credentials are present, otherwise a plain
+    request. Returns empty fields on any failure — never raises.
+    """
+    import requests
+    from bs4 import BeautifulSoup, Tag
+
+    result: dict[str, Any] = {"email": None, "social_links": [], "blog": None}
+    safe_url = validate_scrape_url(url)
+    if not safe_url:
+        return result
+    url = safe_url
+
+    html = ""
+    user = os.getenv("OXYLABS_USERNAME")
+    pwd = os.getenv("OXYLABS_PASSWORD")
+    try:
+        if user and pwd:
+            r = requests.post(
+                "https://realtime.oxylabs.io/v1/queries",
+                auth=(user, pwd),
+                json={"source": "universal", "url": url, "render": "html", "user_agent_type": "desktop"},
+                timeout=CONTACT_SCRAPE_TIMEOUT,
+            )
+            if r.status_code == 200:
+                res = r.json().get("results", [])
+                if res:
+                    html = res[0].get("content", "") or ""
+        if not html:
+            r = requests.get(  # nosec B113  # timeout IS set below (bandit misreads min())
+                url, headers={"User-Agent": "Mozilla/5.0"}, timeout=min(CONTACT_SCRAPE_TIMEOUT, 15)
+            )
+            if r.status_code == 200:
+                html = r.text or ""
+    except Exception as e:
+        print(f"DEBUG: contact scrape failed for {url}: {e}")
+        return result
+
+    if not html:
+        return result
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Prefer explicit mailto: links, then fall back to a regex over the page text.
+    candidates: list[str] = []
+    socials: list[str] = []
+    for a in soup.find_all("a", href=True):
+        if not isinstance(a, Tag):
+            continue
+        href = str(a.get("href") or "")
+        if href.lower().startswith("mailto:"):
+            candidates.append(href[7:].split("?")[0])
+        elif any(s in href for s in _SOCIAL_MARKERS):
+            if href not in socials:
+                socials.append(href)
+    candidates.extend(_EMAIL_RE.findall(soup.get_text(" ")))
+
+    def _provider_of(link: str) -> str:
+        low = link.lower()
+        if "linkedin.com" in low:
+            return "linkedin"
+        if "github.com" in low:
+            return "github"
+        if "gitlab.com" in low:
+            return "gitlab"
+        if "twitter.com" in low or "x.com" in low:
+            return "twitter"
+        return "link"
+
+    result["email"] = _pick_email(candidates)
+    result["social_links"] = [{"provider": _provider_of(s), "url": s} for s in socials[:10]]
+    return result
+
+
+def _has_contact(prof: dict[str, Any]) -> bool:
+    """A profile is 'reachable' if we have an email, a social link, a blog or a twitter handle."""
+    return bool(
+        prof.get("email") or prof.get("social_links") or prof.get("blog") or prof.get("twitter_username")
+    )
+
+
+async def backfill_contacts(profiles: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
+    """Deep-scrape contact info for up to `limit` profiles that have no email yet."""
+    if limit is None:
+        limit = CONTACT_ENRICH_LIMIT
+    targets = [p for p in profiles if not p.get("email") and p.get("profile_url")][:limit]
+    if not targets:
+        return profiles
+
+    semaphore = asyncio.Semaphore(min(ENRICH_CONCURRENCY, 6))
+
+    async def fill_one(prof: dict[str, Any]) -> None:
+        async with semaphore:
+            try:
+                contacts = await asyncio.wait_for(
+                    asyncio.to_thread(_scrape_contacts, str(prof.get("profile_url") or "")),
+                    timeout=CONTACT_SCRAPE_TIMEOUT + 5,
+                )
+            except Exception:
+                return
+            if contacts.get("email") and not prof.get("email"):
+                prof["email"] = contacts["email"]
+            if contacts.get("social_links") and not prof.get("social_links"):
+                prof["social_links"] = contacts["social_links"]
+            if contacts.get("blog") and not prof.get("blog"):
+                prof["blog"] = contacts["blog"]
+
+    await asyncio.gather(*(fill_one(p) for p in targets))
+    print(f"DEBUG: Backfilled contacts for up to {len(targets)} em-less profiles")
+    return profiles
 
 
 class SourcingProfile(BaseModel):
@@ -36,463 +445,159 @@ async def search_profiles(
     platform: str = Query("github", description="Sourcing platform"),
     page: int = Query(1, ge=1),
     page_size: int = Query(15, ge=1, le=100),
+    enrich_contacts: bool = Query(True, description="Deep-scrape missing emails/socials"),
+    has_contact: bool = Query(False, description="Only return profiles that have contact info"),
 ):
     """
     Search for professional profiles across multiple platforms.
     """
+    # "all" -> live fan-out across every registered provider; otherwise a single platform.
     if platform == "all":
-        import asyncio
-
-        top_platforms = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
-        all_profiles = []
-
-        async def fetch_platform(p):
-            try:
-                return await asyncio.to_thread(sourcing_service.search, p, q, location, page, page_size)
-            except Exception:
-                return []
-
-        results = await asyncio.gather(*(fetch_platform(p) for p in top_platforms))
-        for res in results:
-            if res:
-                all_profiles.extend(res)
-
-        import os
-
-        from openai import OpenAI
-
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-        async def enrich_profile(prof):
-            try:
-
-                def call_gpt():
-                    completion = client.chat.completions.create(
-                        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "You are an AI recruitment assistant. Summarize the candidate in 1-2 powerful sentences using strong metrics.",
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Name: {prof.get('full_name')}\nHeadline: {prof.get('headline')}\nLocation: {prof.get('location')}\nPlatform: {prof.get('platform')}",
-                            },
-                        ],
-                        max_tokens=150,
-                    )
-                    return completion.choices[0].message.content.strip()
-
-                prof["ai_summary"] = await asyncio.to_thread(call_gpt)
-            except Exception:
-                prof["ai_summary"] = (
-                    f"{prof.get('full_name')}, based in {prof.get('location') or 'Global'}, is a professional on {prof.get('platform') or 'sourcing channels'} with established capabilities."
-                )
-            return prof
-
-        tasks = [enrich_profile(p) for p in all_profiles]
-        enriched_all = await asyncio.gather(*tasks)
-        return enriched_all
-
-    # Caching removed as per user request
-    profiles = sourcing_service.search(platform, q, location, page, page_size)
-
-    import os
-
-    from openai import OpenAI
-
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-    async def enrich_single(prof):
-        try:
-
-            def call_gpt():
-                completion = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "You are an AI recruitment assistant. Summarize the candidate in 1-2 powerful sentences.",
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Name: {prof.get('full_name')}\nHeadline: {prof.get('headline')}\nLocation: {prof.get('location')}\nPlatform: {prof.get('platform')}",
-                        },
-                    ],
-                    max_tokens=150,
-                )
-                return completion.choices[0].message.content.strip()
-
-            prof["ai_summary"] = await asyncio.to_thread(call_gpt)
-        except Exception:
-            prof["ai_summary"] = (
-                f"{prof.get('full_name')}, based in {prof.get('location') or 'Global'}, demonstrates extensive execution parameters."
-            )
-        return prof
-
-    tasks = [enrich_single(p) for p in profiles]
-    import asyncio
-
-    enriched_single_profiles = await asyncio.gather(*tasks)
-
-    # DEBUG: Log emails being sent to the UI
-    print(f"\n--- DEBUG: SEARCH RESULTS FOR '{q}' ---")
-    for p in enriched_single_profiles:
-        print(f"Candidate: {p.get('full_name')} | Email: {p.get('email')}")
-    print("------------------------------------------\n")
-
-    # Caching removed as per user request
-    return enriched_single_profiles
-
-
-async def background_scrape_for_query(query: str, location: str | None = None, platform: str | None = None):
-    print(f"DEBUG: Starting background automated scraper for query='{query}', location='{location}', platform='{platform}'")
-    page_size = 15
-    max_pages = 3  # Scrape up to 3 pages in background to populate DB
-    
-    if platform and platform.lower() in sourcing_service.providers:
-        platforms_to_scrape = [platform.lower()]
+        profiles = await search_all_platforms(q, location, page, page_size)
     else:
-        platforms_to_scrape = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
-        
-    import asyncio
-    
-    for platform_name in platforms_to_scrape:
-        provider = sourcing_service.providers.get(platform_name)
-        if not provider:
-            continue
-            
-        for page in range(1, max_pages + 1):
-            try:
-                profiles = await asyncio.to_thread(provider.search, query, location, page, page_size)
-                if profiles:
-                    import os
-                    from pymongo import MongoClient
-                    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-                    MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
-                    mongo_client = MongoClient(MONGO_URI)
-                    mongo_db = mongo_client[MONGO_DB_NAME]
-                    profiles_collection = mongo_db["candidate_profiles"]
-                    
-                    for prof in profiles:
-                        url = prof.get("profile_url")
-                        if url:
-                            profiles_collection.update_one(
-                                {"profile_url": url}, {"$set": prof}, upsert=True
-                            )
-                else:
-                    break
-            except Exception as e:
-                print(f"DEBUG: Background scraper error for {platform_name} page {page}: {e}")
-                break
-    print(f"DEBUG: Background automated scraper completed for query='{query}'")
+        profiles = sanitize_profiles(await _search_single_platform(platform, q, location, page, page_size))
+
+    if enrich_contacts:
+        profiles = await backfill_contacts(profiles)
+    if has_contact:
+        profiles = [p for p in profiles if _has_contact(p)]
+
+    return await enrich_profiles(profiles)
 
 
 @router.get("/chat_db")
-async def chat_mongodb_profiles(
+async def chat_search_profiles(
     q: str = Query(..., description="The chat prompt query"),
     page: int = Query(1, description="Page index"),
     limit: int = Query(10, description="Items per page"),
-    background_tasks: BackgroundTasks = None,
+    enrich_contacts: bool = Query(True, description="Deep-scrape missing emails/socials"),
+    has_contact: bool = Query(False, description="Only return profiles that have contact info"),
 ):
+    """Conversational sourcing search.
+
+    Parses the natural-language prompt into structured constraints, then searches live
+    across all sourcing platforms (or a single platform if the prompt names one).
+    No local store / cache is involved.
     """
-    Search and summarize matching candidates directly from the local MongoDB store.
-    """
-    import json
-    import os
-
-    from openai import OpenAI
-    from pymongo import MongoClient
-
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-    MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
-
-    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
     try:
-        try:
-            completion = openai_client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are an AI recruitment database assistant. 
-                    Extract explicit structured search conditions from the user's natural language request.
-                    Map constraints cleanly into a structured JSON payload:
-                    {
-                        "role_keywords": ["frontend", "developer"],
-                        "platform": "linkedin" or "github" or "devto" or a free-form string or null,
-                        "location": "london" or a free-form string or null,
-                        "seniority_keywords": ["senior", "lead"]
-                    }
-                    Only return the strict raw JSON string without markdown wrapping.
-                    """,
-                    },
-                    {"role": "user", "content": f"Extract constraints from: '{q}'"},
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=200,
-            )
-            gpt_data = json.loads(completion.choices[0].message.content.strip())
-        except Exception:
-            gpt_data = {"role_keywords": q.lower().split()}
+        gpt_data = await asyncio.to_thread(parse_search_constraints, q)
 
-        client = MongoClient(MONGO_URI)
-        db = client[MONGO_DB_NAME]
-        coll = db["candidate_profiles"]
+        search_query = (
+            " ".join(gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])).strip() or q
+        )
+        location_str = gpt_data.get("location")
+        target_platform = gpt_data.get("platform")
 
-        keyword_clauses = []
-
-        combined_keys = gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])
-        if combined_keys:
-            for k in combined_keys:
-                if len(k) > 2:
-                    keyword_clauses.append({"headline": {"$regex": k, "$options": "i"}})
-                    keyword_clauses.append({"skills": {"$regex": k, "$options": "i"}})
-                    keyword_clauses.append({"full_name": {"$regex": k, "$options": "i"}})
-
-        and_clauses = []
-        if keyword_clauses:
-            and_clauses.append({"$or": keyword_clauses})
-
-        plat = gpt_data.get("platform")
-        if plat:
-            and_clauses.append({"platform": {"$regex": plat, "$options": "i"}})
-
-        loc = gpt_data.get("location")
-        if loc:
-            and_clauses.append({"location": {"$regex": loc, "$options": "i"}})
-
-        query_filter = {"$and": and_clauses} if and_clauses else {}
-        total_count = coll.count_documents(query_filter)
-
-        # Sort by Email existence first, then by newest
-        skip_amount = (page - 1) * limit
-        cursor = coll.find(query_filter).sort([("email", -1), ("_id", -1)]).skip(skip_amount).limit(limit)
-
-        profiles = []
-        for doc in cursor:
-            if "_id" in doc:
-                doc.pop("_id")
-            profiles.append(doc)
-
-        if not profiles:
-            print(f"DEBUG: No local profiles found for search query: '{q}'. Triggering external fallback.")
-
-            # Determine platform(s) to search
-            target_platform = gpt_data.get("platform")
-            location_str = gpt_data.get("location")
-            search_query = " ".join(
-                gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])
-            )
-            if not search_query.strip():
-                search_query = q
-
-            external_results = []
-            import asyncio
-
-            # If a specific platform is provided and valid, query it. Otherwise query top platforms.
-            if target_platform and target_platform.lower() in sourcing_service.providers:
-                try:
-                    external_results = await asyncio.to_thread(
-                        sourcing_service.search,
-                        target_platform.lower(),
-                        search_query,
-                        location_str,
-                        page,
-                        limit,
-                    )
-                except Exception as ex_err:
-                    print(f"DEBUG: External sourcing failed for platform '{target_platform}': {ex_err}")
-            else:
-                top_platforms = ["github", "linkedin", "twitter", "stackoverflow", "wellfound"]
-
-                async def fetch_platform(p):
-                    try:
-                        return await asyncio.to_thread(
-                            sourcing_service.search, p, search_query, location_str, page, limit
-                        )
-                    except Exception as ex_err:
-                        print(f"DEBUG: External sourcing failed for platform '{p}': {ex_err}")
-                        return []
-
-                results_list = await asyncio.gather(*(fetch_platform(p) for p in top_platforms))
-                for res in results_list:
-                    if res:
-                        external_results.extend(res)
-
-            if external_results:
-                for prof in external_results:
-                    url = prof.get("profile_url")
-                    if url:
-                        coll.update_one({"profile_url": url}, {"$set": prof}, upsert=True)
-                profiles = external_results
-                total_count = len(profiles)
-
-            # Trigger background scraper to ingest more candidates in parallel
-            if background_tasks and search_query:
-                background_tasks.add_task(
-                    background_scrape_for_query, 
-                    search_query, 
-                    location_str, 
-                    target_platform
+        if target_platform and str(target_platform).lower() in sourcing_service.providers:
+            profiles = sanitize_profiles(
+                await _search_single_platform(
+                    str(target_platform).lower(), search_query, location_str, page, limit
                 )
+            )
+        else:
+            profiles = await search_all_platforms(search_query, location_str, page, limit)
+
+        if enrich_contacts:
+            profiles = await backfill_contacts(profiles)
+        if has_contact:
+            profiles = [p for p in profiles if _has_contact(p)]
 
         if not profiles:
             return {
-                "response": "No matching profiles indexed\nTrigger background automated scrapers or loosen standard keyword bindings.",
+                "response": "No matching profiles found across the connected platforms. "
+                "Try loosening your keywords or location.",
                 "profiles": [],
+                "total_count": 0,
             }
 
-        import asyncio
-        import os
+        total_count = len(profiles)
+        summarized = await enrich_profiles(
+            profiles,
+            system_prompt=(
+                "You are an AI recruitment consultant. Write a highly professional, engaging "
+                "1-2 sentence assessment. If an email is provided, mention that direct contact is available."
+            ),
+        )
 
-        from openai import OpenAI
-
-        openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-        async def generate_summary(prof):
-            try:
-
-                def call_gpt():
-                    # Include email in the context if it exists
-                    contact_info = (
-                        f"Email: {prof.get('email')}" if prof.get("email") else "Contact: Not available"
-                    )
-                    completion = openai_client.chat.completions.create(
-                        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "You are an AI recruitment consultant. Write a highly professional, engaging 1-2 sentence assessment. If an email is provided, mention that a direct contact is available.",
-                            },
-                            {
-                                "role": "user",
-                                "content": f"Name: {prof.get('full_name')}\nHeadline: {prof.get('headline')}\nLocation: {prof.get('location')}\nSkills: {prof.get('skills')}\n{contact_info}",
-                            },
-                        ],
-                        max_tokens=150,
-                    )
-                    return completion.choices[0].message.content.strip()
-
-                prof["ai_summary"] = await asyncio.to_thread(call_gpt)
-            except Exception:
-                prof["ai_summary"] = (
-                    f"{prof.get('full_name')} is an accomplished professional recognized for strong execution parameters across modern engineering environments."
-                )
-            return prof
-
-        enrichment_tasks = [generate_summary(p) for p in profiles]
-        summarized_profiles = await asyncio.gather(*enrichment_tasks)
-
-        response_msg = f"I queried the database clusters and flagged {total_count} matching profiles. Here are the most recent matches including those with direct contact info."
-
-        return {"response": response_msg, "profiles": summarized_profiles, "total_count": total_count}
+        response_msg = (
+            f"I searched the connected platforms live and found {total_count} matching profiles, "
+            "including those with direct contact info."
+        )
+        return {"response": response_msg, "profiles": summarized, "total_count": total_count}
     except Exception as e:
-        return {"response": f"Localized database evaluation issue: {e}", "profiles": []}
+        return {"response": f"Live sourcing search failed: {e}", "profiles": [], "total_count": 0}
 
 
 @router.get("/chat_distribution")
 async def get_chat_distribution(q: str = Query(..., description="The chat prompt query")):
-    """
-    Returns the full location distribution for a search query.
-    """
-    import json
-    import os
-
-    from openai import OpenAI
-    from pymongo import MongoClient
-
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-    MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
-
-    openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
+    """Return the live location distribution for a query, computed from real-time results."""
     try:
-        try:
-            completion = openai_client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """Extract search conditions:
-                    {
-                        "role_keywords": ["frontend", "developer"],
-                        "platform": "linkedin" or "github" or "devto" or null,
-                        "location": "london" or null,
-                        "seniority_keywords": ["senior", "lead"]
-                    }
-                    """,
-                    },
-                    {"role": "user", "content": f"Extract constraints from: '{q}'"},
-                ],
-                response_format={"type": "json_object"},
-                max_tokens=200,
+        gpt_data = await asyncio.to_thread(parse_search_constraints, q)
+        search_query = (
+            " ".join(gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])).strip() or q
+        )
+        location_str = gpt_data.get("location")
+        target_platform = gpt_data.get("platform")
+
+        if target_platform and str(target_platform).lower() in sourcing_service.providers:
+            profiles = await _search_single_platform(
+                str(target_platform).lower(), search_query, location_str, 1, 50
             )
-            gpt_data = json.loads(completion.choices[0].message.content.strip())
-        except Exception:
-            gpt_data = {"role_keywords": q.lower().split()}
+        else:
+            profiles = await search_all_platforms(search_query, location_str, 1, 50)
 
-        client = MongoClient(MONGO_URI)
-        db = client[MONGO_DB_NAME]
-        coll = db["candidate_profiles"]
+        counts: dict[str, int] = {}
+        for prof in profiles:
+            loc = prof.get("location") or "Unknown"
+            counts[loc] = counts.get(loc, 0) + 1
 
-        keyword_clauses = []
-        combined_keys = gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])
-        if combined_keys:
-            for k in combined_keys:
-                if len(k) > 2:
-                    keyword_clauses.append({"headline": {"$regex": k, "$options": "i"}})
-                    keyword_clauses.append({"skills": {"$regex": k, "$options": "i"}})
-                    keyword_clauses.append({"full_name": {"$regex": k, "$options": "i"}})
-
-        and_clauses = []
-        if keyword_clauses:
-            and_clauses.append({"$or": keyword_clauses})
-        plat = gpt_data.get("platform")
-        if plat:
-            and_clauses.append({"platform": {"$regex": plat, "$options": "i"}})
-        loc_filter = gpt_data.get("location")
-        if loc_filter:
-            and_clauses.append({"location": {"$regex": loc_filter, "$options": "i"}})
-
-        query_filter = {"$and": and_clauses} if and_clauses else {}
-
-        pipeline = [
-            {"$match": query_filter},
-            {"$group": {"_id": "$location", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-        ]
-
-        distribution = list(coll.aggregate(pipeline))
-        return [{"location": d["_id"], "count": d["count"]} for d in distribution]
+        distribution = [{"location": loc, "count": c} for loc, c in counts.items()]
+        distribution.sort(key=lambda d: d["count"], reverse=True)
+        return distribution
     except Exception as e:
         print(f"Error in distribution: {e}")
         return []
 
 
+@router.get("/contact_details")
+async def get_contact_details(url: str = Query(..., description="The candidate's profile URL")):
+    """On-demand deep-scrape of a single profile URL for email + social links.
+
+    Backs a "Reveal contact" action in the UI so the heavy scrape only runs when a
+    recruiter actually wants a specific candidate's contact info.
+    """
+    contacts = await asyncio.to_thread(_scrape_contacts, url)
+    return contacts
+
+
 @router.get("/profile_details")
 async def get_profile_details(url: str = Query(..., description="The direct profile URL")):
-    """
-    Scrapes rich public details from the direct profile URL.
+    """Scrape rich public details from a profile URL (SSRF-guarded, off the event loop)."""
+    # Normalize relative / localized forms BEFORE the SSRF check.
+    if not url.startswith("http"):
+        url = f"https://www.kaggle.com{url}" if url.startswith("/") else f"https://{url}"
+    if "linkedin.com" in url:
+        url = re.sub(r"https?://[a-z]{2,3}\.linkedin\.com", "https://www.linkedin.com", url)
+
+    safe_url = validate_scrape_url(url)
+    if not safe_url:
+        raise HTTPException(status_code=400, detail="URL host not allowed")
+
+    # The scraper does blocking `requests` IO, so run it in a worker thread.
+    return await asyncio.to_thread(_profile_details_impl, safe_url)
+
+
+def _profile_details_impl(url: str) -> dict:  # pyright: ignore[reportGeneralTypeIssues]
+    """Synchronous profile scraper — must run off the event loop (blocking requests).
+
+    This legacy multi-platform HTML scraper has many conditional branches; the
+    pyright "too complex to analyze" inference is suppressed here (the logic is
+    exercised by the live sourcing tests, not the type-checker).
     """
     import os
 
     import requests
     from bs4 import BeautifulSoup
-
-    # Normalize relative paths to full URLs (defaulting to Kaggle for /username format)
-    if not url.startswith("http"):
-        if url.startswith("/"):
-            url = f"https://www.kaggle.com{url}"
-        else:
-            url = f"https://{url}"
-
-    # Normalize localized LinkedIn domains to standard global domain
-    if "linkedin.com" in url:
-        import re
-
-        url = re.sub(r"https?://[a-z]{2,3}\.linkedin\.com", "https://www.linkedin.com", url)
 
     # Let GitLab profiles use the standard Oxylabs HTML parser for rich data extraction
 
@@ -515,7 +620,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     if disc_results:
                         disc_html = disc_results[0].get("content", "")
                         if disc_html:
-                            disc_soup = BeautifulSoup(disc_html, "html.parser")
+                            disc_soup: Any = BeautifulSoup(disc_html, "html.parser")
                             # Look for relative profile hrefs in the discussion
                             author_links = []
                             for a in disc_soup.find_all("a", href=True):
@@ -601,8 +706,8 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                         if fallback_res.status_code == 200:
                             html_content = fallback_res.text
                             break
-                    except:
-                        raise e
+                    except Exception:
+                        raise e from None
 
         if not html_content:
             return {"error": "Failed to extract readable public profile details after retries."}
@@ -611,7 +716,9 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
         if not html:
             return {"error": "Empty HTML content received"}
 
-        soup = BeautifulSoup(html, "html.parser")
+        # Typed as Any: this legacy scraper walks deeply-optional BeautifulSoup nodes;
+        # Any keeps the (well-guarded) traversal readable without a wall of type errors.
+        soup: Any = BeautifulSoup(html, "html.parser")
 
         sections = []
 
@@ -806,7 +913,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"SOCIALS: {', '.join(social_links)}" if social_links else "",
                     f"README INFO:\n{gl_readme}" if gl_readme else "",
                 ]
-                gl_lines = [l for l in gl_lines if l]
+                gl_lines = [ln for ln in gl_lines if ln]
                 if gl_lines:
                     sections.append("GITLAB PROFILE\n" + "\n".join(gl_lines))
                     extracted_keys.add("GITLAB PROFILE")
@@ -883,7 +990,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"SOCIALS: {', '.join(ka_socials)}" if ka_socials else "",
                     f"METRICS: {', '.join(ka_metrics)}" if ka_metrics else "",
                 ]
-                ka_lines = [l for l in ka_lines if l]
+                ka_lines = [ln for ln in ka_lines if ln]
                 if ka_lines:
                     sections.append("KAGGLE PROFILE\n" + "\n".join(ka_lines))
                     extracted_keys.add("KAGGLE PROFILE")
@@ -930,7 +1037,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"METRICS: {', '.join(hr_meta)}" if hr_meta else "",
                     f"SOCIALS: {', '.join(hr_socials)}" if hr_socials else "",
                 ]
-                hr_lines = [l for l in hr_lines if l]
+                hr_lines = [ln for ln in hr_lines if ln]
                 if hr_lines:
                     sections.append("HACKERRANK PROFILE\n" + "\n".join(hr_lines))
                     extracted_keys.add("HACKERRANK PROFILE")
@@ -966,7 +1073,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"METRICS: {', '.join(lc_meta)}" if lc_meta else "",
                     f"SOCIALS: {', '.join(lc_socials)}" if lc_socials else "",
                 ]
-                lc_lines = [l for l in lc_lines if l]
+                lc_lines = [ln for ln in lc_lines if ln]
                 if lc_lines:
                     sections.append("LEETCODE PROFILE\n" + "\n".join(lc_lines))
                     extracted_keys.add("LEETCODE PROFILE")
@@ -1010,7 +1117,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"METRICS: {', '.join(ph_meta)}" if ph_meta else "",
                     f"SOCIALS: {', '.join(ph_socials)}" if ph_socials else "",
                 ]
-                ph_lines = [l for l in ph_lines if l]
+                ph_lines = [ln for ln in ph_lines if ln]
                 if ph_lines:
                     sections.append("PRODUCT HUNT PROFILE\n" + "\n".join(ph_lines))
                     extracted_keys.add("PRODUCT HUNT PROFILE")
@@ -1070,7 +1177,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                     f"METRICS: {', '.join(tw_meta)}" if tw_meta else "",
                     f"AVATAR: {tw_img}" if tw_img else "",
                 ]
-                tw_lines = [l for l in tw_lines if l]
+                tw_lines = [ln for ln in tw_lines if ln]
                 if tw_lines:
                     sections.append("TWITTER PROFILE\n" + "\n".join(tw_lines))
                     extracted_keys.add("TWITTER PROFILE")
@@ -1087,7 +1194,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                 wf_desc = meta_tag("og:description") or meta_tag("description")
 
                 wf_lines = [f"NAME: {wf_name}", f"BIO: {wf_desc}" if wf_desc else ""]
-                wf_lines = [l for l in wf_lines if l]
+                wf_lines = [ln for ln in wf_lines if ln]
                 if wf_lines:
                     sections.append("WELLFOUND PROFILE\n" + "\n".join(wf_lines))
                     extracted_keys.add("WELLFOUND PROFILE")
@@ -1104,7 +1211,7 @@ async def get_profile_details(url: str = Query(..., description="The direct prof
                 dr_desc = meta_tag("og:description") or meta_tag("description")
 
                 dr_lines = [f"NAME: {dr_name}", f"BIO: {dr_desc}" if dr_desc else ""]
-                dr_lines = [l for l in dr_lines if l]
+                dr_lines = [ln for ln in dr_lines if ln]
                 if dr_lines:
                     sections.append("DRIBBBLE PROFILE\n" + "\n".join(dr_lines))
                     extracted_keys.add("DRIBBBLE PROFILE")

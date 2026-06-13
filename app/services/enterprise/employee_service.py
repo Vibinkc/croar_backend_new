@@ -11,37 +11,51 @@ from app.models.enterprise.employee import Employee
 from app.models.enterprise.onboarding import Onboarding
 
 
+def _parse_date(value: Any, default: date | None = None) -> date | None:
+    """Parse a candidate-submitted date string safely.
+
+    Onboarding form values are free-form JSON; a malformed/empty string would otherwise
+    raise a DataError on commit and 500 the whole conversion.
+    """
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            return default
+    return default
+
+
 class EmployeeService:
     @staticmethod
     async def generate_employee_id(session: AsyncSession, company_id: UUID) -> str:
         """Generate a unique employee ID like EMP-1001 for a specific company."""
-        stmt = (
-            select(Employee)
-            .where(Employee.company_id == company_id)
-            .order_by(Employee.employee_id.desc())
-            .limit(1)
-        )
+        # Compute the next number NUMERICALLY across all existing IDs. A DB string
+        # sort (.order_by(employee_id.desc())) is lexicographic, so "EMP-999" would
+        # rank above "EMP-1000" and regenerate an existing id at every digit boundary.
+        stmt = select(Employee.employee_id).where(Employee.company_id == company_id)
         result = await session.execute(stmt)
-        last_emp = result.scalar_one_or_none()
+        max_num = 1000
+        for emp_id in result.scalars().all():
+            if emp_id and emp_id.startswith("EMP-"):
+                try:
+                    max_num = max(max_num, int(emp_id.split("-")[1]))
+                except (IndexError, ValueError):
+                    continue
 
-        next_num = 1001
-        if last_emp and last_emp.employee_id and last_emp.employee_id.startswith("EMP-"):
-            try:
-                # Extract number from EMP-XXXX
-                curr_num = int(last_emp.employee_id.split("-")[1])
-                next_num = curr_num + 1
-            except (IndexError, ValueError):
-                pass
-
-        return f"EMP-{next_num}"
+        return f"EMP-{max_num + 1}"
 
     @staticmethod
     async def convert_candidate_to_employee(
-        session: AsyncSession, candidate_id: UUID, _performed_by: str
+        session: AsyncSession, candidate_id: UUID, _performed_by: str, company_id: UUID | None = None
     ) -> Employee:
-        """Convert an onboarded candidate to an employee."""
-        # 1. Fetch Candidate with related data
+        """Convert an onboarded candidate to an employee (scoped to the caller's company)."""
+        # 1. Fetch Candidate with related data — scoped to the caller's company so one
+        #    tenant cannot convert another tenant's candidate (cross-tenant IDOR).
         stmt = select(Candidate).where(Candidate.id == candidate_id)
+        if company_id is not None:
+            stmt = stmt.where(Candidate.company_id == company_id)
         result = await session.execute(stmt)
         candidate = result.scalar_one_or_none()
         if not candidate:
@@ -114,8 +128,8 @@ class EmployeeService:
             employment_type=str(job_info.get("employment_type"))
             if job_info.get("employment_type")
             else "Full-time",
-            hire_date=cast("Any", job_info.get("hire_date")) or date.today(),
-            original_hire_date=cast("Any", job_info.get("hire_date")) or date.today(),
+            hire_date=_parse_date(job_info.get("hire_date"), date.today()),
+            original_hire_date=_parse_date(job_info.get("hire_date"), date.today()),
             source=candidate.source_platform or "Recruitment",
             notice_period=candidate.notice_period,
             pan_card_number=str(
@@ -125,7 +139,7 @@ class EmployeeService:
                 form_data.get("aadhar_card_number") or personal_info.get("aadhar_card_number") or ""
             ),
             passport_number=str(form_data.get("passport_number") or ""),
-            date_of_birth=cast("Any", personal_info.get("date_of_birth")),
+            date_of_birth=_parse_date(personal_info.get("date_of_birth")),
             gender=str(personal_info.get("gender") or ""),
             marital_status=str(personal_info.get("marital_status") or ""),
             blood_group=str(personal_info.get("blood_group") or ""),

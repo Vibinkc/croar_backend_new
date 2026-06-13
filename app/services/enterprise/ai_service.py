@@ -26,9 +26,9 @@ async def generate_assessment_questions(
                 {
                     "id": str(i),
                     "type": "APTITUDE",
-                    "question": cast("str", q["question_text"]),
-                    "options": q["options"],
-                    "correct_answer": q["correct_answer"],
+                    "question": cast("str", q.get("question_text", "")),
+                    "options": q.get("options", []),
+                    "correct_answer": q.get("correct_answer", ""),
                     "explanation": q.get("explanation", ""),
                 }
                 for i, q in enumerate(raw_questions, 1)
@@ -39,16 +39,18 @@ async def generate_assessment_questions(
                 {
                     "id": str(i),
                     "type": "CODING",
-                    "title": q["title"],
-                    "problem_statement": q["question_text"],
+                    "title": q.get("title", ""),
+                    "problem_statement": q.get("question_text", ""),
                     "content": {
-                        "problem_description": cast("dict[str, object]", q["content"]).get(
+                        "problem_description": cast("dict[str, object]", q.get("content", {})).get(
                             "problem_description", ""
                         ),
-                        "constraints": cast("dict[str, object]", q["content"]).get("constraints", []),
-                        "examples": cast("dict[str, object]", q["content"]).get("examples", []),
-                        "test_cases": cast("dict[str, object]", q["content"]).get("test_cases", []),
-                        "initial_code": cast("dict[str, object]", q["content"]).get("initial_code", {}),
+                        "constraints": cast("dict[str, object]", q.get("content", {})).get("constraints", []),
+                        "examples": cast("dict[str, object]", q.get("content", {})).get("examples", []),
+                        "test_cases": cast("dict[str, object]", q.get("content", {})).get("test_cases", []),
+                        "initial_code": cast("dict[str, object]", q.get("content", {})).get(
+                            "initial_code", {}
+                        ),
                     },
                     "difficulty": q.get("difficulty", "Medium"),
                 }
@@ -68,9 +70,9 @@ async def generate_assessment_questions(
                 {
                     "id": f"apt_{i}",
                     "type": "APTITUDE",
-                    "question": q["question_text"],
-                    "options": q["options"],
-                    "correct_answer": q["correct_answer"],
+                    "question": q.get("question_text", ""),
+                    "options": q.get("options", []),
+                    "correct_answer": q.get("correct_answer", ""),
                     "explanation": q.get("explanation", ""),
                 }
             )
@@ -80,16 +82,18 @@ async def generate_assessment_questions(
                 {
                     "id": f"cod_{i}",
                     "type": "CODING",
-                    "title": q["title"],
-                    "problem_statement": q["question_text"],
+                    "title": q.get("title", ""),
+                    "problem_statement": q.get("question_text", ""),
                     "content": {
-                        "problem_description": cast("dict[str, object]", q["content"]).get(
+                        "problem_description": cast("dict[str, object]", q.get("content", {})).get(
                             "problem_description", ""
                         ),
-                        "constraints": cast("dict[str, object]", q["content"]).get("constraints", []),
-                        "examples": cast("dict[str, object]", q["content"]).get("examples", []),
-                        "test_cases": cast("dict[str, object]", q["content"]).get("test_cases", []),
-                        "initial_code": cast("dict[str, object]", q["content"]).get("initial_code", {}),
+                        "constraints": cast("dict[str, object]", q.get("content", {})).get("constraints", []),
+                        "examples": cast("dict[str, object]", q.get("content", {})).get("examples", []),
+                        "test_cases": cast("dict[str, object]", q.get("content", {})).get("test_cases", []),
+                        "initial_code": cast("dict[str, object]", q.get("content", {})).get(
+                            "initial_code", {}
+                        ),
                     },
                     "difficulty": q.get("difficulty", "Medium"),
                 }

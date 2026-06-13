@@ -116,7 +116,7 @@ async def list_employees(
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.company_id == company_id, Employee.deleted_at == None)
+        .where(Employee.company_id == company_id, Employee.deleted_at.is_(None))
     )
 
     result = await session.execute(stmt)
@@ -133,7 +133,7 @@ async def get_employee(
     stmt = (
         select(Employee)
         .options(selectinload(Employee.department), selectinload(Employee.reporting_to))
-        .where(Employee.id == id, Employee.company_id == company_id, Employee.deleted_at == None)
+        .where(Employee.id == id, Employee.company_id == company_id, Employee.deleted_at.is_(None))
     )
 
     result = await session.execute(stmt)
@@ -154,7 +154,7 @@ async def update_employee(
 ) -> Employee:
     company_id = getattr(current_user, "company_id", None)
     stmt = select(Employee).where(
-        Employee.id == id, Employee.company_id == company_id, Employee.deleted_at == None
+        Employee.id == id, Employee.company_id == company_id, Employee.deleted_at.is_(None)
     )
     res = await session.execute(stmt)
     employee = res.scalar_one_or_none()
@@ -212,7 +212,10 @@ async def convert_candidate(
         last_name = getattr(current_user, "last_name", "")
         agent_name = f"{first_name} {last_name}".strip() or "System"
 
-        employee = await employee_service.convert_candidate_to_employee(session, candidate_id, agent_name)
+        company_id = getattr(current_user, "company_id", None)
+        employee = await employee_service.convert_candidate_to_employee(
+            session, candidate_id, agent_name, company_id
+        )
         await session.commit()
 
         # Eager load relationships for the response model

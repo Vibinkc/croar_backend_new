@@ -302,10 +302,18 @@ class HiringAgentService:
         )
 
         values = cast("dict[str, Any]", intelligence.get("values_extracted", {}))
+        # LLM-extracted values may be non-numeric ("2 months", "12 LPA"); never let a
+        # bad cast crash the inbound-email handler / IMAP sync loop.
         if values.get("notice_period"):
-            candidate.notice_period = int(values["notice_period"])
+            try:
+                candidate.notice_period = int(values["notice_period"])
+            except (TypeError, ValueError):
+                pass
         if values.get("salary"):
-            candidate.expected_salary = float(values["salary"])
+            try:
+                candidate.expected_salary = float(values["salary"])
+            except (TypeError, ValueError):
+                pass
 
         now = datetime.now().isoformat()
         feedback = cast("dict[str, Any]", app.ai_feedback or {})

@@ -111,6 +111,11 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
     start_t = parse_time(automation.start_time)
     end_t = parse_time(automation.end_time)
 
+    # Guard against 0/None config that would otherwise hang the slot loop or disable
+    # conflict detection / daily caps. Defaults match the previous "30-min, 1/day" intent.
+    duration = max(1, automation.duration or 30)
+    daily_limit = max(1, automation.daily_limit or 1)
+
     # NEW: if time_slots provided, use them instead of arbitrary 30-min increments
     custom_times: list[time] = []
     if automation.time_slots:
@@ -139,7 +144,7 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
         count_res = await db.execute(count_stmt)
         existing_count = count_res.scalar() or 0
 
-        if existing_count < automation.daily_limit:
+        if existing_count < daily_limit:
             # Get existing times today for this automation to avoid clashes
             times_stmt = (
                 select(InterviewSchedule.scheduled_time)
@@ -160,7 +165,7 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
                     candidate_slot_dt = datetime.combine(target_date, ct)
                     conflict = False
                     for et in existing_times:
-                        if abs((et - candidate_slot_dt).total_seconds()) < (automation.duration * 60):
+                        if abs((et - candidate_slot_dt).total_seconds()) < (duration * 60):
                             conflict = True
                             break
                     if not conflict:
@@ -169,17 +174,17 @@ async def find_available_slot(db: AsyncSession, automation: InterviewAutomation)
                 candidate_slot_dt = datetime.combine(target_date, start_t)
                 end_limit_dt = datetime.combine(target_date, end_t)
 
-                while candidate_slot_dt + timedelta(minutes=automation.duration) <= end_limit_dt:
+                while candidate_slot_dt + timedelta(minutes=duration) <= end_limit_dt:
                     conflict = False
                     for et in existing_times:
-                        if abs((et - candidate_slot_dt).total_seconds()) < (automation.duration * 60):
+                        if abs((et - candidate_slot_dt).total_seconds()) < (duration * 60):
                             conflict = True
                             break
 
                     if not conflict:
                         return candidate_slot_dt
 
-                    candidate_slot_dt += timedelta(minutes=automation.duration)
+                    candidate_slot_dt += timedelta(minutes=duration)
 
         target_date += timedelta(days=1)
 

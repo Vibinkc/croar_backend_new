@@ -13,6 +13,10 @@ class GitHubProvider(SourcingProvider):
     def __init__(self):
         self.base_url = "https://api.github.com"
         self.headers = {"User-Agent": "Talent-Intel-App/1.0"}
+        # Optional token raises the GitHub API rate limit from 60/hr to 5000/hr.
+        token = os.getenv("GITHUB_TOKEN")
+        if token:
+            self.headers["Authorization"] = f"Bearer {token}"
 
     @property
     def platform_name(self) -> str:
@@ -40,6 +44,25 @@ class GitHubProvider(SourcingProvider):
 
         return None
 
+    def _fetch(self, url: str) -> str | None:
+        """Fetch a URL via Oxylabs if it works, otherwise fall back to a direct request.
+
+        This keeps GitHub sourcing fully functional even when Oxylabs is unavailable
+        (e.g. invalid creds / quota), since GitHub's public API + profile pages are
+        reachable directly.
+        """
+        content = self._fetch_via_oxylabs(url)
+        if content:
+            return content
+        try:
+            r = requests.get(url, headers=self.headers, timeout=15)
+            if r.status_code == 200:
+                return r.text
+            print(f"DEBUG: direct GitHub fetch {url} -> {r.status_code}")
+        except Exception as e:
+            print(f"DEBUG: direct GitHub fetch failed for {url}: {e}")
+        return None
+
     def _get_email_from_events(self, username: str) -> str | None:
         """
         Highest fidelity hack: check the user's public activity events.
@@ -47,7 +70,7 @@ class GitHubProvider(SourcingProvider):
         """
         try:
             events_url = f"{self.base_url}/users/{username}/events/public"
-            content = self._fetch_via_oxylabs(events_url)
+            content = self._fetch(events_url)
             if not content:
                 return None
 
@@ -72,7 +95,7 @@ class GitHubProvider(SourcingProvider):
         try:
             # 1. Get recent repositories
             repos_url = f"{self.base_url}/users/{username}/repos?sort=updated&per_page=5"
-            content = self._fetch_via_oxylabs(repos_url)
+            content = self._fetch(repos_url)
             if not content:
                 return None
 
@@ -82,7 +105,7 @@ class GitHubProvider(SourcingProvider):
                 if not repo.get("fork") and repo.get("name"):
                     repo_name = repo["name"]
                     commits_url = f"{self.base_url}/repos/{username}/{repo_name}/commits?per_page=3"
-                    commits_content = self._fetch_via_oxylabs(commits_url)
+                    commits_content = self._fetch(commits_url)
 
                     if commits_content:
                         commits = json.loads(commits_content)
@@ -100,13 +123,14 @@ class GitHubProvider(SourcingProvider):
 
     def _scrape_profile_details(self, item: dict[str, Any], location: str | None) -> dict[str, Any]:
         """Scrapes full details for a single profile."""
-        username = item.get("login")
+        username = str(item.get("login") or "")
         profile_url = f"https://github.com/{username}"
         avatar_url = item.get("avatar_url")
 
-        html_content = self._fetch_via_oxylabs(profile_url)
+        html_content = self._fetch(profile_url)
 
         # Initialize fields to None
+        full_name = username
         company = None
         location_val = location
         email = None
@@ -117,6 +141,7 @@ class GitHubProvider(SourcingProvider):
         followers = None
         following = None
         public_repos = None
+        hireable = None
 
         if html_content:
             soup = BeautifulSoup(html_content, "html.parser")
@@ -161,10 +186,15 @@ class GitHubProvider(SourcingProvider):
                 for sli in social_lis:
                     sa = sli.find("a")
                     if sa:
-                        link = sa.get("href")
-                        provider = "twitter" if "twitter.com" in link or "x.com" in link else "other"
-                        if provider == "twitter":
+                        link = str(sa.get("href") or "")
+                        low = link.lower()
+                        if "twitter.com" in low or "x.com" in low:
+                            provider = "twitter"
                             twitter_username = sa.get_text(strip=True).replace("@", "")
+                        elif "linkedin.com" in low:
+                            provider = "linkedin"
+                        else:
+                            provider = "other"
                         social_links.append({"provider": provider, "url": link})
 
             # Extract followers
@@ -188,6 +218,37 @@ class GitHubProvider(SourcingProvider):
                 if r_span:
                     public_repos = r_span.get_text(strip=True)
 
+        # GitHub REST API enrichment (works WITHOUT Oxylabs) — fills any field the HTML
+        # scrape missed and supplies the display name, public email, and hireable flag.
+        api_content = self._fetch(f"{self.base_url}/users/{username}")
+        if api_content:
+            try:
+                u = json.loads(api_content)
+                if isinstance(u, dict):
+                    full_name = u.get("name") or full_name
+                    headline = headline or u.get("bio")
+                    company = company or u.get("company")
+                    location_val = location_val or u.get("location")
+                    email = email or u.get("email")
+                    if u.get("twitter_username"):
+                        twitter_username = twitter_username or u.get("twitter_username")
+                        if not any(s.get("provider") == "twitter" for s in social_links):
+                            social_links.append(
+                                {"provider": "twitter", "url": f"https://twitter.com/{u['twitter_username']}"}
+                            )
+                    b = u.get("blog")
+                    if b and not blog:
+                        blog = b if str(b).startswith("http") else f"https://{b}"
+                    if followers is None:
+                        followers = u.get("followers")
+                    if following is None:
+                        following = u.get("following")
+                    if public_repos is None:
+                        public_repos = u.get("public_repos")
+                    hireable = u.get("hireable")
+            except Exception as e:
+                print(f"DEBUG: GitHub API enrichment failed for {username}: {e}")
+
         # Try multiple methods to find the hidden email
         if not email:
             # 1. Check Events API (fastest and very reliable)
@@ -201,7 +262,8 @@ class GitHubProvider(SourcingProvider):
         raw_data = {"html": html_content} if html_content else {}
 
         return {
-            "full_name": username,
+            "full_name": full_name,
+            "username": username,
             "headline": headline,
             "location": location_val,
             "platform": "github",
@@ -214,7 +276,7 @@ class GitHubProvider(SourcingProvider):
             "public_repos": public_repos,
             "followers": followers,
             "following": following,
-            "hireable": None,
+            "hireable": hireable,
             "skills": [],
             "social_links": social_links,
             "raw_data": raw_data,
@@ -227,10 +289,12 @@ class GitHubProvider(SourcingProvider):
         if location:
             q += f" location:{location}"
 
-        search_url = f"{self.base_url}/search/users?q={q}&page={page}&per_page={page_size}"
+        # Pass query via params so special chars (&, #, spaces) are URL-encoded correctly.
+        search_url = f"{self.base_url}/search/users"
+        params = {"q": q, "page": page, "per_page": page_size}
 
         try:
-            response = requests.get(search_url, headers=self.headers, timeout=10)
+            response = requests.get(search_url, headers=self.headers, params=params, timeout=10)
             if response.status_code != 200:
                 return []
 

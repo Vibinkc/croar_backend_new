@@ -172,6 +172,19 @@ async def initiate_onboarding(
     return onboarding_complete
 
 
+@router.get("/statuses", response_model=list[OnboardingStatusResponse])
+async def get_onboarding_statuses(
+    session: DBSessionDep, _current_user: Annotated[object, Depends(get_current_user)]
+) -> list[OnboardingStatus]:
+    """List all available onboarding statuses.
+
+    Declared BEFORE the /{id} route so the literal path isn't captured as a UUID id.
+    """
+    stmt = select(OnboardingStatus)
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 @router.get("/{id}", response_model=OnboardingResponse)
 async def get_onboarding(
     id: UUID,
@@ -203,16 +216,6 @@ async def get_onboarding(
         raise HTTPException(status_code=404, detail="Onboarding process not found")
 
     return onboarding
-
-
-@router.get("/statuses", response_model=list[OnboardingStatusResponse])
-async def get_onboarding_statuses(
-    session: DBSessionDep, _current_user: Annotated[object, Depends(get_current_user)]
-) -> list[OnboardingStatus]:
-    """List all available onboarding statuses."""
-    stmt = select(OnboardingStatus)
-    result = await session.execute(stmt)
-    return list(result.scalars().all())
 
 
 @router.post("/{id}/resubmit", response_model=OnboardingResponse)

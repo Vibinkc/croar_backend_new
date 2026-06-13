@@ -30,7 +30,7 @@ async def list_org_roles(
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id == tenant_id, Role.is_system == False)
+        .where(Role.tenant_id == tenant_id, Role.is_system.is_(False))
         .order_by(Role.role_rank.asc())
     )
 
@@ -45,7 +45,7 @@ async def list_available_permissions(
     """List all permissions that can be assigned to roles."""
     tenant_id = getattr(current_user, "company_id", None)
     stmt = select(Permission).where(
-        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id == None)),
+        ((Permission.tenant_id == tenant_id) | (Permission.tenant_id.is_(None))),
         Permission.module != ModuleScope.platform,
     )
     result = await session.execute(stmt)
@@ -111,7 +111,7 @@ async def update_org_role(
         .where(
             Role.id == role_id,
             Role.tenant_id == tenant_id,
-            Role.is_system == False,  # Cannot edit system roles
+            Role.is_system.is_(False),  # Cannot edit system roles
         )
     )
     result = await session.execute(stmt)
@@ -148,7 +148,7 @@ async def delete_org_role(
     stmt = select(Role).where(
         Role.id == role_id,
         Role.tenant_id == tenant_id,
-        Role.is_system == False,  # Cannot delete system roles
+        Role.is_system.is_(False),  # Cannot delete system roles
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()
@@ -173,7 +173,7 @@ async def list_team_members(
     stmt = (
         select(EnterpriseUser)
         .options(selectinload(EnterpriseUser.roles).selectinload(Role.permissions))
-        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at == None)
+        .where(EnterpriseUser.company_id == tenant_id, EnterpriseUser.deleted_at.is_(None))
     )
 
     result = await session.execute(stmt)
@@ -197,7 +197,7 @@ async def add_team_member(
     role_stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id == None))
+        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id.is_(None)))
     )
     result = await session.execute(role_stmt)
     roles = result.scalars().all()

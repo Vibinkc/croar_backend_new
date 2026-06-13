@@ -101,7 +101,7 @@ class GitLabProvider(BaseScraperProvider):
                 if response.status_code == 200:
                     items = response.json()
                     for item in items:
-                        user_id = item.get("id")
+                        _user_id = item.get("id")
                         username = item.get("username")
 
                         profiles.append(

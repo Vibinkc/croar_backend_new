@@ -71,9 +71,11 @@ async def get_current_user(
 
     if user_sa:
         from app.models.enterprise.company import Company
+
         stmt_company = select(Company.id).limit(1)
         res_company = await session.execute(stmt_company)
         first_company_id = res_company.scalar()
+        # SuperAdmin has no company_id column; attach it dynamically for downstream scoping.
         user_sa.company_id = first_company_id
         return user_sa
 

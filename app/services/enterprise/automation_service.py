@@ -40,8 +40,13 @@ async def evaluate_criteria(criteria: str, context: dict[str, Any]) -> bool:
             if "<" in criteria:
                 val = float(criteria.split("<")[1].strip())
                 return ai_score < val
+            # A numeric gate with no parseable operator must not silently fire.
+            return False
     except Exception as e:
         logger.error(f"Criteria evaluation error: {e}")
+        # A malformed numeric gate fails CLOSED (don't fire the action).
+        if "ai_score" in criteria.lower():
+            return False
 
     # Fallback: Treat as a prompt for a small logical evaluation (could use LLM here)
     return True
@@ -76,6 +81,12 @@ async def trigger_automations(
 
     candidate = application.candidate
     job = application.job_requirement
+
+    # Orphaned application (candidate/job deleted): skip rather than 500 after the
+    # stage change may already be committed.
+    if not candidate or not job:
+        logger.error(f"Application {application_id} is missing candidate/job; skipping automations.")
+        return
 
     context: dict[str, Any] = {
         "candidate_name": candidate.full_name,

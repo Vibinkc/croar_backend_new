@@ -1,5 +1,6 @@
 import uuid
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from datetime import timedelta
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -22,9 +23,6 @@ from app.models.shared.constants import ModuleScope
 from app.models.shared.super_admin import SuperAdmin
 from app.models.shared.system_settings import SystemSettings
 from app.schemas.auth import EnterpriseSignUpRequest, EnterpriseSignUpResponse, RefreshTokenRequest, Token
-
-if TYPE_CHECKING:
-    from app.models.shared.auth import Role
 
 _settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -165,7 +163,11 @@ async def google_login(session: DBSessionDep, data: dict[str, Any] = Body(...)) 
             else:
                 raise e
 
-        email = idinfo["email"]
+        email = idinfo.get("email")
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Google account has no email"
+            )
         print(f"Token verified for email: {email}")
 
         # 1. Check for EnterpriseUser
@@ -311,10 +313,10 @@ async def google_login(session: DBSessionDep, data: dict[str, Any] = Body(...)) 
     except ValueError as ve:
         # Invalid token
         print(f"Google Token Verification Failed: {ve}")
-        raise HTTPException(status_code=401, detail=f"Invalid Google token: {ve}")
+        raise HTTPException(status_code=401, detail=f"Invalid Google token: {ve}") from ve
     except Exception as e:
         print(f"Google Login Error: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error during Google SSO")
+        raise HTTPException(status_code=500, detail="Internal server error during Google SSO") from e
 
 
 @router.post("/token", response_model=Token)
@@ -445,7 +447,7 @@ async def microsoft_login(session: DBSessionDep, data: dict[str, Any] = Body(...
 
     # Verify Microsoft Token
     try:
-        client_app = msal.ConfidentialClientApplication(
+        _client_app = msal.ConfidentialClientApplication(
             _settings.ms_client_id,
             client_credential=_settings.ms_client_secret,
             authority=f"https://login.microsoftonline.com/{_settings.ms_tenant_id}",
@@ -455,16 +457,21 @@ async def microsoft_login(session: DBSessionDep, data: dict[str, Any] = Body(...
         print(f"DEBUG: MSAL initialization error: {e!s}")
         raise
 
-    # We use a simple way to get claims from the ID token
-    # In a real production app, you should verify the signature using the discovery keys
+    # Verify the ID token's SIGNATURE against Microsoft's published JWKS keys (fail closed).
+    # Previously the signature was skipped entirely, which let anyone forge a token with a
+    # known client-id `aud` and any email -> full authentication bypass.
     import jwt
+    from jwt import PyJWKClient
 
     try:
-        # Note: In production, verify the signature with Microsoft's public keys
-        # For simplicity in this dev environment, we'll decode and check audience/issuer
-        decoded_token = jwt.decode(token, options={"verify_signature": False})
+        tenant = _settings.ms_tenant_id or "common"
+        jwks_url = f"https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"
+        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token)
+        decoded_token = jwt.decode(
+            token, signing_key.key, algorithms=["RS256"], audience=_settings.ms_client_id
+        )
 
-        # Verify Audience and Issuer (Basic check)
+        # Defense in depth: re-check audience explicitly.
         if decoded_token.get("aud") != _settings.ms_client_id:
             raise HTTPException(status_code=401, detail="Invalid Microsoft token audience")
 
@@ -601,7 +608,7 @@ async def microsoft_login(session: DBSessionDep, data: dict[str, Any] = Body(...
         )
     except Exception as e:
         print(f"Microsoft SSO Error: {e!s}")
-        raise HTTPException(status_code=401, detail=f"Invalid Microsoft token: {e!s}")
+        raise HTTPException(status_code=401, detail=f"Invalid Microsoft token: {e!s}") from e
 
 
 @router.post("/forgot-password")
@@ -619,7 +626,7 @@ async def forgot_password(data: dict[str, str] = Body(...), session: DBSessionDe
     if user:
         # Generate a short-lived reset token (15 mins)
         reset_token = create_access_token(
-            subject=email, extra_claims={"type": "reset_password"}, expires_delta=15
+            subject=email, extra_claims={"type": "reset_password"}, expires_delta=timedelta(minutes=15)
         )
 
         # In a real app, send an email here.
@@ -660,7 +667,7 @@ async def reset_password(data: dict[str, str] = Body(...), session: DBSessionDep
 
         return {"message": "Password updated successfully"}
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired reset token")
+        raise HTTPException(status_code=401, detail="Invalid or expired reset token") from None
 
 
 @router.post("/refresh", response_model=Token)

@@ -29,7 +29,7 @@ class GoogleJobsService:
     async def notify_job_update(self, job_url: str, update_type: str = "URL_UPDATED"):
         """
         Notify Google that a job URL has been updated or deleted.
-        update_type can be 'URL_UPDATED' or 'URL_DELETED'
+        update_type can be 'URL_UPDATED' or 'URL_DELETED'.
         """
         credentials = self._get_credentials()
         if not credentials:
@@ -38,7 +38,7 @@ class GoogleJobsService:
         try:
             import httplib2
 
-            http = credentials.authorize(httplib2.Http())
+            _http = credentials.authorize(httplib2.Http())
 
             body = {"url": job_url, "type": update_type}
 

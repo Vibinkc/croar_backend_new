@@ -13,6 +13,10 @@ from app.models.shared.system_settings import SystemSettings
 router = APIRouter(prefix="/system", tags=["System Settings"])
 platform_admin_dep = Depends(PermissionChecker(ModuleScope.platform, PermissionAction.moderate))
 
+# Only these non-sensitive flags may be read without authentication (the login/signup
+# pages need them pre-auth). Every other key is admin-only via GET /system/settings.
+_PUBLIC_SETTING_KEYS = {"signup_enabled", "google_sso_enabled", "microsoft_sso_enabled"}
+
 
 class SettingUpdate(BaseModel):
     value: bool | str
@@ -28,7 +32,9 @@ async def get_all_settings(session: DBSessionDep, _admin: Annotated[object, plat
 
 @router.get("/settings/{key}")
 async def get_setting(key: str, session: DBSessionDep):
-    """Publicly accessible check for specific settings (like signup_enabled)."""
+    """Publicly readable check, restricted to a small allowlist of non-sensitive flags."""
+    if key not in _PUBLIC_SETTING_KEYS:
+        raise HTTPException(status_code=404, detail="Setting not found")
     stmt = select(SystemSettings).where(SystemSettings.key == key)
     setting = (await session.execute(stmt)).scalar_one_or_none()
     if not setting:
@@ -82,7 +88,7 @@ async def get_all_users(session: DBSessionDep, _admin: Annotated[object, platfor
     """List all users who registered via the public signup flow."""
     stmt = (
         select(EnterpriseUser)
-        .where(EnterpriseUser.is_self_registered == True)
+        .where(EnterpriseUser.is_self_registered.is_(True))
         .order_by(EnterpriseUser.created_at.desc())
     )
     result = await session.execute(stmt)

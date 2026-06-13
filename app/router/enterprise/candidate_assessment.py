@@ -124,12 +124,12 @@ async def submit_assessment(
     questions: list[dict[str, Any]] = []
     if attempt.automation_id:
         stmt_auto = select(AssessmentAutomation).where(AssessmentAutomation.id == attempt.automation_id)
-        automation = (await session.execute(stmt_auto)).scalar_one()
-        questions = cast("list[dict[str, Any]]", automation.generated_questions or [])
+        automation = (await session.execute(stmt_auto)).scalar_one_or_none()
+        questions = cast("list[dict[str, Any]]", (automation.generated_questions if automation else []) or [])
     else:
         stmt_tpl = select(AssessmentTemplate).where(AssessmentTemplate.id == attempt.template_id)
-        template = (await session.execute(stmt_tpl)).scalar_one()
-        questions = cast("list[dict[str, Any]]", template.generated_questions or [])
+        template = (await session.execute(stmt_tpl)).scalar_one_or_none()
+        questions = cast("list[dict[str, Any]]", (template.generated_questions if template else []) or [])
 
     # Evaluate each answer (simulated for MCQs, AI for others)
     apt_correct = 0
@@ -139,19 +139,26 @@ async def submit_assessment(
 
     for q in questions:
         q_id = str(q.get("id"))
-        q_type = q.get("type")
+        # Generated questions are typed "APTITUDE"/"CODING"; also accept legacy "mcq"/"code".
+        q_type = str(q.get("type") or "").upper()
         ans_val = answers.get(q_id)
 
-        if q_type == "mcq":
+        if q_type in ("APTITUDE", "MCQ"):
             apt_total += 1
             if str(ans_val) == str(q.get("correct_answer")):
                 apt_correct += 1
-        elif q_type == "code":
+        elif q_type in ("CODING", "CODE"):
             cod_total += 1
+            problem = q.get("problem_statement") or q.get("text") or q.get("question") or ""
+            content = q.get("content") if isinstance(q.get("content"), dict) else {}
+            test_cases = (content or {}).get("test_cases") or q.get("test_cases", [])
             evaluation = await ai_evaluator_service.evaluate_code_response(
-                str(q.get("text")), cast("list[dict[str, str]]", q.get("test_cases", [])), str(ans_val)
+                str(problem), cast("list[dict[str, str]]", test_cases or []), str(ans_val)
             )
-            cod_score_accum += float(evaluation.get("score", 0))
+            try:
+                cod_score_accum += float(evaluation.get("score", 0))
+            except (TypeError, ValueError):
+                pass
 
     apt_score = int((apt_correct / apt_total) * 100) if apt_total > 0 else None
     cod_score = int(cod_score_accum / cod_total) if cod_total > 0 else None

@@ -1,7 +1,7 @@
 import random
 import re
 import time
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import requests
@@ -29,7 +29,7 @@ class TwitterProvider(BaseScraperProvider):
 
     TWITTERAPI_BASE = "https://api.twitterapi.io"
 
-    EXCLUDE_SEGMENTS = {
+    EXCLUDE_SEGMENTS: ClassVar[set[str]] = {
         "search",
         "status",
         "hashtag",
@@ -411,9 +411,7 @@ class TwitterProvider(BaseScraperProvider):
             if segments[0].lower() in self.EXCLUDE_SEGMENTS:
                 return False
             # Twitter usernames are alphanumeric + underscore, 1-15 chars
-            if not re.match(r"^[A-Za-z0-9_]{1,50}$", segments[0]):
-                return False
-            return True
+            return re.match(r"^[A-Za-z0-9_]{1,50}$", segments[0])
         except Exception:
             return False
 

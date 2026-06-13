@@ -5,3 +5,6 @@ skips:
   - B101  # assert statement
   - B106  # hardcoded password funcarg
   - B110  # try-except-pass
+  - B311  # pseudo-random used for non-crypto purposes (scraper jitter/sampling)
+  - B405  # xml.etree import — parsing trusted provider APIs (e.g. arxiv.org) only
+  - B314  # xml.etree.fromstring on trusted provider responses only

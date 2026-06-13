@@ -22,7 +22,7 @@ async def batch_scrape():
     query = "Senior Frontend Developer"
     location = ""
     page_size = 15
-    max_pages = 5
+    _max_pages = 5
 
     print("--- BATCH SCRAPING TALENT INTELLIGENCE ---")
     print(f"Target Role: {query}")

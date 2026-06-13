@@ -17,7 +17,7 @@ from app.core.exception_handlers import (
 )
 from app.core.exceptions import AppException
 from app.core.logging_config import setup_logging
-from app.core.rate_limit import rate_limit_exceeded_handler
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.core.settings import get_settings
 from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
@@ -48,6 +48,13 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+
+# Rate limiting (SlowAPI): register the limiter + middleware so the configured limits
+# actually take effect (previously the limiter was defined but never wired in).
+from slowapi.middleware import SlowAPIMiddleware
+
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
 
 # Exception Handlers
 app.add_exception_handler(AppException, app_exception_handler)  # type: ignore
@@ -94,6 +101,6 @@ from app.router.enterprise.sourcing import search_profiles as sourcing_search
 
 @app.get("/search")
 async def legacy_search(
-    q: str, location: str = None, platform: str = "github", page: int = 1, page_size: int = 15
+    q: str, location: str | None = None, platform: str = "github", page: int = 1, page_size: int = 15
 ):
     return await sourcing_search(q, location, platform, page, page_size)

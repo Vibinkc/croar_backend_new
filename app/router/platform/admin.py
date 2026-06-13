@@ -1,3 +1,4 @@
+import secrets
 from typing import Annotated, Any, cast
 from uuid import UUID
 
@@ -12,7 +13,7 @@ from app.models.enterprise.employee import Department
 from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.auth import Permission, Role
 from app.models.shared.constants import ModuleScope, PermissionAction
-from app.schemas.enterprise.company import CompanyCreate, CompanyResponse, CompanyUpdate
+from app.schemas.enterprise.company import CompanyResponse, CompanyUpdate
 from app.schemas.enterprise.employees import DepartmentCreate, DepartmentOut
 from app.schemas.rbac import PermissionOut, RoleCreate, RoleOut, RoleUpdate
 
@@ -28,15 +29,15 @@ async def get_platform_stats(
 ) -> dict[str, object]:
     """Get high-level platform statistics for the Super Admin dashboard."""
     # Total Organizations
-    org_stmt = select(func.count(Company.id)).where(Company.deleted_at == None)
+    org_stmt = select(func.count(Company.id)).where(Company.deleted_at.is_(None))
     total_orgs = (await session.execute(org_stmt)).scalar() or 0
 
     # Total Users across all orgs
-    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at == None)
+    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at.is_(None))
     total_users = (await session.execute(user_stmt)).scalar() or 0
 
     # Total Global Roles
-    role_stmt = select(func.count(Role.id)).where(Role.tenant_id == None)
+    role_stmt = select(func.count(Role.id)).where(Role.tenant_id.is_(None))
     total_roles = (await session.execute(role_stmt)).scalar() or 0
 
     return {
@@ -50,16 +51,14 @@ async def get_platform_stats(
 @router.get("/tenants", response_model=list[CompanyResponse])
 async def list_tenants(session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]) -> list[object]:
     """List all tenants (organizations) in the platform."""
-    stmt = select(Company).where(Company.deleted_at == None)
+    stmt = select(Company).where(Company.deleted_at.is_(None))
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 @router.post("/tenants", response_model=CompanyResponse)
 async def create_tenant(
-    session: DBSessionDep,
-    _admin: Annotated[object, platform_admin_dep],
-    body: dict[str, Any] = Body(...),
+    session: DBSessionDep, _admin: Annotated[object, platform_admin_dep], body: dict[str, Any] = Body(...)
 ) -> object:
     """Create a new tenant and its first admin user."""
     import re
@@ -89,9 +88,7 @@ async def create_tenant(
         slug = re.sub(r"[^a-zA-Z0-9]", "-", org_name.lower())
         slug = re.sub(r"-+", "-", slug).strip("-")
 
-    company_fields = {
-        "name", "logo_url", "industry", "location", "config", "is_consultancy", "parent_id"
-    }
+    company_fields = {"name", "logo_url", "industry", "location", "config", "is_consultancy", "parent_id"}
     filtered_org = {k: v for k, v in org_dict.items() if k in company_fields}
 
     new_company = Company(slug=slug, **filtered_org)
@@ -252,9 +249,17 @@ async def create_tenant_admin(
         perms = (await session.execute(perm_stmt)).scalars().all()
         admin_role.permissions = perms
 
-    password = admin_data.get("password") or "Admin@123"
+    admin_email = admin_data.get("email")
+    if not admin_email:
+        raise HTTPException(status_code=400, detail="email is required")
+    if (
+        await session.execute(select(EnterpriseUser).where(EnterpriseUser.email == admin_email))
+    ).scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+
+    password = admin_data.get("password") or secrets.token_urlsafe(16)
     new_user = EnterpriseUser(
-        email=cast("str", admin_data.get("email")),
+        email=cast("str", admin_email),
         password_hash=get_password_hash(cast("str", password)),
         first_name=cast("str", admin_data.get("first_name", "Admin")),
         last_name=cast("str", admin_data.get("last_name", "User")),
@@ -292,9 +297,17 @@ async def create_tenant_user(
 ) -> object:
     # This is a guestimated implementation based on common patterns
     # In a real scenario, we'd use a specific schema
-    password = user_data.get("password") or "Welcome@123"
+    user_email = user_data.get("email")
+    if not user_email:
+        raise HTTPException(status_code=400, detail="email is required")
+    if (
+        await session.execute(select(EnterpriseUser).where(EnterpriseUser.email == user_email))
+    ).scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+
+    password = user_data.get("password") or secrets.token_urlsafe(16)
     new_user = EnterpriseUser(
-        email=cast("str", user_data.get("email")),
+        email=cast("str", user_email),
         password_hash=get_password_hash(cast("str", password)),
         first_name=cast("str", user_data.get("first_name")),
         last_name=cast("str", user_data.get("last_name")),
@@ -331,7 +344,7 @@ async def list_global_roles(
     stmt = (
         select(Role)
         .options(selectinload(Role.permissions))
-        .where(Role.tenant_id == None)
+        .where(Role.tenant_id.is_(None))
         .order_by(Role.role_rank.asc())
     )
     result = await session.execute(stmt)
@@ -344,7 +357,7 @@ async def create_global_role(
 ) -> object:
     """Create a new global system role."""
     # Check if role exists
-    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id == None)
+    stmt = select(Role).where(Role.name == role_in.name, Role.tenant_id.is_(None))
     if (await session.execute(stmt)).scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Role already exists")
 
@@ -380,7 +393,9 @@ async def update_global_role(
 ) -> object:
     """Update a global role's metadata and permissions."""
     stmt = (
-        select(Role).options(selectinload(Role.permissions)).where(Role.id == role_id, Role.tenant_id == None)
+        select(Role)
+        .options(selectinload(Role.permissions))
+        .where(Role.id == role_id, Role.tenant_id.is_(None))
     )
     result = await session.execute(stmt)
     role = result.scalar_one_or_none()
@@ -426,7 +441,7 @@ async def list_all_permissions(
     """List all available permissions in the system."""
     stmt = (
         select(Permission)
-        .where(Permission.tenant_id == None)
+        .where(Permission.tenant_id.is_(None))
         .order_by(Permission.module.asc(), Permission.resource.asc())
     )
     result = await session.execute(stmt)

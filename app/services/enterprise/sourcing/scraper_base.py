@@ -162,7 +162,7 @@ class BaseScraperProvider(SourcingProvider):
                 all_links = [{"href": h} for h in hrefs]
 
             for link_el in all_links:
-                href = link_el.get("href", "") if isinstance(link_el, dict) else link_el.get("href", "")
+                href = link_el.get("href", "")
                 if not href:
                     continue
 
@@ -174,7 +174,7 @@ class BaseScraperProvider(SourcingProvider):
                 if self.result_pattern in href and "google.com" not in href and not href.startswith("/"):
                     # Found a candidate link! Now find a title and snippet
                     # Look up the DOM tree for a container
-                    parent = link_el.parent
+                    _parent = link_el.parent
                     title = "Professional Profile"
                     snippet = ""
 
@@ -294,7 +294,7 @@ class BaseScraperProvider(SourcingProvider):
                 href = link_el.get("href", "")
                 if self.result_pattern in href and "bing.com" not in href and "microsoft.com" not in href:
                     title = link_el.get_text()
-                    parent = link_el.parent
+                    _parent = link_el.parent
                     snippet = ""
                     # Look for snippet in parent's siblings
                     current = link_el

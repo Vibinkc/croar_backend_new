@@ -47,7 +47,7 @@ async def list_survey_types(
         select(SurveyTypeModel)
         .where(
             (SurveyTypeModel.company_id == getattr(current_user, "company_id", None))
-            | (SurveyTypeModel.company_id is None)
+            | (SurveyTypeModel.company_id.is_(None))
         )
         .order_by(SurveyTypeModel.name)
     )
@@ -70,7 +70,7 @@ async def ai_generate_survey_questions(
     stmt = select(SurveyTypeModel).where(
         SurveyTypeModel.id == request.survey_type_id,
         (SurveyTypeModel.company_id == getattr(current_user, "company_id", None))
-        | (SurveyTypeModel.company_id is None),
+        | (SurveyTypeModel.company_id.is_(None)),
     )
     res = await db.execute(stmt)
     st = res.scalar_one_or_none()

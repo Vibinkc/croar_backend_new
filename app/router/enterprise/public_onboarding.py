@@ -19,6 +19,40 @@ from app.schemas.enterprise.onboarding import OnboardingResponse
 
 router = APIRouter(prefix="/public/onboarding", tags=["Public Onboarding"])
 
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+ALLOWED_UPLOAD_EXTS = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".doc", ".docx", ".txt"}
+
+
+def _safe_filename(name: str | None, fallback: str = "unnamed") -> str:
+    """Strip any path components / traversal so an upload can't escape its directory."""
+    import re
+
+    base = os.path.basename((name or "").replace("\\", "/"))
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", base).lstrip(".")
+    return base or fallback
+
+
+async def _save_upload(file: UploadFile, upload_dir: str, prefix: str = "") -> str:
+    """Validate type, stream to disk with a hard size cap, and a unique sanitized filename."""
+    from uuid import uuid4
+
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(status_code=400, detail=f"File type '{ext or 'unknown'}' not allowed")
+
+    # Prefix with a short unique id so distinct uploads (even same-named) never overwrite.
+    file_path = os.path.join(upload_dir, f"{prefix}{uuid4().hex[:8]}_{_safe_filename(file.filename)}")
+    size = 0
+    with open(file_path, "wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                f.close()
+                os.remove(file_path)
+                raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+            f.write(chunk)
+    return file_path
+
 
 @router.get("/{token}", response_model=OnboardingResponse)
 async def get_public_onboarding(token: UUID, session: DBSessionDep) -> object:
@@ -127,9 +161,7 @@ async def upload_onboarding_document(
     upload_dir = os.path.join("uploads", "onboarding", str(token))
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_path = os.path.join(upload_dir, str(file.filename or "unnamed"))
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    file_path = await _save_upload(file, upload_dir)
 
     # 3. Update document status
     doc.file_path = file_path
@@ -165,9 +197,7 @@ async def upload_dynamic_onboarding_file(
     upload_dir = os.path.join("uploads", "onboarding", str(token), "dynamic")
     os.makedirs(upload_dir, exist_ok=True)
 
-    file_path = os.path.join(upload_dir, f"{field_name}_{file.filename or 'unnamed'}")
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+    file_path = await _save_upload(file, upload_dir, prefix=f"{_safe_filename(field_name)}_")
 
     # Log activity
     activity = OnboardingActivity(

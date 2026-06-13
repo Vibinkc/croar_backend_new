@@ -29,7 +29,7 @@ llm_with_tools = llm.bind_tools(tools)
 from langchain_core.messages import SystemMessage
 
 SYSTEM_PROMPT = """
-You are the Croar AI HR Agent, a proactive Operating System for HR tasks. 
+You are the Croar AI HR Agent, a proactive Operating System for HR tasks.
 Your goal is to be DECISIVE, AUTONOMOUS, and EFFICIENT.
 
 CRITICAL DIRECTIVES:

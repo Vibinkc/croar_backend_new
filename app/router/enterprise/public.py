@@ -27,7 +27,7 @@ async def list_active_jobs(
     stmt = (
         select(JobRequirement)
         .join(JobStatus)
-        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at == None)
+        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at.is_(None))
         .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
     )
 
@@ -275,10 +275,10 @@ async def apply_to_job(
 
             from pymongo import MongoClient
 
-            MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-            MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
-            client = MongoClient(MONGO_URI)
-            db = client[MONGO_DB_NAME]
+            mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+            mongo_db_name = os.getenv("MONGO_DB_NAME", "croar_sourcing")
+            client = MongoClient(mongo_uri)
+            db = client[mongo_db_name]
             shortlist = db["project_shortlists"].find_one(
                 {"job_id": str(job.id), "profile.email": email_form}
             )
@@ -311,10 +311,10 @@ async def apply_to_job(
 
         from pymongo import MongoClient
 
-        MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-        MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
-        client = MongoClient(MONGO_URI)
-        db = client[MONGO_DB_NAME]
+        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+        mongo_db_name = os.getenv("MONGO_DB_NAME", "croar_sourcing")
+        client = MongoClient(mongo_uri)
+        db = client[mongo_db_name]
         coll = db["project_shortlists"]
 
         # Match by job_id and email

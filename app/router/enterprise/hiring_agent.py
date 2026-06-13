@@ -22,7 +22,7 @@ async def process_active_candidates(
     """
     company_id = getattr(current_user, "company_id", None)
     stmt = select(CandidateApplication).where(
-        CandidateApplication.company_id == company_id, CandidateApplication.deleted_at is None
+        CandidateApplication.company_id == company_id, CandidateApplication.deleted_at.is_(None)
     )
     result = await session.execute(stmt)
     applications = result.scalars().all()

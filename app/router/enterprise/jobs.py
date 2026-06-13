@@ -99,7 +99,7 @@ async def list_jobs(
     stmt = (
         select(JobRequirement)
         .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
-        .where(JobRequirement.deleted_at == None)
+        .where(JobRequirement.deleted_at.is_(None))
     )
 
     if company_id:
@@ -149,7 +149,7 @@ async def get_job(
     stmt = (
         select(JobRequirement)
         .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
-        .where(JobRequirement.id == job_id, JobRequirement.deleted_at == None)
+        .where(JobRequirement.id == job_id, JobRequirement.deleted_at.is_(None))
     )
 
     if is_consultancy:
@@ -181,9 +181,17 @@ async def get_job(
         .group_by(CandidateApplication.current_stage)
     )
 
+    def _to_int(value: Any, default: int = 0) -> int:
+        # Stage ids are usually ints but may be missing/non-numeric in stored JSON.
+        try:
+            return int(cast("Any", value))
+        except (TypeError, ValueError):
+            return default
+
     metrics_result = await session.execute(metrics_stmt)
-    # Cast stage to Any then int to avoid operator issues if it's object
-    counts = {int(cast("Any", stage)): int(cast("Any", count)) for stage, count in metrics_result.all()}
+    counts: dict[int, int] = {}
+    for stage, count in metrics_result.all():
+        counts[_to_int(stage)] = _to_int(count)
 
     # Dynamic Stages (Rounds)
     stages_to_use = job.workflow_stages or []
@@ -193,9 +201,9 @@ async def get_job(
 
     response.stages = [
         JobStageResponse(
-            id=int(cast("Any", s.get("id", i + 1))),
+            id=_to_int(s.get("id", i + 1), i + 1),
             name=str(s.get("name", f"Stage {i + 1}")),
-            count=counts.get(int(cast("Any", s.get("id", i + 1))), 0),
+            count=counts.get(_to_int(s.get("id", i + 1), i + 1), 0),
         )
         for i, s in enumerate(stages_to_use)
     ]
