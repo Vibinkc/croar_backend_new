@@ -45,23 +45,21 @@ class GitHubProvider(SourcingProvider):
         return None
 
     def _fetch(self, url: str) -> str | None:
-        """Fetch a URL via Oxylabs if it works, otherwise fall back to a direct request.
+        """Fetch a GitHub URL, preferring a DIRECT (token-authed) request.
 
-        This keeps GitHub sourcing fully functional even when Oxylabs is unavailable
-        (e.g. invalid creds / quota), since GitHub's public API + profile pages are
-        reachable directly.
+        With GITHUB_TOKEN set, direct calls are fast and not rate-limited, so we try
+        them first (a 10s cap) and only fall back to Oxylabs if the direct call fails
+        (e.g. an unauthenticated rate-limit). Going Oxylabs-first made the provider take
+        ~55s per search (15s Oxylabs timeout per call) and get dropped by the fan-out.
         """
-        content = self._fetch_via_oxylabs(url)
-        if content:
-            return content
         try:
-            r = requests.get(url, headers=self.headers, timeout=15)
+            r = requests.get(url, headers=self.headers, timeout=10)
             if r.status_code == 200:
                 return r.text
             print(f"DEBUG: direct GitHub fetch {url} -> {r.status_code}")
         except Exception as e:
             print(f"DEBUG: direct GitHub fetch failed for {url}: {e}")
-        return None
+        return self._fetch_via_oxylabs(url)
 
     def _get_email_from_events(self, username: str) -> str | None:
         """
@@ -75,7 +73,11 @@ class GitHubProvider(SourcingProvider):
                 return None
 
             events = json.loads(content)
+            if not isinstance(events, list):
+                return None
             for event in events:
+                if not isinstance(event, dict):
+                    continue
                 if event.get("type") == "PushEvent":
                     commits = event.get("payload", {}).get("commits", [])
                     for commit in commits:
@@ -100,16 +102,22 @@ class GitHubProvider(SourcingProvider):
                 return None
 
             repos = json.loads(content)
+            if not isinstance(repos, list):
+                return None
             # 2. Iterate through their own repos (not forks)
             for repo in repos:
-                if not repo.get("fork") and repo.get("name"):
+                if isinstance(repo, dict) and not repo.get("fork") and repo.get("name"):
                     repo_name = repo["name"]
                     commits_url = f"{self.base_url}/repos/{username}/{repo_name}/commits?per_page=3"
                     commits_content = self._fetch(commits_url)
 
                     if commits_content:
                         commits = json.loads(commits_content)
+                        if not isinstance(commits, list):
+                            continue
                         for c in commits:
+                            if not isinstance(c, dict):
+                                continue
                             author_data = c.get("commit", {}).get("author", {})
                             email = author_data.get("email")
 
