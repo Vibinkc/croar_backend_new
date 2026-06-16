@@ -3,7 +3,7 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.ai import generate_job_description_ai
@@ -13,7 +13,9 @@ from app.models.enterprise.assessment import AssessmentAutomation
 from app.models.enterprise.candidate import CandidateApplication
 from app.models.enterprise.communication import MailAutomation
 from app.models.enterprise.company import Company
+from app.models.enterprise.interview import InterviewAutomation
 from app.models.enterprise.job import JobPosting, JobRequirement
+from app.models.enterprise.onboarding import OnboardingAutomation
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.jobs import (
     JDGenerationRequest,
@@ -279,13 +281,30 @@ async def delete_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # 1. Hard-delete related automations
+    # 1. Hard-delete ALL automations tied to this job (assessment, mail, interview, onboarding).
     await session.execute(
         delete(AssessmentAutomation).where(AssessmentAutomation.job_requirement_id == job_id)
     )
     await session.execute(delete(MailAutomation).where(MailAutomation.job_requirement_id == job_id))
+    await session.execute(delete(InterviewAutomation).where(InterviewAutomation.job_requirement_id == job_id))
+    await session.execute(
+        delete(OnboardingAutomation).where(OnboardingAutomation.job_requirement_id == job_id)
+    )
 
-    # 2. Soft-delete the job requirement
+    # 2. Soft-delete every application for this job EXCEPT hired candidates (status_id == 5),
+    #    so hired people keep their records (onboarding, employee profile) intact.
+    hired_status_id = 5
+    await session.execute(
+        update(CandidateApplication)
+        .where(
+            CandidateApplication.job_requirement_id == job_id,
+            CandidateApplication.status_id != hired_status_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .values(deleted_at=datetime.now())
+    )
+
+    # 3. Soft-delete the job requirement itself.
     job.deleted_at = cast("Any", datetime.now())
     await session.commit()
 
