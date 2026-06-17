@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import uuid
@@ -27,6 +28,11 @@ _MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
 _MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
 _mongo_client = MongoClient(_MONGO_URI)
 
+# TESTING: while True, every candidate invite is redirected to PILOT_TEST_EMAIL instead of the
+# real candidate. Flip PILOT_TEST_MODE to False (or set PILOT_TEST_MODE=false env) to send for real.
+PILOT_TEST_MODE = os.getenv("PILOT_TEST_MODE", "true").strip().lower() != "false"
+PILOT_TEST_EMAIL = os.getenv("PILOT_TEST_EMAIL", "vibi@appxcess.com")
+
 
 def _pilot_coll():
     return _mongo_client[_MONGO_DB_NAME]["pilot_chat_history"]
@@ -49,6 +55,23 @@ class PilotSession(BaseModel):
     title: str
     messages: list[PilotMessage]
     thread_id: str | None = None
+
+
+class SourceRequest(BaseModel):
+    role: str
+    skills: str | None = None
+    count: int = 10
+    location: str | None = None
+
+
+class InviteCandidate(BaseModel):
+    name: str | None = None
+    email: str | None = None
+
+
+class InviteRequest(BaseModel):
+    job_id: str
+    candidates: list[InviteCandidate]
 
 
 from langchain_core.messages import HumanMessage
@@ -93,7 +116,24 @@ async def agent_chat(
             messages[-1].content if messages else "I couldn't generate a response. Please try again."
         )
 
-        return {"response": final_message, "status": "success", "metadata": result.get("metadata", {})}
+        # Surface a UI action from a tool result (e.g. the candidate picker from source_candidates).
+        pilot_action = None
+        try:
+            for m in reversed(messages or []):
+                if getattr(m, "type", None) == "tool" and getattr(m, "name", "") == "source_candidates":
+                    data = json.loads(m.content)
+                    if isinstance(data, dict) and data.get("ui") == "candidate_picker":
+                        pilot_action = data
+                    break
+        except Exception:
+            pilot_action = None
+
+        return {
+            "response": final_message,
+            "status": "success",
+            "pilot_action": pilot_action,
+            "metadata": result.get("metadata", {}),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -217,3 +257,113 @@ async def delete_pilot_session(session_id: str, current_user: AuthUser):
         logger.exception("Failed to delete pilot session")
         return {"status": "error", "message": "Could not delete this conversation."}
     return {"status": "deleted"}
+
+
+# --- Croar Pilot candidate sourcing + invites ---
+
+
+@router.post("/pilot/source")
+async def pilot_source_candidates(payload: SourceRequest, _user: AuthUser):
+    """Live-search candidate profiles for a role across all sourcing platforms. Returns a slim
+    list the Pilot UI renders as a selectable checkbox list."""
+    from app.router.enterprise.sourcing import backfill_contacts, search_all_platforms
+
+    query = " ".join(p.strip() for p in [payload.role, payload.skills] if p and p.strip())
+    if not query:
+        raise HTTPException(status_code=422, detail="A role is required to search.")
+    count = max(1, min(payload.count or 10, 25))
+    try:
+        profiles = await search_all_platforms(
+            query, payload.location, page=1, page_size=min(max(count, 5), 15)
+        )
+        # Find emails for the top few so the user sees who's reachable; then email-first sort.
+        profiles = await backfill_contacts(profiles, limit=min(count, 8))
+        profiles.sort(key=lambda p: 0 if p.get("email") else 1)
+        slim = [
+            {
+                "full_name": p.get("full_name"),
+                "headline": p.get("headline"),
+                "platform": p.get("platform"),
+                "location": p.get("location"),
+                "profile_url": p.get("profile_url"),
+                "email": p.get("email"),
+            }
+            for p in profiles[:count]
+        ]
+        return {"status": "success", "count": len(slim), "profiles": slim}
+    except Exception:
+        logger.exception("Pilot candidate sourcing failed")
+        return {"status": "error", "count": 0, "profiles": [], "message": "Search failed — please try again."}
+
+
+@router.post("/pilot/invite")
+async def pilot_invite_candidates(
+    payload: InviteRequest, current_user: AuthUser, session: AsyncSession = Depends(get_db)
+):
+    """Send the job's application-invite email to the selected candidates. While PILOT_TEST_MODE is
+    on, EVERY email is redirected to PILOT_TEST_EMAIL (and clearly marked as a test)."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.core.settings import get_settings
+    from app.models.enterprise.job import JobRequirement
+    from app.router.enterprise.communication import send_smtp_email
+
+    settings = get_settings()
+    company_id = getattr(current_user, "company_id", None)
+    try:
+        job_uuid = uuid.UUID(payload.job_id)
+    except (ValueError, AttributeError) as e:
+        raise HTTPException(status_code=422, detail="Invalid job_id.") from e
+
+    stmt = select(JobRequirement).where(
+        JobRequirement.id == job_uuid, JobRequirement.company_id == company_id
+    )
+    job = (await session.execute(stmt)).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    # Public candidate-facing job page (has the apply form). NOT the /enterprise API path.
+    apply_url = f"{settings.frontend_url}/jobs/{payload.job_id}"
+    sent, failed = 0, 0
+    for c in payload.candidates:
+        real_email = (c.email or "").strip()
+        recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
+        if not recipient:
+            failed += 1
+            continue
+        name = (c.name or "there").strip()
+        test_banner = (
+            "<div style='background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:8px;"
+            f"margin-bottom:14px;font-size:13px'>🧪 <b>TEST EMAIL</b> — in production this would be sent "
+            f"to <b>{name}</b> &lt;{real_email or 'no email found'}&gt;.</div>"
+            if PILOT_TEST_MODE
+            else ""
+        )
+        subject = ("[TEST] " if PILOT_TEST_MODE else "") + f"You're invited to apply: {job.title}"
+        location_bit = f" in {job.location}" if job.location else ""
+        body = (
+            f"{test_banner}<p>Hi {name},</p>"
+            f"<p>We came across your profile and think you could be a great fit for our "
+            f"<strong>{job.title}</strong> role{location_bit}.</p>"
+            f'<p><a href="{apply_url}" style="display:inline-block;padding:12px 24px;background:#4f46e5;'
+            'color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">Apply now</a></p>'
+            "<p>Best regards,<br/>Hiring Team</p>"
+        )
+        try:
+            ok, err = await run_in_threadpool(send_smtp_email, recipient, subject, body, None, None)
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+                logger.warning("Invite email failed for %s: %s", recipient, err)
+        except Exception:
+            failed += 1
+            logger.exception("Invite email crashed")
+
+    return {
+        "status": "success",
+        "sent": sent,
+        "failed": failed,
+        "test_mode": PILOT_TEST_MODE,
+        "test_email": PILOT_TEST_EMAIL if PILOT_TEST_MODE else None,
+    }

@@ -491,6 +491,55 @@ async def delete_job(job_id: str, config: RunnableConfig) -> dict[str, Any]:
 
 
 @tool
+async def source_candidates(
+    job_id: str, role: str, skills: str | None = None, count: int = 10, location: str | None = None
+) -> dict[str, Any]:
+    """Search LIVE candidate profiles for an existing job across all sourcing platforms. CALL THIS
+    whenever the user wants to source / find candidates for a job (e.g. "source 10 candidates").
+    Pass the job_id (from the build result or list_jobs), the `role` title, the key `skills`
+    (comma-separated), `count` (how many to return), and `location` if given. Do NOT ask "how many"
+    again if the user already gave a number — just call this with it. The UI renders the returned
+    candidates as a checkbox list and handles sending the invites; you do NOT send invites yourself.
+    After calling it, briefly tell the user to pick who to invite from the list."""
+    from app.router.enterprise.sourcing import backfill_contacts, search_all_platforms
+
+    count = _clamp_int(count, 1, 25, 10)
+    query = " ".join(p.strip() for p in [role, skills] if p and p.strip())
+    if not query:
+        return {"status": "error", "message": "Tell me the role to search candidates for."}
+    try:
+        profiles = await search_all_platforms(query, location, page=1, page_size=min(max(count, 5), 15))
+        profiles = await backfill_contacts(profiles, limit=min(count, 8))
+        profiles.sort(key=lambda p: 0 if p.get("email") else 1)
+        slim = [
+            {
+                "full_name": p.get("full_name"),
+                "headline": p.get("headline"),
+                "platform": p.get("platform"),
+                "location": p.get("location"),
+                "profile_url": p.get("profile_url"),
+                "email": p.get("email"),
+            }
+            for p in profiles[:count]
+        ]
+        return {
+            "status": "success",
+            "ui": "candidate_picker",  # signals the Pilot UI to render the selectable list
+            "job_id": job_id,
+            "count": len(slim),
+            "profiles": slim,
+            "message": (
+                f"Found {len(slim)} candidates for this role — pick who to invite from the list below."
+                if slim
+                else "No candidates found for this role. Try different/broader skills or location."
+            ),
+        }
+    except Exception as e:
+        logger.error(f"Error sourcing candidates: {e}")
+        return {"status": "error", "message": "Candidate search failed — please try again."}
+
+
+@tool
 def generate_job_description(role_title: str, experience_level: str = "Senior") -> dict[str, Any]:
     """
     Drafts a professional and high-fidelity Job Description (JD) for a role.

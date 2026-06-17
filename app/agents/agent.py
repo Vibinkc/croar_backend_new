@@ -19,6 +19,7 @@ from app.agents.tools import (
     setup_interview_automation,
     setup_mail_automation,
     setup_onboarding_automation,
+    source_candidates,
     update_job,
 )
 from app.core.settings import get_settings
@@ -31,6 +32,7 @@ tools = [
     list_jobs,
     update_job,
     delete_job,
+    source_candidates,
     score_candidate_application,
     initiate_candidate_onboarding,
     generate_draft_offer,
@@ -102,6 +104,17 @@ MANAGING EXISTING JOBS (list / update / delete):
   confirm the exact job with the user (show its title) and get a clear "yes" BEFORE calling
   delete_job. If the user named a job that doesn't appear in list_jobs, tell them you couldn't
   find it rather than guessing.
+
+SOURCING CANDIDATES (after a job exists):
+- Right after you build a job/pipeline, OFFER to source candidates, e.g.: "Want me to source
+  candidates for this role? Tell me how many to search." Keep the job_id from the build result.
+- When the user wants to source candidates (e.g. "source 10 candidates"), CALL the
+  source_candidates tool with: job_id (from the build result or list_jobs), role (the job title),
+  skills (comma-separated), count (the number they gave — DEFAULT 10 if unspecified), and location.
+  Do NOT ask "how many?" again if the user already gave a number — just call the tool with it.
+- The UI renders the returned candidates as a checkbox list and sends the invites itself; you do
+  NOT send invites yourself. After the tool returns, just tell the user to pick who to invite.
+- NOTE (testing): invites are currently redirected to a single test inbox, not real candidates.
 
 RULES:
 - Be decisive: once you have the essentials, build the ENTIRE pipeline in one go without asking
