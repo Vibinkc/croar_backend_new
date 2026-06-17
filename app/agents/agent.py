@@ -9,14 +9,17 @@ from app.agents.state import AgentState
 from app.agents.tools import (
     build_hiring_pipeline,
     create_job_requisition,
+    delete_job,
     generate_draft_offer,
     generate_job_description,
     initiate_candidate_onboarding,
+    list_jobs,
     score_candidate_application,
     setup_assessment_automation,
     setup_interview_automation,
     setup_mail_automation,
     setup_onboarding_automation,
+    update_job,
 )
 from app.core.settings import get_settings
 
@@ -25,6 +28,9 @@ _settings = get_settings()
 # 1. Setup LLM and Tools
 tools = [
     build_hiring_pipeline,
+    list_jobs,
+    update_job,
+    delete_job,
     score_candidate_application,
     initiate_candidate_onboarding,
     generate_draft_offer,
@@ -37,7 +43,9 @@ tools = [
 ]
 _api_key = SecretStr(_settings.openai_api_key) if _settings.openai_api_key else None
 llm = ChatOpenAI(api_key=_api_key, model=_settings.openai_model)
-llm_with_tools = llm.bind_tools(tools)
+# parallel_tool_calls=False forces ONE tool per turn. Tools share a single async DB session,
+# which is NOT safe for concurrent use — parallel calls cause "commit() already in progress".
+llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=False)
 
 SYSTEM_PROMPT = """
 You are Croar Pilot, an autonomous hiring orchestrator. From a single hiring need you set up
@@ -82,6 +90,18 @@ CONVERSATION FLOW:
      range `interview_start_date` / `interview_end_date` (ISO YYYY-MM-DD) from what the user gave.
    Do NOT call the individual create_job_requisition / setup_* tools — build_hiring_pipeline
    replaces all of them in one shot. Use the individual tools only for a later one-off tweak.
+
+MANAGING EXISTING JOBS (list / update / delete):
+- When the user wants to view, change, or remove an existing job, first call list_jobs to get the
+  current jobs and their job_ids. Match the job the user named to its job_id.
+- To CHANGE a job, call update_job(job_id, ...) with ONLY the fields to change (title, jd_content,
+  location, skills, min_exp, max_exp, is_active). Use is_active=False to pause a job (Draft),
+  True to make it live again.
+- To DELETE a job, call delete_job(job_id) — this removes the whole pipeline (all automations) and
+  its non-hired applications; HIRED candidates are preserved. Deletion is DESTRUCTIVE, so ALWAYS
+  confirm the exact job with the user (show its title) and get a clear "yes" BEFORE calling
+  delete_job. If the user named a job that doesn't appear in list_jobs, tell them you couldn't
+  find it rather than guessing.
 
 RULES:
 - Be decisive: once you have the essentials, build the ENTIRE pipeline in one go without asking

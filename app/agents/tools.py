@@ -336,6 +336,160 @@ async def create_job_requisition(
         return {"status": "error", "message": str(e)}
 
 
+async def _get_company_job(session: "AsyncSession", company_id: str, job_id: str) -> Any:
+    """Fetch a live (non-deleted) job by id, scoped to the company. Returns the job or None."""
+    from sqlalchemy import select
+
+    try:
+        job_uuid = UUID(job_id)
+    except (ValueError, AttributeError):
+        return None
+    stmt = select(JobRequirement).where(
+        JobRequirement.id == job_uuid,
+        JobRequirement.company_id == UUID(company_id),
+        JobRequirement.deleted_at.is_(None),
+    )
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+@tool
+async def list_jobs(config: RunnableConfig) -> dict[str, Any]:
+    """List the company's active (non-deleted) jobs with their id, title and location. Use this
+    FIRST to find the job the user refers to by name before updating or deleting it."""
+    from sqlalchemy import select
+
+    session: AsyncSession = config["configurable"]["session"]
+    try:
+        cid = _company_id(config)
+        stmt = (
+            select(JobRequirement)
+            .where(JobRequirement.company_id == UUID(cid), JobRequirement.deleted_at.is_(None))
+            .order_by(JobRequirement.created_at.desc())
+            .limit(50)
+        )
+        jobs = (await session.execute(stmt)).scalars().all()
+        return {
+            "status": "success",
+            "count": len(jobs),
+            "jobs": [
+                {"job_id": str(j.id), "title": j.title, "location": j.location, "active": j.status_id == 2}
+                for j in jobs
+            ],
+        }
+    except Exception as e:
+        logger.error(f"Error listing jobs: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@tool
+async def update_job(
+    job_id: str,
+    config: RunnableConfig,
+    title: str | None = None,
+    jd_content: str | None = None,
+    location: str | None = None,
+    skills: list[str] | None = None,
+    min_exp: int | None = None,
+    max_exp: int | None = None,
+    is_active: bool | None = None,
+) -> dict[str, Any]:
+    """Update an existing job's fields. Pass ONLY the fields to change; omit the rest (they stay
+    as-is). `is_active=False` moves the job back to Draft, True makes it LIVE. Find the job_id with
+    list_jobs first if the user named the role."""
+    session: AsyncSession = config["configurable"]["session"]
+    try:
+        cid = _company_id(config)
+        job = await _get_company_job(session, cid, job_id)
+        if not job:
+            return {"status": "error", "message": "Job not found (or already deleted)."}
+        changed: list[str] = []
+        if title and title.strip():
+            job.title = title.strip()
+            changed.append("title")
+        if jd_content and jd_content.strip():
+            job.description = jd_content.strip()
+            changed.append("description")
+        if location and location.strip():
+            job.location = location.strip()
+            changed.append("location")
+        if skills is not None:
+            raw = skills.split(",") if isinstance(skills, str) else skills
+            job.required_skills = [f"{s}".strip() for s in raw if f"{s}".strip()]
+            changed.append("skills")
+        if min_exp is not None:
+            job.experience_min = _clamp_int(min_exp, 0, 50, 0)
+            changed.append("experience_min")
+        if max_exp is not None:
+            job.experience_max = max(job.experience_min or 0, _clamp_int(max_exp, 0, 60, 10))
+            changed.append("experience_max")
+        if is_active is not None:
+            job.status_id = 2 if is_active else 1
+            changed.append("status")
+        if not changed:
+            return {"status": "no_change", "message": "Nothing to update — no fields were provided."}
+        await session.commit()
+        return {
+            "status": "success",
+            "job_id": str(job.id),
+            "updated": changed,
+            "message": f"Updated {', '.join(changed)} for '{job.title}'.",
+        }
+    except Exception as e:
+        logger.error(f"Error updating job: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@tool
+async def delete_job(job_id: str, config: RunnableConfig) -> dict[str, Any]:
+    """Delete a job and its ENTIRE pipeline (assessment / mail / interview / onboarding
+    automations) and remove its non-hired applications. HIRED candidates are preserved. This is
+    DESTRUCTIVE — only call it AFTER the user has explicitly confirmed the exact job to delete.
+    Find the job_id with list_jobs first."""
+    from datetime import datetime
+
+    from sqlalchemy import delete, update
+
+    from app.models.enterprise.assessment import AssessmentAutomation
+    from app.models.enterprise.candidate import CandidateApplication
+    from app.models.enterprise.communication import MailAutomation
+    from app.models.enterprise.interview import InterviewAutomation
+    from app.models.enterprise.onboarding import OnboardingAutomation
+
+    session: AsyncSession = config["configurable"]["session"]
+    try:
+        cid = _company_id(config)
+        job = await _get_company_job(session, cid, job_id)
+        if not job:
+            return {"status": "error", "message": "Job not found (or already deleted)."}
+        job_uuid = job.id
+        for model in (AssessmentAutomation, MailAutomation, InterviewAutomation, OnboardingAutomation):
+            await session.execute(delete(model).where(model.job_requirement_id == job_uuid))
+        # Soft-delete non-hired applications (status_id 5 == Hired) so hired people are kept.
+        await session.execute(
+            update(CandidateApplication)
+            .where(
+                CandidateApplication.job_requirement_id == job_uuid,
+                CandidateApplication.status_id != 5,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .values(deleted_at=datetime.now())
+        )
+        job.deleted_at = datetime.now()
+        await session.commit()
+        return {
+            "status": "success",
+            "job_id": str(job_uuid),
+            "message": f"Deleted '{job.title}' and its pipeline. Hired candidates were preserved.",
+        }
+    except Exception as e:
+        logger.error(f"Error deleting job: {e}")
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        return {"status": "error", "message": str(e)}
+
+
 @tool
 def generate_job_description(role_title: str, experience_level: str = "Senior") -> dict[str, Any]:
     """
@@ -904,5 +1058,8 @@ async def build_hiring_pipeline(
         }
     except Exception as e:
         logger.error(f"Error building hiring pipeline: {e}")
-        await session.rollback()
+        try:
+            await session.rollback()
+        except Exception:
+            pass
         return {"status": "error", "message": str(e)}
