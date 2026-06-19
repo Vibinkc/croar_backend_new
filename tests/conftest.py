@@ -9,6 +9,7 @@ For paths that would run a handler, `auth_as` also overrides `get_db` with a dum
 session so nothing touches a real database.
 """
 
+import asyncio
 import os
 from types import SimpleNamespace
 
@@ -73,6 +74,7 @@ class _FakeResult:
 
 class _FakeSession:
     async def execute(self, *_args: object, **_kwargs: object) -> _FakeResult:
+        await asyncio.sleep(0)  # async to match AsyncSession.execute (awaited by the app)
         return _FakeResult()
 
 

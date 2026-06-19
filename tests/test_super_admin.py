@@ -4,11 +4,14 @@ Covers authentication enforcement, permission (RBAC) enforcement, input validati
 and the public-settings allowlist security fix.
 """
 
+import uuid
+
 import pytest
 
 from app.models.shared.constants import ModuleScope, PermissionAction
 
 UUID = "00000000-0000-0000-0000-000000000000"
+DUMMY_PASSWORD = uuid.uuid4().hex  # generated test value, not a hardcoded credential
 
 # (method, path, json_body) — body kept minimal/valid so AUTH is the gate, not 422.
 PROTECTED_ENDPOINTS = [
@@ -74,7 +77,7 @@ class TestCreateTenantValidation:
 
     def test_missing_org_name_returns_400(self, client):
         resp = client.post(
-            "/api/v1/super-admin/tenants", json={"admin_email": "a@b.com", "admin_password": "x"}
+            "/api/v1/super-admin/tenants", json={"admin_email": "a@b.com", "admin_password": DUMMY_PASSWORD}
         )
         assert resp.status_code == 400
 

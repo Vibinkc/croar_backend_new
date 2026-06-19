@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any
@@ -198,7 +199,10 @@ async def list_shortlisted_candidates(
 
     query = {"company_id": company_id}
     if job_id:
-        query["job_id"] = job_id
+        # Allow only id-shaped values: a legitimate job_id (UUID) always matches, while anything
+        # carrying Mongo operators/structure cannot, so no user input can shape the query.
+        safe_job_id = str(job_id)
+        query["job_id"] = safe_job_id if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", safe_job_id) else "\x00"
 
     shortlists = list(coll.find(query, {"_id": 0}).sort("shortlisted_at", -1).limit(500))
     return shortlists

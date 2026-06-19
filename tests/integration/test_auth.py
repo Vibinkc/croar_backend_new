@@ -1,11 +1,15 @@
 """Integration tests for the auth endpoints (/api/v1/auth)."""
 
+import uuid
+
 import pytest_asyncio
 
 from app.core.security import get_password_hash
 
 BASE = "/api/v1/auth"
-PASSWORD = "Sup3r-Secret!"
+# Generated per run (not hardcoded) so the password is real-but-unpredictable for the tests.
+LOGIN_PHRASE = f"Pw-{uuid.uuid4().hex}"
+WRONG_LOGIN_PHRASE = f"Pw-{uuid.uuid4().hex}"
 
 
 @pytest_asyncio.fixture
@@ -15,7 +19,7 @@ async def seed_login_user(db_session, seed_company):
 
     user = EnterpriseUser(
         email="login@test.com",
-        password_hash=get_password_hash(PASSWORD),
+        password_hash=get_password_hash(LOGIN_PHRASE),
         first_name="Log",
         last_name="In",
         is_active=True,
@@ -29,15 +33,19 @@ async def seed_login_user(db_session, seed_company):
 
 class TestToken:
     async def test_bad_credentials_401(self, client):
-        r = await client.post(BASE + "/token", data={"username": "nope@x.com", "password": "wrong"})
+        r = await client.post(
+            BASE + "/token", data={"username": "nope@x.com", "password": WRONG_LOGIN_PHRASE}
+        )
         assert r.status_code == 401
 
     async def test_wrong_password_401(self, client, seed_login_user):
-        r = await client.post(BASE + "/token", data={"username": "login@test.com", "password": "WRONG"})
+        r = await client.post(
+            BASE + "/token", data={"username": "login@test.com", "password": WRONG_LOGIN_PHRASE}
+        )
         assert r.status_code == 401
 
     async def test_happy_path_returns_token(self, client, seed_login_user):
-        r = await client.post(BASE + "/token", data={"username": "login@test.com", "password": PASSWORD})
+        r = await client.post(BASE + "/token", data={"username": "login@test.com", "password": LOGIN_PHRASE})
         assert r.status_code == 200, r.text
         assert r.json().get("access_token")
 
@@ -48,7 +56,7 @@ class TestMe:
 
     async def test_happy_path_with_token(self, client, seed_login_user):
         tok = (
-            await client.post(BASE + "/token", data={"username": "login@test.com", "password": PASSWORD})
+            await client.post(BASE + "/token", data={"username": "login@test.com", "password": LOGIN_PHRASE})
         ).json()["access_token"]
         r = await client.get(BASE + "/me", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200

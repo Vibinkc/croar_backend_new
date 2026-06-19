@@ -5,6 +5,8 @@ The headline test runs the real `build_hiring_pipeline` agent tool against the S
 live job + all four automations + three role-specific templates.
 """
 
+import asyncio
+
 from sqlalchemy import func, select
 
 from app.agents.tools import build_hiring_pipeline
@@ -23,6 +25,7 @@ async def _count(session, model, company_id):
 class TestBuildHiringPipeline:
     async def test_creates_job_automations_and_templates(self, db_session, seed_company, monkeypatch):
         async def _no_questions(*a, **k):
+            await asyncio.sleep(0)  # async to match the real question generators it replaces
             return []
 
         monkeypatch.setattr("app.services.enterprise.ai_service.generate_assessment_questions", _no_questions)
@@ -64,6 +67,7 @@ class TestBuildHiringPipeline:
 
     async def test_interview_automation_has_generated_time_slots(self, db_session, seed_company, monkeypatch):
         async def _no_questions(*a, **k):
+            await asyncio.sleep(0)  # async to match the real question generators it replaces
             return []
 
         monkeypatch.setattr("app.services.enterprise.ai_service.generate_assessment_questions", _no_questions)

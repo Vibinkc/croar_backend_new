@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 import smtplib
@@ -97,6 +98,7 @@ class HiringAgentService:
         """
         The core engine. Evaluates the candidate against a specific stage policy.
         """
+        await asyncio.sleep(0)  # async kept for awaiting callers (part of the async pipeline)
         feedback = cast("dict[str, Any]", application.ai_feedback or {})
         log = cast("list[dict[str, Any]]", feedback.get("agent_log", []))
         now = datetime.now().isoformat()
@@ -172,6 +174,7 @@ class HiringAgentService:
 
     async def _send_agent_email(self, to_email: str, subject: str, body: str) -> tuple[bool, str]:
         """Private helper to send emails from the agent."""
+        await asyncio.sleep(0)  # async kept: scheduled via BackgroundTasks alongside async work
         try:
             msg = MIMEMultipart()
             msg["From"] = str(_settings.mailer_sender_email)

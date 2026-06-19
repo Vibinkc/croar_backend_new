@@ -470,7 +470,6 @@ async def complete_simulation(
             ),
         )
 
-    "\n".join([f"{m['role']}: {m['content']}" for m in sess.conversation])
     eval_prompt = f"""You are an elite Performance Coach and Behavioral Psychologist.
 Analyze this role-play simulation:
 Scenario: {sess.scenario.title}

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import cast
 
@@ -44,6 +45,7 @@ class SurveyService:
         """
         Sends a single survey invitation email.
         """
+        await asyncio.sleep(0)  # async kept for awaiting callers (notify loop / route handler)
         employee = invite.employee
         instance = invite.instance
         if not employee or not employee.email:

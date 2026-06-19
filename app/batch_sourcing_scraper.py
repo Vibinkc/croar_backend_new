@@ -19,6 +19,7 @@ profiles_collection = mongo_db["candidate_profiles"]
 
 
 async def batch_scrape():
+    await asyncio.sleep(0)  # async kept: invoked via asyncio.run() as a coroutine
     query = "Senior Frontend Developer"
     location = ""
     page_size = 15

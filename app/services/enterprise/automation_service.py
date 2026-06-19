@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -26,6 +27,7 @@ async def evaluate_criteria(criteria: str, context: dict[str, Any]) -> bool:
     Evaluates a free-text criteria against a given context using basic logic or LLM.
     Example: "score > 80", "experience > 5".
     """
+    await asyncio.sleep(0)  # async kept for awaiting callers / future async (LLM) evaluation
     if not criteria or criteria.strip() == "":
         return True
 

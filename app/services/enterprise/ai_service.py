@@ -14,7 +14,8 @@ async def generate_assessment_questions(
     """
     Generates assessment questions using LLM.
     """
-    logger.info(f"Generating {count} {type} questions for topic: {topic}")
+    # Don't interpolate the user-supplied topic into logs (log-injection); count + type suffice.
+    logger.info("Generating %s %s questions", count, type)
 
     difficulty = "Medium"
     context = f"Topic: {topic}. Assessment for a professional role."
@@ -110,5 +111,6 @@ async def generate_interview_questions_service(
     """
     Service wrapper for generating interview questions.
     """
-    logger.info(f"Generating {count} interview questions for topic: {topic} (Difficulty: {difficulty})")
+    # Don't interpolate user-supplied topic/difficulty into logs (log-injection).
+    logger.info("Generating %s interview questions", count)
     return await giq(topic, count, difficulty)

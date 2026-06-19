@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from datetime import timedelta
 from typing import Annotated, Any, cast
@@ -5,6 +6,7 @@ from typing import Annotated, Any, cast
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, get_current_user
@@ -26,6 +28,88 @@ from app.schemas.auth import EnterpriseSignUpRequest, EnterpriseSignUpResponse, 
 
 _settings = get_settings()
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+async def _provision_sso_org_and_user(
+    session: AsyncSession,
+    *,
+    email: str,
+    given_name: str,
+    family_name: str,
+    picture: str,
+    owner_label: str,
+    audit_action: str,
+) -> EnterpriseUser:
+    """First-time SSO login: create the company, an ADMIN role (all non-platform permissions) and
+    the user, then audit-log and persist. Shared by the Google and Microsoft login flows."""
+    import re
+
+    from app.models.shared.audit_log import AuditLog
+
+    company_name = f"{given_name or owner_label}'s Organization"
+    base_slug = re.sub(r"[^a-z0-9]", "-", company_name.lower()).strip("-")
+    company_slug = f"{base_slug}-{str(uuid.uuid4())[:8]}"
+
+    new_company = Company(name=company_name, slug=company_slug)
+    session.add(new_company)
+    await session.flush()
+
+    admin_role = Role(
+        name="ADMIN",
+        description=f"Administrator for {company_name}",
+        is_system=True,
+        tenant_id=new_company.id,
+        role_rank=1,
+    )
+    perm_stmt = select(Permission).where(Permission.module != ModuleScope.platform)
+    admin_role.permissions = list((await session.execute(perm_stmt)).scalars().all())
+    session.add(admin_role)
+    await session.flush()
+
+    user_obj = EnterpriseUser(
+        email=email,
+        # SSO users authenticate via the IdP; store an unusable random hash.
+        password_hash=get_password_hash(secrets.token_urlsafe(32)),
+        first_name=given_name,
+        last_name=family_name,
+        profile_image=picture,
+        company_id=new_company.id,
+        is_active=True,
+        is_self_registered=True,
+    )
+    user_obj.roles = [admin_role]
+    session.add(user_obj)
+    await session.flush()
+
+    session.add(
+        AuditLog(
+            action=audit_action,
+            entity_id=new_company.id,
+            details={"email": email, "company_name": company_name},
+        )
+    )
+    await session.commit()
+    await session.refresh(user_obj)
+    return user_obj
+
+
+def _sso_token_response(
+    email: str, user_obj: EnterpriseUser, role_name: str, user_type: str, provider: str
+) -> Token:
+    """Build the access/refresh token pair + Token response shared by the SSO login flows."""
+    extra_claims: dict[str, object] = {
+        "role": role_name,
+        "user_id": str(user_obj.id),
+        "user_type": user_type,
+        "sso": provider,
+    }
+    return Token(
+        access_token=create_access_token(subject=email, extra_claims=extra_claims),
+        refresh_token=create_refresh_token(subject=email),
+        token_type="bearer",
+        role=role_name,
+        expires_in=_settings.access_token_expire_minutes * 60,
+    )
 
 
 @router.post("/signup", response_model=EnterpriseSignUpResponse)
@@ -223,89 +307,22 @@ async def google_login(session: DBSessionDep, data: dict[str, Any] = Body(...)) 
                 )
 
             # --- AUTO-SIGNUP FLOW ---
-            # 1. Create a Company
-            first_name = idinfo.get("given_name", "Google")
-            company_name = f"{first_name}'s Organization"
-
-            # Generate a unique slug
-            import re
-
-            base_slug = re.sub(r"[^a-z0-9]", "-", company_name.lower()).strip("-")
-            company_slug = f"{base_slug}-{str(uuid.uuid4())[:8]}"
-
-            new_company = Company(name=company_name, slug=company_slug)
-            session.add(new_company)
-            await session.flush()
-
-            # 2. Create Admin Role for this company
-            admin_role = Role(
-                name="ADMIN",
-                description=f"Administrator for {company_name}",
-                is_system=True,
-                tenant_id=new_company.id,
-                role_rank=1,
-            )
-            # Assign all non-platform permissions to this role
-            perm_stmt = select(Permission).where(Permission.module != ModuleScope.platform)
-            perms = (await session.execute(perm_stmt)).scalars().all()
-            admin_role.permissions = list(perms)
-
-            session.add(admin_role)
-            await session.flush()
-
-            # 3. Create the EnterpriseUser
-            user_obj = EnterpriseUser(
+            user_obj = await _provision_sso_org_and_user(
+                session,
                 email=email,
-                password_hash="SSO_USER",  # Dummy password for SSO users
-                first_name=idinfo.get("given_name", ""),
-                last_name=idinfo.get("family_name", ""),
-                profile_image=idinfo.get("picture", ""),
-                company_id=new_company.id,
-                is_active=True,
-                is_self_registered=True,
+                given_name=idinfo.get("given_name", ""),
+                family_name=idinfo.get("family_name", ""),
+                picture=idinfo.get("picture", ""),
+                owner_label="Google",
+                audit_action="GOOGLE_SSO_AUTO_SIGNUP",
             )
-            user_obj.roles = [admin_role]
-            session.add(user_obj)
-            await session.flush()
-
             role_name = "ADMIN"
             user_type = "enterprise"
-
-            # 4. Log the audit event
-            from app.models.shared.audit_log import AuditLog
-
-            log = AuditLog(
-                action="GOOGLE_SSO_AUTO_SIGNUP",
-                entity_id=new_company.id,
-                details={"email": email, "company_name": company_name},
-            )
-            session.add(log)
-            await session.commit()
-
-            # Refresh to get IDs
-            await session.refresh(user_obj)
 
         if not user_obj.is_active:
             raise HTTPException(status_code=403, detail="Your account is currently disabled.")
 
-        # Create claims
-        extra_claims: dict[str, object] = {
-            "role": role_name,
-            "user_id": str(user_obj.id),
-            "user_type": user_type,
-            "sso": "google",
-        }
-
-        access_token = create_access_token(subject=email, extra_claims=extra_claims)
-        refresh_token = create_refresh_token(subject=email)
-
-        return Token(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_type="bearer",
-            role=role_name,
-            expires_in=_settings.access_token_expire_minutes * 60,
-        )
+        return _sso_token_response(email, user_obj, role_name, user_type, "google")
 
     except HTTPException as he:
         # Re-raise fastAPI HTTP exceptions
@@ -529,83 +546,22 @@ async def microsoft_login(session: DBSessionDep, data: dict[str, Any] = Body(...
             if signup_setting and signup_setting.value_bool is False:
                 raise HTTPException(status_code=403, detail="Self-service registration is disabled.")
 
-            # Create Company
-            given_name = decoded_token.get("given_name", "Microsoft")
-            company_name = f"{given_name}'s Organization"
-
-            import re
-
-            base_slug = re.sub(r"[^a-z0-9]", "-", company_name.lower()).strip("-")
-            company_slug = f"{base_slug}-{str(uuid.uuid4())[:8]}"
-
-            new_company = Company(name=company_name, slug=company_slug)
-            session.add(new_company)
-            await session.flush()
-
-            # Create Admin Role
-            admin_role = Role(
-                name="ADMIN",
-                description=f"Administrator for {company_name}",
-                is_system=True,
-                tenant_id=new_company.id,
-                role_rank=1,
-            )
-            perm_stmt = select(Permission).where(Permission.module != ModuleScope.platform)
-            perms = (await session.execute(perm_stmt)).scalars().all()
-            admin_role.permissions = list(perms)
-            session.add(admin_role)
-            await session.flush()
-
-            # Create User
-            user_obj = EnterpriseUser(
+            user_obj = await _provision_sso_org_and_user(
+                session,
                 email=email,
-                password_hash="SSO_USER",
-                first_name=decoded_token.get("given_name", ""),
-                last_name=decoded_token.get("family_name", ""),
-                company_id=new_company.id,
-                is_active=True,
-                is_self_registered=True,
+                given_name=decoded_token.get("given_name", ""),
+                family_name=decoded_token.get("family_name", ""),
+                picture=decoded_token.get("picture", ""),
+                owner_label="Microsoft",
+                audit_action="MICROSOFT_SSO_AUTO_SIGNUP",
             )
-            user_obj.roles = [admin_role]
-            session.add(user_obj)
-            await session.flush()
-
             role_name = "ADMIN"
             user_type = "enterprise"
-
-            # Audit
-            from app.models.shared.audit_log import AuditLog
-
-            log = AuditLog(
-                action="MICROSOFT_SSO_AUTO_SIGNUP",
-                entity_id=new_company.id,
-                details={"email": email, "company_name": company_name},
-            )
-            session.add(log)
-            await session.commit()
-            await session.refresh(user_obj)
 
         if not user_obj.is_active:
             raise HTTPException(status_code=403, detail="Your account is currently disabled.")
 
-        # Create tokens
-        extra_claims: dict[str, object] = {
-            "role": role_name,
-            "user_id": str(user_obj.id),
-            "user_type": user_type,
-            "sso": "microsoft",
-        }
-
-        access_token = create_access_token(subject=email, extra_claims=extra_claims)
-        refresh_token = create_refresh_token(subject=email)
-
-        return Token(
-            access_token=access_token,
-            refresh_token=refresh_token,
-            token_type="bearer",
-            role=role_name,
-            expires_in=_settings.access_token_expire_minutes * 60,
-        )
+        return _sso_token_response(email, user_obj, role_name, user_type, "microsoft")
     except Exception as e:
         print(f"Microsoft SSO Error: {e!s}")
         raise HTTPException(status_code=401, detail=f"Invalid Microsoft token: {e!s}") from e

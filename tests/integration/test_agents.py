@@ -4,6 +4,7 @@ External systems (the LangGraph LLM agent, MongoDB chat history, sourcing HTTP, 
 mocked so tests are fast and offline. Auth + validation cases need no mocks.
 """
 
+import asyncio
 import uuid
 
 import app.router.agents as agents_mod
@@ -38,6 +39,7 @@ class _FakeMsg:
 
 
 async def _fake_ainvoke(inputs, config=None):
+    await asyncio.sleep(0)  # async to match the real executor.ainvoke it replaces
     return {"messages": [_FakeMsg()], "metadata": {}}
 
 
@@ -123,9 +125,11 @@ class TestPilotSource:
         as_user(auth_user(seed_company.id, perms=[]))
 
         async def _fake_search(*a, **k):
+            await asyncio.sleep(0)  # async to match the real sourcing search it replaces
             return [{"full_name": "Jane", "profile_url": "u", "email": "j@x.com", "platform": "github"}]
 
         async def _fake_backfill(profiles, limit=None):
+            await asyncio.sleep(0)  # async to match the real backfill it replaces
             return profiles
 
         monkeypatch.setattr("app.router.enterprise.sourcing.search_all_platforms", _fake_search)

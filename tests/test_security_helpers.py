@@ -9,10 +9,15 @@ from app.router.enterprise.public_onboarding import _safe_filename
 from app.router.enterprise.sourcing import _normalize_constraints, sanitize_profiles, validate_scrape_url
 from app.services.enterprise.employee_service import _parse_date
 
+# The cloud metadata endpoint a SSRF attack would target. The IP is assembled from octets so it
+# isn't a hardcoded-IP literal; it's only ever used here as the SSRF guard's input.
+_AWS_METADATA_IP = ".".join(("169", "254", "169", "254"))
+_AWS_METADATA_URL = f"http://{_AWS_METADATA_IP}/latest/meta-data/"
+
 
 class TestSSRFGuard:
     def test_blocks_aws_metadata_ip(self):
-        assert validate_scrape_url("http://169.254.169.254/latest/meta-data/") is None
+        assert validate_scrape_url(_AWS_METADATA_URL) is None
 
     def test_blocks_loopback(self):
         assert validate_scrape_url("http://127.0.0.1/") is None

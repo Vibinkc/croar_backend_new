@@ -2,6 +2,7 @@ import os
 from typing import Annotated
 from uuid import UUID
 
+import anyio
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -43,14 +44,18 @@ async def _save_upload(file: UploadFile, upload_dir: str, prefix: str = "") -> s
     # Prefix with a short unique id so distinct uploads (even same-named) never overwrite.
     file_path = os.path.join(upload_dir, f"{prefix}{uuid4().hex[:8]}_{_safe_filename(file.filename)}")
     size = 0
-    with open(file_path, "wb") as f:
+    too_large = False
+    async with await anyio.open_file(file_path, "wb") as f:
         while chunk := await file.read(1024 * 1024):
             size += len(chunk)
             if size > MAX_UPLOAD_BYTES:
-                f.close()
-                os.remove(file_path)
-                raise HTTPException(status_code=413, detail="File too large (max 10MB)")
-            f.write(chunk)
+                too_large = True
+                break
+            await f.write(chunk)
+    # Remove the partial file only after it's closed (Windows-safe), then signal the error.
+    if too_large:
+        os.remove(file_path)
+        raise HTTPException(status_code=413, detail="File too large (max 10MB)")
     return file_path
 
 

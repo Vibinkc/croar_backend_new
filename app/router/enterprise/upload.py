@@ -15,7 +15,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
 @router.post("/logo")
-async def upload_company_logo(
+def upload_company_logo(
     _session: DBSessionDep,
     _current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.organization, PermissionAction.update))
