@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang='en'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>Croar Backend — Test Suite Documentation</title>
+<style>
+@page { size: A4 portrait; margin: 14mm; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 11.5px; line-height: 1.5; color: #1b1f23;
+  max-width: 920px; margin: 0 auto; padding: 24px;
+}
+h1 { font-size: 22px; border-bottom: 2px solid #ddd; padding-bottom: 8px; }
+h2 { font-size: 17px; margin-top: 28px; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+h3 { font-size: 14px; margin-top: 20px; }
+blockquote {
+  margin: 12px 0; padding: 8px 14px; background: #f3f7ff;
+  border-left: 4px solid #6e8efb; color: #344;
+}
+a { color: #0b5cad; text-decoration: none; }
+
+/* The key fix: tables always fit the page, cells wrap, nothing scrolls. */
+table {
+  width: 100%; table-layout: fixed; border-collapse: collapse;
+  margin: 14px 0; font-size: 10.5px;
+}
+th, td {
+  border: 1px solid #d0d7de; padding: 6px 8px; text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: break-word; word-break: break-word; hyphens: auto;
+}
+th { background: #f1f3f5; font-weight: 600; }
+/* Narrow numeric "Tests" column when present (2nd col), wide text elsewhere. */
+tr > td:nth-child(2), tr > th:nth-child(2) { width: 8%; text-align: right; }
+
+/* Code blocks soft-wrap instead of overflowing. */
+pre {
+  background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 6px;
+  padding: 12px; overflow: visible;
+  white-space: pre-wrap; word-break: break-word; font-size: 10.5px;
+}
+code {
+  background: #eef1f4; padding: 1px 4px; border-radius: 4px;
+  font-family: "Cascadia Code", Consolas, monospace; font-size: 10.5px;
+  overflow-wrap: break-word; word-break: break-word;
+}
+pre code { background: none; padding: 0; }
+ul, ol { padding-left: 22px; }
+hr { border: none; border-top: 1px solid #e1e4e8; margin: 22px 0; }
+
+/* Avoid awkward page breaks when printing to PDF. */
+@media print {
+  body { max-width: none; padding: 0; }
+  h2, h3 { page-break-after: avoid; }
+  table, pre, blockquote { page-break-inside: avoid; }
+  tr { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<h1 id="croar-backend-test-suite-documentation">Croar Backend — Test Suite Documentation</h1>
+<blockquote>
+<p><strong>1,204 automated tests · 100% passing · fully offline</strong> (no network, no real database, no LLM calls)</p>
+</blockquote>
+<p>This document is the complete reference for the Croar backend test suite
+(<code>AppXcessTech/Croar_Backend</code>). It explains what is tested, how the suite is architected, how to
+run it, how it isolates and parallelises tests, and how it stays correct as the codebase grows.</p>
+<hr>
+<h2 id="table-of-contents">Table of contents</h2>
+<ol>
+<li><a href="#1-at-a-glance">At a glance</a></li>
+<li><a href="#2-running-the-tests">Running the tests</a></li>
+<li><a href="#3-test-architecture--isolation">Test architecture &amp; isolation</a></li>
+<li><a href="#4-test-infrastructure-fixtures--mocking">Test infrastructure (fixtures &amp; mocking)</a></li>
+<li><a href="#5-introspection-sweeps--self-maintaining-coverage">Introspection sweeps — self-maintaining coverage</a></li>
+<li><a href="#6-per-router-integration-suites">Per-router integration suites</a></li>
+<li><a href="#7-croar-pilot-ai-agent-tests">Croar Pilot (AI agent) tests</a></li>
+<li><a href="#8-service-layer-tests">Service-layer tests</a></li>
+<li><a href="#9-unit-tests">Unit tests</a></li>
+<li><a href="#10-what-each-category-guarantees">What each category guarantees</a></li>
+<li><a href="#11-coverage-philosophy--known-limits">Coverage philosophy &amp; known limits</a></li>
+<li><a href="#12-extending-the-suite">Extending the suite</a></li>
+<li><a href="#13-full-file-inventory">Full file inventory</a></li>
+</ol>
+<hr>
+<h2 id="1-at-a-glance">1. At a glance</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th style="text-align: right;">Tests</th>
+<th>What it proves</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Unit</strong> (<code>tests/unit/</code>)</td>
+<td style="text-align: right;">409</td>
+<td>Pure logic in isolation: agent helpers, JWT/bcrypt security, every Pydantic schema contract, deterministic service helpers</td>
+</tr>
+<tr>
+<td><strong>Integration</strong> (<code>tests/integration/</code>)</td>
+<td style="text-align: right;">727</td>
+<td>Real HTTP requests through the FastAPI app against a real (SQLite) database, plus DB-backed service &amp; agent-tool logic</td>
+</tr>
+<tr>
+<td><strong>Root suites</strong> (<code>tests/</code>)</td>
+<td style="text-align: right;">68</td>
+<td>Admin / super-admin flows, security helpers, base smoke</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td style="text-align: right;"><strong>1,204</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Every test runs <strong>offline</strong>: the database is SQLite in-memory, and all external dependencies
+(LLM, MongoDB, candidate sourcing, SMTP email, Google Calendar) are mocked or never invoked.
+There are <strong>0 skips, 0 xfails, and 0 network calls</strong>.</p>
+<hr>
+<h2 id="2-running-the-tests">2. Running the tests</h2>
+<p>All commands run from the <code>backend/</code> directory using the project virtualenv.</p>
+<pre><code class="language-bash"># Full suite (runs in parallel across CPU cores by default)
+python -m pytest
+
+# Run serially (useful when debugging a single test — skips worker startup)
+python -m pytest -n0
+
+# A single layer
+python -m pytest tests/unit
+python -m pytest tests/integration
+
+# A single file
+python -m pytest tests/integration/test_jobs.py
+
+# A single test
+python -m pytest tests/integration/test_jobs.py::TestListJobs::test_happy_path_empty_list
+
+# Helpful flags
+python -m pytest -ra        # short summary of non-passing outcomes
+python -m pytest -v         # verbose, one line per test
+python -m pytest -x         # stop at first failure
+</code></pre>
+<p><code>testpaths = ["tests"]</code> is configured, so a bare <code>pytest</code> only collects the suite under <code>tests/</code>.
+Scratch scripts elsewhere in the repository are never collected.</p>
+<h3 id="pytest-configuration-pyprojecttoml-toolpytestini_options">Pytest configuration (<code>pyproject.toml</code> → <code>[tool.pytest.ini_options]</code>)</h3>
+<pre><code class="language-toml">asyncio_mode = &quot;auto&quot;                          # async tests need no @mark.asyncio
+asyncio_default_fixture_loop_scope = &quot;session&quot; # one event loop per worker
+asyncio_default_test_loop_scope = &quot;session&quot;
+testpaths = [&quot;tests&quot;]
+addopts = &quot;-n auto&quot;                            # parallelise across all CPU cores
+python_files = [&quot;test_*.py&quot;]
+python_classes = [&quot;Test*&quot;]
+python_functions = [&quot;test_*&quot;]
+filterwarnings = [&quot;ignore::DeprecationWarning&quot;]
+</code></pre>
+<h3 id="required-dev-dependencies">Required dev dependencies</h3>
+<ul>
+<li><code>pytest</code>, <code>pytest-asyncio</code> — test runner + async support</li>
+<li><code>pytest-xdist</code> — parallel execution across workers</li>
+<li><code>aiosqlite</code> — async SQLite driver for the in-memory test database</li>
+<li><code>httpx</code> — async client used to drive the ASGI app</li>
+</ul>
+<hr>
+<h2 id="3-test-architecture-isolation">3. Test architecture &amp; isolation</h2>
+<p>The suite is designed to be <strong>fast, parallel, and perfectly isolated</strong> without a real database.</p>
+<h3 id="31-parallel-execution">3.1 Parallel execution</h3>
+<p><code>addopts = "-n auto"</code> runs the suite across all available CPU cores via <code>pytest-xdist</code>. Each
+worker is a <strong>separate process with its own isolated in-memory database engine</strong>, so workers
+never share state. Tests are distributed across workers automatically.</p>
+<blockquote>
+<p>Determinism note: parametrized test ids must be identical across workers, so parametrized
+values use <strong>fixed</strong> ids (never <code>uuid4()</code> evaluated at collection time). A random id generated
+during collection would make each worker collect a different set of test ids and abort.</p>
+</blockquote>
+<h3 id="32-build-schema-once-wipe-rows-between-tests">3.2 Build-schema-once, wipe-rows-between-tests</h3>
+<p>Recreating the full 61-table schema for every test is wasteful. Instead:</p>
+<ol>
+<li><strong><code>db_engine</code> is session-scoped</strong> — the schema is built <strong>once per worker</strong> via
+   <code>Base.metadata.create_all</code>.</li>
+<li>An <strong>autouse <code>_clean_tables</code> fixture</strong> deletes every row from every table <strong>after each test</strong>
+   (in reverse dependency order). This gives each test a pristine database without rebuilding the
+   schema.</li>
+</ol>
+<p>This pattern is both efficient and robust — it avoids per-test DDL and avoids fragile
+cross-session SAVEPOINT juggling on SQLite. Combined with session-scoped event loops, the
+session-scoped engine and the tests share a single loop per worker.</p>
+<h3 id="33-sqlite-as-postgres-shim-testsintegrationconftestpy">3.3 SQLite-as-Postgres shim — <code>tests/integration/conftest.py</code></h3>
+<p>Production runs on PostgreSQL; the tests run on <strong>SQLite in-memory</strong> for zero-setup speed.
+A startup shim (<code>_make_sqlite_compatible()</code>) rewrites Postgres-only column types and server
+defaults so the full schema builds faithfully on SQLite:</p>
+<table>
+<thead>
+<tr>
+<th>Postgres construct</th>
+<th>Rewritten to (SQLite-safe)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JSONB</code>, <code>ARRAY</code></td>
+<td>generic <code>JSON</code></td>
+</tr>
+<tr>
+<td><code>UUID</code></td>
+<td>SQLAlchemy <code>Uuid(as_uuid=True)</code></td>
+</tr>
+<tr>
+<td><code>server_default = uuid_generate_v4()</code></td>
+<td>dropped (Python-side <code>default=uuid.uuid4</code> supplies it)</td>
+</tr>
+<tr>
+<td><code>'{}'::jsonb</code> and other <code>::</code> casts</td>
+<td>the literal before the cast (e.g. <code>'{}'</code>), preserving <code>NOT NULL</code></td>
+</tr>
+</tbody>
+</table>
+<p>The result is a schema structurally identical to production, so the integration tests exercise
+the real models, relationships, and constraints.</p>
+<hr>
+<h2 id="4-test-infrastructure-fixtures-mocking">4. Test infrastructure (fixtures &amp; mocking)</h2>
+<h3 id="41-key-fixtures-testsintegrationconftestpy">4.1 Key fixtures (<code>tests/integration/conftest.py</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Fixture</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db_engine</code></td>
+<td>Session-scoped SQLite in-memory engine (<code>StaticPool</code>); schema created once per worker</td>
+</tr>
+<tr>
+<td><code>_clean_tables</code></td>
+<td>Autouse — wipes all tables after each test for isolation</td>
+</tr>
+<tr>
+<td><code>db_session</code></td>
+<td>A fresh <code>AsyncSession</code> per test for seeding / asserting data directly</td>
+</tr>
+<tr>
+<td><code>override_db</code></td>
+<td>Overrides the app's <code>get_db</code> dependency to use the test database</td>
+</tr>
+<tr>
+<td><code>client</code></td>
+<td><code>httpx.AsyncClient</code> over <code>ASGITransport</code> — a real request/response cycle, no TCP/network</td>
+</tr>
+<tr>
+<td><code>seed_company</code></td>
+<td>Inserts a <code>Company</code> (name + slug) and returns it (most endpoints are company-scoped)</td>
+</tr>
+<tr>
+<td><code>auth_user</code></td>
+<td>Factory → builds a stand-in authenticated user with a chosen company + permission set</td>
+</tr>
+<tr>
+<td><code>as_user</code></td>
+<td>Overrides <code>get_current_user</code> so a request runs as a given user</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Granting permissions in a test:</strong></p>
+<pre><code class="language-python"># Authenticated user who may READ jobs:
+as_user(auth_user(seed_company.id, perms=[(ModuleScope.jobs, PermissionAction.read)]))
+
+# Authenticated but unprivileged (for 403 assertions):
+as_user(auth_user(seed_company.id, perms=[]))
+
+# No as_user call at all  -&gt; unauthenticated (for 401 assertions)
+</code></pre>
+<h3 id="42-mocking-strategy-staying-fully-offline">4.2 Mocking strategy — staying fully offline</h3>
+<table>
+<thead>
+<tr>
+<th>Real dependency</th>
+<th>How it is neutralised in tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LLM (LangGraph / ChatOpenAI agent)</td>
+<td><code>monkeypatch</code> on <code>hr_agent_executor.ainvoke</code> and the question-generator services</td>
+</tr>
+<tr>
+<td>MongoDB (Pilot / sourcing chat history)</td>
+<td><code>monkeypatch</code> on the Mongo collection handle; endpoints degrade gracefully</td>
+</tr>
+<tr>
+<td>Candidate sourcing (Oxylabs / platform scrapers)</td>
+<td><code>monkeypatch</code> on <code>search_all_platforms</code> — no network</td>
+</tr>
+<tr>
+<td>SMTP / email</td>
+<td>send paths are patched or simply not invoked by the tested code path</td>
+</tr>
+<tr>
+<td>Google Calendar / Meet</td>
+<td>credential file absent → the helper returns <code>None</code> without a network call</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="5-introspection-sweeps-self-maintaining-coverage">5. Introspection sweeps — self-maintaining coverage</h2>
+<p>Five sweeps enumerate the <strong>live FastAPI route table</strong> and generate one parametrized test per
+endpoint. They require <strong>zero per-endpoint maintenance</strong> — add a new route and it is covered the
+next time the suite runs.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+<th>Discovers</th>
+<th>Asserts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_auth_sweep.py</code></td>
+<td style="text-align: right;">185</td>
+<td>Every route whose dependency tree contains <code>get_current_user</code></td>
+<td>Anonymous request → <strong>401</strong></td>
+</tr>
+<tr>
+<td><code>test_rbac_sweep.py</code></td>
+<td style="text-align: right;">170</td>
+<td>Every route carrying a <code>PermissionChecker</code></td>
+<td>Authenticated, zero-permission user → <strong>403</strong></td>
+</tr>
+<tr>
+<td><code>test_notfound_sweep.py</code></td>
+<td style="text-align: right;">33</td>
+<td>Every "by-id" <code>GET</code>/<code>DELETE</code> route (path ends in a path param)</td>
+<td>Permitted user + unknown id → <strong>404</strong></td>
+</tr>
+<tr>
+<td><code>test_validation_sweep.py</code></td>
+<td style="text-align: right;">43</td>
+<td>Every <code>POST</code>/<code>PUT</code>/<code>PATCH</code> route with a required body field</td>
+<td>Permitted user + empty body → <strong>400/422</strong></td>
+</tr>
+<tr>
+<td><code>test_list_sweep.py</code></td>
+<td style="text-align: right;">40</td>
+<td>Every no-parameter collection <code>GET</code></td>
+<td>Permitted user on empty DB → <strong>200</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="how-discovery-works">How discovery works</h3>
+<p>Each sweep walks <code>app.routes</code> and inspects every route's <code>.dependant</code> dependency tree:</p>
+<ul>
+<li>The <strong>auth</strong> and <strong>RBAC</strong> sweeps check for the presence of <code>get_current_user</code> /
+  <code>PermissionChecker</code>.</li>
+<li>The <strong>404 / validation / list</strong> sweeps read the route's own required <code>(module, action)</code>
+  straight off its <code>PermissionChecker</code>, then grant the test user <em>exactly</em> that permission — so
+  the request reaches the handler (or body validation) instead of stopping at 401/403.</li>
+</ul>
+<h3 id="documented-exclusions">Documented exclusions</h3>
+<p>Each sweep skips a small, <strong>explicitly commented</strong> set of endpoints where its blanket assertion
+would not apply:</p>
+<ul>
+<li>Multipart / streaming routes (<code>/upload</code>, <code>/audio</code>, <code>/documents/</code>, <code>/ws</code>)</li>
+<li>Mongo-backed sourcing chat (<code>/sourcing/chat</code>) — different id semantics</li>
+<li><code>super-admin/system</code> — non-SQLite id handling</li>
+<li><code>simulations/scenarios</code> bulk delete — idempotent (returns 200 even when the row is absent)</li>
+<li><code>super-admin/tenants/{id}</code> sub-resource creates — look up the absent tenant before body validation</li>
+</ul>
+<p>These exclusions affect only <em>which sweep</em> skips an endpoint — most are still covered by the
+auth/RBAC sweeps and/or their dedicated router suite.</p>
+<hr>
+<h2 id="6-per-router-integration-suites">6. Per-router integration suites</h2>
+<p>Each router has a dedicated suite following the same exhaustive template:
+<strong>401 (no auth) · 403 (wrong permission) · happy path · body validation · 404 · tenant isolation.</strong></p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+<th>Area</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_jobs.py</code></td>
+<td style="text-align: right;">15</td>
+<td>Job requisitions CRUD + public visibility</td>
+</tr>
+<tr>
+<td><code>test_employees.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Employee directory</td>
+</tr>
+<tr>
+<td><code>test_projects.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Projects &amp; tasks</td>
+</tr>
+<tr>
+<td><code>test_company.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Company profile / settings</td>
+</tr>
+<tr>
+<td><code>test_communication.py</code></td>
+<td style="text-align: right;">15</td>
+<td>Mail templates &amp; automations</td>
+</tr>
+<tr>
+<td><code>test_assessment_templates.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Assessment templates</td>
+</tr>
+<tr>
+<td><code>test_interview_templates.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Interview templates</td>
+</tr>
+<tr>
+<td><code>test_onboarding_templates.py</code></td>
+<td style="text-align: right;">14</td>
+<td>Onboarding templates</td>
+</tr>
+<tr>
+<td><code>test_automation.py</code></td>
+<td style="text-align: right;">17</td>
+<td>Pipeline automations</td>
+</tr>
+<tr>
+<td><code>test_applications.py</code></td>
+<td style="text-align: right;">10</td>
+<td>Candidate applications, stages, bulk delete</td>
+</tr>
+<tr>
+<td><code>test_candidates.py</code></td>
+<td style="text-align: right;">3</td>
+<td>Candidate records</td>
+</tr>
+<tr>
+<td><code>test_team.py</code></td>
+<td style="text-align: right;">13</td>
+<td>Team / roles</td>
+</tr>
+<tr>
+<td><code>test_survey_x360_simulation.py</code></td>
+<td style="text-align: right;">17</td>
+<td>Surveys, 360° feedback, simulations</td>
+</tr>
+<tr>
+<td><code>test_dashboard_onboarding.py</code></td>
+<td style="text-align: right;">9</td>
+<td>Dashboard stats + onboarding magic-link flow</td>
+</tr>
+<tr>
+<td><code>test_platform.py</code></td>
+<td style="text-align: right;">7</td>
+<td>Platform super-admin surface (<code>platform:moderate</code>)</td>
+</tr>
+<tr>
+<td><code>test_sourcing.py</code></td>
+<td style="text-align: right;">5</td>
+<td>Sourcing auth surface (live network search excluded)</td>
+</tr>
+<tr>
+<td><code>test_public.py</code></td>
+<td style="text-align: right;">4</td>
+<td>Public careers / job endpoints (no auth)</td>
+</tr>
+<tr>
+<td><code>test_auth.py</code></td>
+<td style="text-align: right;">7</td>
+<td><code>/token</code> login flow (a real <code>EnterpriseUser</code> is seeded)</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="7-croar-pilot-ai-agent-tests">7. Croar Pilot (AI agent) tests</h2>
+<p>The Pilot is the highest-risk product surface; it is tested end-to-end <strong>without ever calling the
+LLM</strong>.</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_agents.py</code></td>
+<td style="text-align: right;">18</td>
+<td><code>/chat</code> endpoint — auth, company check, empty-message validation, and <code>pilot_action</code> extraction from tool messages (LLM / Mongo / sourcing / SMTP all mocked)</td>
+</tr>
+<tr>
+<td><code>test_agent_tools_db.py</code></td>
+<td style="text-align: right;">17</td>
+<td>The Pilot's job tools run against the <strong>real DB</strong>: create / list / update / delete, invalid ids, tenant scoping, no-op updates, and the <strong>"delete preserves hired candidates"</strong> business rule</td>
+</tr>
+<tr>
+<td><code>test_e2e_pipeline.py</code></td>
+<td style="text-align: right;">3</td>
+<td>The full <code>build_hiring_pipeline</code>: one tool call → a live job + four automations + three role-specific templates + generated interview time-slots</td>
+</tr>
+<tr>
+<td><code>tests/unit/test_agent_helpers.py</code></td>
+<td style="text-align: right;">34</td>
+<td>Helper functions: <code>_clamp_int</code>, interview/assessment type normalization, date parsing, time-slot generation, the default onboarding form</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="8-service-layer-tests">8. Service-layer tests</h2>
+<p>The service layer (<code>app/services/</code>) is exercised <strong>indirectly</strong> by every integration test that
+hits a router, and <strong>directly</strong> by dedicated unit tests for its deterministic and DB-backed logic.</p>
+<h3 id="81-pure-logic-services-testsunittest_services_purepy-24">8.1 Pure-logic services — <code>tests/unit/test_services_pure.py</code> (24)</h3>
+<p>No database, no network — deterministic helpers tested in isolation:</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Functions covered</th>
+<th>Examples asserted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>interview_service</code></td>
+<td><code>parse_time()</code></td>
+<td><code>"14:30"</code> → 14:30; garbage / out-of-range → safe 09:00 default</td>
+</tr>
+<tr>
+<td><code>onboarding_service</code></td>
+<td><code>generate_onboarding_code()</code></td>
+<td>matches <code>ONB-#####</code>; cryptographically unique across many draws</td>
+</tr>
+<tr>
+<td><code>employee_service</code></td>
+<td><code>_parse_date()</code></td>
+<td>date passthrough, ISO parsing, ISO+time suffix, bad/empty/None → default</td>
+</tr>
+<tr>
+<td><code>automation_service</code></td>
+<td><code>evaluate_criteria()</code></td>
+<td><code>ai_score &gt; 80</code> gate passes/fails; missing score = 0; malformed gate <strong>fails closed</strong>; non-numeric criteria → true</td>
+</tr>
+<tr>
+<td><code>sourcing_service</code></td>
+<td><code>register_provider()</code>, <code>search()</code></td>
+<td>unknown platform → <code>[]</code>; case-insensitive lookup; register overrides existing; default providers present</td>
+</tr>
+</tbody>
+</table>
+<h3 id="82-db-backed-services-testsintegrationtest_services_dbpy-12">8.2 DB-backed services — <code>tests/integration/test_services_db.py</code> (12)</h3>
+<p>Run against the SQLite test database:</p>
+<table>
+<thead>
+<tr>
+<th>Service</th>
+<th>Functions covered</th>
+<th>Examples asserted</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>interview_service</code></td>
+<td><code>find_available_slot()</code></td>
+<td>returns a future <strong>weekday</strong> at the configured start time; honours custom <code>time_slots</code>; respects <code>start_date</code></td>
+</tr>
+<tr>
+<td><code>employee_service</code></td>
+<td><code>EmployeeService.generate_employee_id()</code></td>
+<td>first id = <code>EMP-1001</code>; increments from existing; <strong>numeric not lexicographic</strong> (<code>EMP-1000</code> ranks above <code>EMP-999</code>); scoped per company</td>
+</tr>
+<tr>
+<td><code>enterprise_service</code></td>
+<td><code>get_companies()</code>, <code>get_jobs()</code>, <code>create_job_requirement()</code>, <code>publish_job()</code></td>
+<td>empty results, created rows are returned, publishing creates a <code>PUBLISHED</code> posting</td>
+</tr>
+</tbody>
+</table>
+<h3 id="83-what-is-intentionally-not-unit-tested-at-the-service-layer">8.3 What is intentionally not unit-tested at the service layer</h3>
+<p>LLM/network-bound services — <code>ai_evaluator</code>, <code>ai_service</code>, <code>ai_interview_service</code>, <code>hiring_agent</code>,
+<code>imap_service</code>, <code>google_jobs</code>, the email-sending paths, and the ~35 individual sourcing scrapers —
+are <strong>exercised indirectly</strong> through the integration tests but have no isolated unit tests, because
+unit-testing them in isolation requires heavy mocking and yields brittle, low-value tests. Their
+behaviour is validated where it matters (the <code>/chat</code>, pipeline, and sourcing flows).</p>
+<hr>
+<h2 id="9-unit-tests">9. Unit tests</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+<th>What it covers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tests/unit/test_schema_sweep.py</code></td>
+<td style="text-align: right;">339</td>
+<td><strong>Auto-discovers every Pydantic schema</strong> under <code>app.schemas</code> and pins its contract: schemas with required fields reject empty construction; all-optional schemas accept it; all fields are introspectable</td>
+</tr>
+<tr>
+<td><code>tests/unit/test_agent_helpers.py</code></td>
+<td style="text-align: right;">34</td>
+<td>Agent helper logic (see §7)</td>
+</tr>
+<tr>
+<td><code>tests/unit/test_services_pure.py</code></td>
+<td style="text-align: right;">24</td>
+<td>Deterministic service helpers (see §8.1)</td>
+</tr>
+<tr>
+<td><code>tests/unit/test_security_core.py</code></td>
+<td style="text-align: right;">12</td>
+<td><code>verify_password</code> / <code>get_password_hash</code> / <code>create_access_token</code> / <code>create_refresh_token</code> / <code>decode_token</code></td>
+</tr>
+<tr>
+<td><code>tests/test_security_helpers.py</code></td>
+<td style="text-align: right;">25</td>
+<td>Additional security / permission helper coverage</td>
+</tr>
+<tr>
+<td><code>tests/test_super_admin.py</code></td>
+<td style="text-align: right;">28</td>
+<td>Super-admin flows</td>
+</tr>
+<tr>
+<td><code>tests/test_admin_enterprise.py</code></td>
+<td style="text-align: right;">13</td>
+<td>Enterprise admin flows</td>
+</tr>
+<tr>
+<td><code>tests/test_base.py</code></td>
+<td style="text-align: right;">2</td>
+<td>Base / smoke</td>
+</tr>
+</tbody>
+</table>
+<p>The <strong>schema sweep</strong> is the single largest source of coverage and is fully self-maintaining: every
+new request/response model added under <code>app.schemas</code> is validated automatically.</p>
+<hr>
+<h2 id="10-what-each-category-guarantees">10. What each category guarantees</h2>
+<ul>
+<li><strong>Authentication</strong> — <em>no</em> authenticated endpoint can be reached anonymously (185 checks).</li>
+<li><strong>Authorization</strong> — <em>no</em> permission-gated endpoint can be reached without the right permission
+  (170 checks).</li>
+<li><strong>Input validation</strong> — write endpoints reject malformed / empty bodies (43 checks) with the
+  correct client error.</li>
+<li><strong>Resource scoping</strong> — requesting another tenant's resource or an unknown id returns 404 —
+  never another tenant's data and never a 500 (33 checks + per-router isolation tests).</li>
+<li><strong>Happy paths</strong> — collection endpoints return clean 200s on an empty DB (40 checks); CRUD flows
+  create / read / update / delete correctly (per-router suites).</li>
+<li><strong>Schema integrity</strong> — every Pydantic model's required/optional contract holds (339 checks).</li>
+<li><strong>Service logic</strong> — deterministic helpers and DB-backed service functions behave correctly,
+  including edge cases that fail safely (36 checks).</li>
+<li><strong>Product-critical agent flows</strong> — the Pilot's pipeline build and job tools behave correctly,
+  including the rule that deleting a job preserves hired candidates.</li>
+</ul>
+<hr>
+<h2 id="11-coverage-philosophy-known-limits">11. Coverage philosophy &amp; known limits</h2>
+<ul>
+<li><strong>Breadth via sweeps, depth via suites.</strong> The five sweeps assert <em>status-code contracts</em> across
+  the entire route table (breadth). The per-router suites, service tests, agent-tool tests, and
+  e2e test assert <em>behaviour</em> — real DB writes, business rules, and response bodies (depth).</li>
+<li><strong>Offline by design.</strong> External systems are mocked, so the suite is deterministic and can run in
+  CI without secrets or services.</li>
+<li><strong>Not covered (by design):</strong> real PostgreSQL-only behaviours (e.g. JSONB operators), real
+  third-party API responses, multipart upload internals, and the individual sourcing scrapers.
+  These belong to a separate, infrastructure-backed test tier if/when needed.</li>
+</ul>
+<hr>
+<h2 id="12-extending-the-suite">12. Extending the suite</h2>
+<ul>
+<li><strong>New endpoint?</strong> The auth / RBAC / 404 / validation / list sweeps cover it automatically. Add a
+  dedicated <code>test_&lt;router&gt;.py</code> for its happy-path behaviour using the
+  401/403/happy/validation/404/isolation template.</li>
+<li><strong>New schema?</strong> The schema sweep covers its contract automatically. Add targeted tests only for
+  custom validators or computed fields.</li>
+<li><strong>New agent tool?</strong> Add a DB-backed test in <code>test_agent_tools_db.py</code> following the existing
+  pattern (<code>_cfg</code>, <code>_make_job</code>, <code>.ainvoke(...)</code>).</li>
+<li><strong>New service function?</strong> If it's pure logic, add to <code>tests/unit/test_services_pure.py</code>; if it
+  touches the DB, add to <code>tests/integration/test_services_db.py</code>.</li>
+<li><strong>New external dependency?</strong> Add a <code>monkeypatch</code> in the relevant test/conftest so the suite stays
+  offline.</li>
+<li><strong>Parametrized tests under xdist:</strong> never use <code>uuid4()</code> (or any non-deterministic value) in a
+  <code>parametrize</code> list — use a fixed constant so every worker collects identical test ids.</li>
+</ul>
+<hr>
+<h2 id="13-full-file-inventory">13. Full file inventory</h2>
+<h3 id="testsunit-409"><code>tests/unit/</code> — 409</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_schema_sweep.py</code></td>
+<td style="text-align: right;">339</td>
+</tr>
+<tr>
+<td><code>test_agent_helpers.py</code></td>
+<td style="text-align: right;">34</td>
+</tr>
+<tr>
+<td><code>test_services_pure.py</code></td>
+<td style="text-align: right;">24</td>
+</tr>
+<tr>
+<td><code>test_security_core.py</code></td>
+<td style="text-align: right;">12</td>
+</tr>
+</tbody>
+</table>
+<h3 id="testsintegration-727"><code>tests/integration/</code> — 727</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_auth_sweep.py</code></td>
+<td style="text-align: right;">185</td>
+</tr>
+<tr>
+<td><code>test_rbac_sweep.py</code></td>
+<td style="text-align: right;">170</td>
+</tr>
+<tr>
+<td><code>test_validation_sweep.py</code></td>
+<td style="text-align: right;">43</td>
+</tr>
+<tr>
+<td><code>test_list_sweep.py</code></td>
+<td style="text-align: right;">40</td>
+</tr>
+<tr>
+<td><code>test_notfound_sweep.py</code></td>
+<td style="text-align: right;">33</td>
+</tr>
+<tr>
+<td><code>test_agents.py</code></td>
+<td style="text-align: right;">18</td>
+</tr>
+<tr>
+<td><code>test_agent_tools_db.py</code></td>
+<td style="text-align: right;">17</td>
+</tr>
+<tr>
+<td><code>test_automation.py</code></td>
+<td style="text-align: right;">17</td>
+</tr>
+<tr>
+<td><code>test_survey_x360_simulation.py</code></td>
+<td style="text-align: right;">17</td>
+</tr>
+<tr>
+<td><code>test_jobs.py</code></td>
+<td style="text-align: right;">15</td>
+</tr>
+<tr>
+<td><code>test_communication.py</code></td>
+<td style="text-align: right;">15</td>
+</tr>
+<tr>
+<td><code>test_assessment_templates.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_interview_templates.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_onboarding_templates.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_employees.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_projects.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_company.py</code></td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_team.py</code></td>
+<td style="text-align: right;">13</td>
+</tr>
+<tr>
+<td><code>test_services_db.py</code></td>
+<td style="text-align: right;">12</td>
+</tr>
+<tr>
+<td><code>test_applications.py</code></td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><code>test_dashboard_onboarding.py</code></td>
+<td style="text-align: right;">9</td>
+</tr>
+<tr>
+<td><code>test_auth.py</code></td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td><code>test_platform.py</code></td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td><code>test_sourcing.py</code></td>
+<td style="text-align: right;">5</td>
+</tr>
+<tr>
+<td><code>test_public.py</code></td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td><code>test_candidates.py</code></td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr>
+<td><code>test_e2e_pipeline.py</code></td>
+<td style="text-align: right;">3</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tests-root-68"><code>tests/</code> (root) — 68</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th style="text-align: right;">Tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_super_admin.py</code></td>
+<td style="text-align: right;">28</td>
+</tr>
+<tr>
+<td><code>test_security_helpers.py</code></td>
+<td style="text-align: right;">25</td>
+</tr>
+<tr>
+<td><code>test_admin_enterprise.py</code></td>
+<td style="text-align: right;">13</td>
+</tr>
+<tr>
+<td><code>test_base.py</code></td>
+<td style="text-align: right;">2</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Grand total: 1,204 tests.</strong></p>
+</body>
+</html>

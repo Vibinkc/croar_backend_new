@@ -116,15 +116,18 @@ async def agent_chat(
             messages[-1].content if messages else "I couldn't generate a response. Please try again."
         )
 
-        # Surface a UI action from a tool result (e.g. the candidate picker from source_candidates).
+        # Surface a UI action from a tool result — the candidate picker (source_candidates) or the
+        # pipeline-built result card (build_hiring_pipeline). Take the most recent recognized one.
         pilot_action = None
+        ui_tools = {"source_candidates", "build_hiring_pipeline"}
+        known_ui = {"candidate_picker", "pipeline_built"}
         try:
             for m in reversed(messages or []):
-                if getattr(m, "type", None) == "tool" and getattr(m, "name", "") == "source_candidates":
+                if getattr(m, "type", None) == "tool" and getattr(m, "name", "") in ui_tools:
                     data = json.loads(m.content)
-                    if isinstance(data, dict) and data.get("ui") == "candidate_picker":
+                    if isinstance(data, dict) and data.get("ui") in known_ui:
                         pilot_action = data
-                    break
+                        break
         except Exception:
             pilot_action = None
 

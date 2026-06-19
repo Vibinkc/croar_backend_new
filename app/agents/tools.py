@@ -1080,6 +1080,7 @@ async def build_hiring_pipeline(
         await session.commit()
         return {
             "status": "success",
+            "ui": "pipeline_built",  # signals the Pilot UI to render the actionable result card
             "job_id": str(job_id),
             "role": role_title,
             "armed": [

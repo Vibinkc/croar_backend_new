@@ -231,3 +231,18 @@ omit = [
     "app/schemas/*", # folder with your Pydantic models
     "app/models/*", # folder with your SQLAlchemy models
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# Session-scoped loops so the session-scoped DB engine (built once per worker) and the tests
+# share one event loop — required for the build-schema-once + per-test-rollback fixtures.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+# Run tests across all CPU cores by default (pytest-xdist). Each worker gets its own isolated
+# in-memory SQLite engine, so parallelism is safe. Override with `-n0` to run serially.
+addopts = "-n auto"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = ["ignore::DeprecationWarning"]
