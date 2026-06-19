@@ -1,5 +1,5 @@
 import os
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 import anyio
@@ -91,8 +91,10 @@ async def get_public_onboarding(token: UUID, session: DBSessionDep) -> object:
         and onboarding.application.job_requirement
         and onboarding.application.job_requirement.company
     ):
-        onboarding.company_name = onboarding.application.job_requirement.company.name
-        onboarding.company_logo = onboarding.application.job_requirement.company.logo_url
+        # company_name/company_logo are response-only fields attached dynamically (not ORM columns).
+        ob: Any = onboarding
+        ob.company_name = onboarding.application.job_requirement.company.name
+        ob.company_logo = onboarding.application.job_requirement.company.logo_url
 
     return onboarding
 

@@ -201,7 +201,9 @@ async def signup(signup_data: EnterpriseSignUpRequest, session: DBSessionDep) ->
     await session.commit()
 
     return EnterpriseSignUpResponse(
-        message="Organization and admin user created successfully.", user_id=user_id, company_id=company_id
+        message="Organization and admin user created successfully.",
+        user_id=cast("uuid.UUID", user_id),
+        company_id=cast("uuid.UUID", company_id),
     )
 
 
@@ -568,7 +570,7 @@ async def microsoft_login(session: DBSessionDep, data: dict[str, Any] = Body(...
 
 
 @router.post("/forgot-password")
-async def forgot_password(data: dict[str, str] = Body(...), session: DBSessionDep = None) -> dict[str, str]:
+async def forgot_password(session: DBSessionDep, data: dict[str, str] = Body(...)) -> dict[str, str]:
     email = data.get("email")
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
@@ -595,7 +597,7 @@ async def forgot_password(data: dict[str, str] = Body(...), session: DBSessionDe
 
 
 @router.post("/reset-password")
-async def reset_password(data: dict[str, str] = Body(...), session: DBSessionDep = None) -> dict[str, str]:
+async def reset_password(session: DBSessionDep, data: dict[str, str] = Body(...)) -> dict[str, str]:
     token = data.get("token")
     new_password = data.get("new_password")
 
