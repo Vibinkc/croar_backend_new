@@ -118,6 +118,15 @@ class Employee(EnterpriseBase):
     )
     deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
+    # ----- Payroll fields (added on payroll-module integration) -----
+    # Optional fields the payroll engine reads onto payslips / statutory filings.
+    # `pan` is exposed as a property aliasing `pan_card_number` (below).
+    location: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    bank_account_no: Mapped[str | None] = mapped_column(String(34), nullable=True)
+    uan: Mapped[str | None] = mapped_column(String(20), nullable=True)  # PF Universal Account No.
+    esic_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    date_of_joining: Mapped[Date | None] = mapped_column(Date, nullable=True)
+
     # Relationships
     company = relationship("Company", backref="employees")
     department = relationship("Department", backref="employees")
@@ -126,3 +135,19 @@ class Employee(EnterpriseBase):
         UUID(as_uuid=True), ForeignKey("candidates.id", ondelete="SET NULL"), nullable=True
     )
     candidate = relationship("Candidate")
+
+    # Per-employee salary package(s) — payroll module (back_populates SalaryStructure.employee).
+    salary_structures = relationship(
+        "SalaryStructure", back_populates="employee", cascade="all, delete-orphan"
+    )
+
+    @property
+    def pan(self) -> str | None:
+        """Payroll alias for ``pan_card_number`` (the payroll engine reads ``.pan``)."""
+        return self.pan_card_number
+
+    @property
+    def department_name(self) -> str | None:
+        """Flat department name for payslips (the ``department`` attr is a relationship)."""
+        dept = self.__dict__.get("department")
+        return getattr(dept, "name", None) if dept is not None else None

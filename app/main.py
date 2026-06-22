@@ -23,6 +23,7 @@ from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 from app.router import agents, auth, enterprise, platform
+from app.router.enterprise.payroll import router as payroll_router
 
 # Setup Logging
 setup_logging()
@@ -75,11 +76,78 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----- Payroll activity-trail middleware (ported from the payroll module) -----
+# Records an audit row for every authenticated, mutating payroll API request.
+# Best-effort: never breaks the response. Actor is read from Croar's JWT
+# (user_id claim); company is backfilled from the user in audit_service.record.
+import uuid as _uuid
+from collections.abc import Awaitable as _Awaitable
+from collections.abc import Callable as _Callable
+
+from jose import jwt as _jose_jwt
+from starlette.requests import Request as _Request
+from starlette.responses import Response as _Response
+
+from app.services.payroll import audit_service as _payroll_audit_service
+
+_AUDIT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_AUDIT_PATH_PREFIXES = (
+    "/api/v1/enterprise/payroll",
+    "/api/v1/enterprise/leave",
+    "/api/v1/enterprise/timesheets",
+    "/api/v1/enterprise/taxes",
+    "/api/v1/enterprise/calendar",
+    "/api/v1/enterprise/reports",
+    "/api/v1/enterprise/settings",
+)
+# A read-only live calculation fired on every keystroke — not a real mutation.
+_AUDIT_SKIP_PATHS = {"/api/v1/enterprise/payroll/structures/preview"}
+
+
+@app.middleware("http")
+async def _payroll_audit_requests(
+    request: _Request, call_next: "_Callable[[_Request], _Awaitable[_Response]]"
+) -> _Response:
+    response = await call_next(request)
+    try:
+        method = request.method
+        path = request.url.path
+        if (
+            method in _AUDIT_METHODS
+            and path.startswith(_AUDIT_PATH_PREFIXES)
+            and path not in _AUDIT_SKIP_PATHS
+        ):
+            actor_id: _uuid.UUID | None = None
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                try:
+                    payload = _jose_jwt.decode(
+                        auth_header[7:], _settings.secret_key, algorithms=[_settings.algorithm]
+                    )
+                    uid = payload.get("user_id")
+                    actor_id = _uuid.UUID(uid) if uid else None
+                except Exception:
+                    actor_id = None
+            if response.status_code < 400 or actor_id is not None:
+                await _payroll_audit_service.record(
+                    company_id=None,
+                    actor_id=actor_id,
+                    method=method,
+                    path=path,
+                    status_code=response.status_code,
+                )
+    except Exception:  # pragma: no cover - audit must never break a request
+        pass
+    return response
+
+
 # Routers
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(enterprise.router, prefix="/api/v1/enterprise", tags=["Enterprise"])
 app.include_router(platform.router, prefix="/api/v1/super-admin", tags=["Platform Admin"])
 app.include_router(agents.router, prefix="/api/v1", tags=["Agent OS"])
+# Payroll/HR module (sub-routers carry absolute /api/v1/enterprise/... prefixes)
+app.include_router(payroll_router)
 
 # Static Files
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")

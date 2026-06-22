@@ -168,6 +168,19 @@ exclude_also = ["if TYPE_CHECKING:"]
 [tool.ruff.lint.per-file-ignores]
 # Per-file specific ignores for scripts and utility files at root level
 "*.py" = []
+# Payroll module (integrated from a separate codebase with its own conventions).
+# Only opinionated/stylistic rules are relaxed here — no correctness or security
+# rules — so behaviour is untouched. Scoped to payroll paths so the rest of the
+# repo keeps full enforcement; the module can be brought fully in-style later.
+"**/payroll/**.py" = [
+    "UP042",   # `class X(str, Enum)` is intentional (StrEnum changes str() output)
+    "B904",    # raise-without-from in these handlers is intentional/benign
+    "B905",    # zip() without strict= (default behaviour preserved)
+    "RUF046",  # redundant int() cast — cosmetic
+    "RUF003",  # ambiguous en-dash in comments — cosmetic
+    "UP028",   # explicit yield loop kept for readability
+    "TC001",   # runtime import kept (used by SQLAlchemy mapper resolution)
+]
 "scripts/**/*.py" = [
     "ANN",     # No type annotations required in utility scripts
     "ARG001",  # Unused arguments are common in scripts

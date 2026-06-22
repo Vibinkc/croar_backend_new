@@ -311,3 +311,9 @@ wsproto==1.2.0
 yarg==0.1.9
 
  
+# ----- Payroll/HR module (added on integration) -----
+fpdf2==2.8.7
+python-docx==1.2.0
+docxtpl==0.20.2
+lxml==6.1.1
+Pillow==12.2.0

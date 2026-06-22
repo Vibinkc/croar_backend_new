@@ -199,3 +199,5 @@ data/db/*
 # Exclude Alembic Versions [Only During Dev]
 alembic/versions/*
 # ----- Custom Ignores:END -----
+# generated test reports
+tests/*report*.html

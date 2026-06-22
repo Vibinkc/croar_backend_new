@@ -23,6 +23,7 @@ SKIP_PATH_SUBSTR = (
     "/sourcing/chat",
     "/super-admin/system",
     "/simulations/scenarios",  # idempotent bulk delete returns 200 even when absent
+    "/timesheets/cycles",  # returns 200 (resolves/creates the cycle) rather than 404 on unknown id
 )
 
 

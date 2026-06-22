@@ -22,6 +22,7 @@ from app.models.shared.agents import AgentAction, ApprovalRequest
 from app.models.shared.super_admin import SuperAdmin
 from app.models.shared.auth import Role, Permission, role_permissions, user_roles
 from app.models.user import User as DefaultUser
+import app.models.payroll  # noqa: F401  (registers payroll tables on Base.metadata)
 
 
 _settings = get_settings()

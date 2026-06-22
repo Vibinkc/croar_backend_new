@@ -18,6 +18,7 @@ class ModuleScope(StrEnum):
     automation = "automation"
     billing = "billing"
     analytics = "analytics"
+    payroll = "payroll"
 
 
 class PermissionScope(StrEnum):
