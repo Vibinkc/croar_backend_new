@@ -82,3 +82,9 @@ __all__ = [
     "X360TemplateQuestion",
     "project_members",
 ]
+
+# Register payroll models so SQLAlchemy can resolve Employee.salary_structures
+# (relationship target "SalaryStructure") whenever the enterprise models load —
+# needed by standalone scripts (master_setup.py, db_diag.py) that configure
+# mappers without importing the API routers.
+import app.models.payroll  # noqa: F401
