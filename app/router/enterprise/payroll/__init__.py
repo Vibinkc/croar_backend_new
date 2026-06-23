@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from .audit import router as audit_router
 from .calendar import router as calendar_router
 from .leave import router as leave_router
+from .me import router as me_router
 from .payroll import router as payroll_router
 from .reports import router as reports_router
 from .settings import router as settings_router
@@ -27,3 +28,4 @@ router.include_router(calendar_router)
 router.include_router(reports_router)
 router.include_router(settings_router)
 router.include_router(audit_router)
+router.include_router(me_router)

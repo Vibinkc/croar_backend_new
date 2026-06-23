@@ -90,8 +90,10 @@ class DayStatus(str, Enum):
     """Per-day attendance status (ATTENDANCE-mode timesheets).
 
     Paid days: PRESENT, PAID_LEAVE, WFH, HOLIDAY, WEEKLY_OFF (the last two are
-    non-working days that never count as LOP). UNPAID_LEAVE is a full LOP day;
-    HALF_DAY is half a paid day / half a LOP day. See
+    non-working days that never count as LOP). UNPAID_LEAVE is a full LOP day.
+    HALF_DAY is half a worked day / half an *unpaid* day (0.5 LOP);
+    HALF_DAY_PAID is half worked / half *paid* leave (no LOP) — the two differ
+    only by whether the off-half is covered by a paid leave type. See
     timesheet_service.recompute_aggregates.
     """
 
@@ -99,6 +101,7 @@ class DayStatus(str, Enum):
     PAID_LEAVE = "PAID_LEAVE"
     UNPAID_LEAVE = "UNPAID_LEAVE"
     HALF_DAY = "HALF_DAY"
+    HALF_DAY_PAID = "HALF_DAY_PAID"
     WFH = "WFH"
     HOLIDAY = "HOLIDAY"
     WEEKLY_OFF = "WEEKLY_OFF"
@@ -124,6 +127,71 @@ class LeaveStatus(str, Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
+
+
+# Standard India-market leave types, offered as one-click defaults so a new
+# company starts with a sensible set instead of an empty list. Quotas follow the
+# common private-sector norms (CL/SL ~12, EL ~15 accruing monthly with carry
+# forward, statutory maternity 26 weeks ≈ 182 days). An admin can edit/extend
+# these afterwards. Codes must stay unique per company (seeding skips existing).
+DEFAULT_LEAVE_TYPES: list[dict] = [
+    {
+        "name": "Casual Leave",
+        "code": "CL",
+        "is_paid": True,
+        "annual_quota": 12,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+    {
+        "name": "Sick Leave",
+        "code": "SL",
+        "is_paid": True,
+        "annual_quota": 12,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+    {
+        "name": "Earned Leave",
+        "code": "EL",
+        "is_paid": True,
+        "annual_quota": 15,
+        "accrual": AccrualMethod.MONTHLY.value,
+        "carry_forward_cap": 30,
+    },
+    {
+        "name": "Maternity Leave",
+        "code": "ML",
+        "is_paid": True,
+        "annual_quota": 182,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+    {
+        "name": "Paternity Leave",
+        "code": "PL",
+        "is_paid": True,
+        "annual_quota": 15,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+    {
+        "name": "Bereavement Leave",
+        "code": "BL",
+        "is_paid": True,
+        "annual_quota": 5,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+    {
+        "name": "Loss of Pay",
+        "code": "LOP",
+        "is_paid": False,
+        "annual_quota": 0,
+        "accrual": AccrualMethod.ANNUAL.value,
+        "carry_forward_cap": None,
+    },
+]
 
 
 class TaxRegime(str, Enum):
@@ -165,17 +233,23 @@ class Permission(str, Enum):
     PAYROLL_PAY = "payroll:pay"  # mark a cycle paid
     PAYROLL_MANAGE = "payroll:manage"  # cancel/delete cycles
     USERS_MANAGE = "users:manage"  # create/list users (admin)
+    # Employee self-service: read ONLY one's own records (timesheet, payslips…),
+    # scoped by the user's linked employee_id. Deliberately distinct from
+    # PAYROLL_READ (which is company-wide) so a self-service user can never reach
+    # the admin /enterprise endpoints that return every employee's data.
+    SELF_READ = "self:read"
 
 
 class Role(str, Enum):
     ADMIN = "ADMIN"  # full access incl. user management
     HR = "HR"  # full payroll lifecycle, no user management
-    VIEWER = "VIEWER"  # read-only
+    VIEWER = "VIEWER"  # read-only (company-wide)
+    EMPLOYEE = "EMPLOYEE"  # self-service: only their own linked records
 
 
 # Role -> set of permissions it grants.
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
-    Role.ADMIN: frozenset(Permission),
+    Role.ADMIN: frozenset(p for p in Permission if p is not Permission.SELF_READ),
     Role.HR: frozenset(
         {
             Permission.PAYROLL_READ,
@@ -187,6 +261,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
         }
     ),
     Role.VIEWER: frozenset({Permission.PAYROLL_READ}),
+    # EMPLOYEE gets ONLY self-scoped read — no payroll:* capability, so it can
+    # never hit a company-wide endpoint even by direct URL.
+    Role.EMPLOYEE: frozenset({Permission.SELF_READ}),
 }
 
 

@@ -46,6 +46,12 @@ class EnterpriseUser(EnterpriseBase):
     company = relationship("Company")
 
     @property
+    def full_name(self) -> str:
+        """Display name for payroll/self-service (Croar stores first/last separately)."""
+        name = f"{self.first_name or ''} {self.last_name or ''}".strip()
+        return name or self.email
+
+    @property
     def role(self) -> object | None:
         """Compatibility property for legacy code expecting a single role."""
         if self.roles:

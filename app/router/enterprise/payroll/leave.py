@@ -45,6 +45,17 @@ async def list_leave_types(
     return await leave_service.list_types(db, company_id)
 
 
+@router.post("/types/seed-defaults", response_model=list[LeaveTypeOut])
+async def seed_default_leave_types(
+    db: DBSessionDep,
+    company_id: uuid.UUID = Depends(get_current_company_id),
+    _: object = Depends(require_permission(Permission.PAYROLL_CONFIGURE)),
+) -> list[LeaveType]:
+    """Create the standard set of leave types (CL/SL/EL/ML/PL/BL/LOP) the company
+    doesn't already have. Idempotent — returns the rows created this call."""
+    return await leave_service.seed_default_types(db, company_id)
+
+
 @router.post("/types", response_model=LeaveTypeOut, status_code=status.HTTP_201_CREATED)
 async def create_leave_type(
     payload: LeaveTypeIn,
@@ -186,6 +197,13 @@ async def cancel_leave_request(
     current_user: User = Depends(require_permission(Permission.PAYROLL_CONFIGURE)),
 ) -> LeaveRequestOut:
     req = await leave_service.cancel_request(db, company_id, request_id, current_user.id, payload.note)
+    # Drop the (now-cancelled) leave from any editable timesheet covering the
+    # dates so the days revert to PRESENT and a subsequent run reflects it.
+    await timesheet_service.resync_leave_for_employee_period(
+        db, company_id, req.employee_id, req.start_date, req.end_date
+    )
+    # resync commits (expiring `req`); reload it before serialising.
+    await db.refresh(req)
     emp_names = await _employee_names(db, company_id)
     types = await _type_map(db, company_id)
     return _request_out(req, emp_names, types)

@@ -1,6 +1,8 @@
+import csv
+import io
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 
 from app.models.enterprise.employee import Employee
@@ -9,6 +11,7 @@ from app.models.payroll.timesheets import Timesheet
 from app.payroll.constants import Permission
 from app.payroll.deps import DBSessionDep, get_current_company_id, require_permission
 from app.schemas.enterprise.payroll.timesheets import (
+    AttendanceImportResult,
     TimesheetBulkEntryUpdate,
     TimesheetDetailOut,
     TimesheetGenerateResult,
@@ -19,6 +22,37 @@ from app.schemas.enterprise.payroll.timesheets import (
 from app.services.payroll import timesheet_service
 
 router = APIRouter(prefix="/api/v1/enterprise/timesheets", tags=["timesheets"])
+
+# Largest attendance CSV we'll accept (1 MB ≈ tens of thousands of rows).
+_MAX_IMPORT_BYTES = 1_000_000
+
+# CSV header (lowercased) -> canonical field the import service reads.
+_HEADER_ALIASES = {
+    "employee_code": "employee_code",
+    "code": "employee_code",
+    "emp_code": "employee_code",
+    "employee": "employee_code",
+    "employee_id": "employee_id",
+    "empid": "employee_id",
+    "date": "date",
+    "attendance_date": "date",
+    "day": "date",
+    "status": "status",
+    "attendance": "status",
+    "hours": "hours",
+    "worked_hours": "hours",
+    "total_hours": "hours",
+    "check_in": "check_in",
+    "in": "check_in",
+    "in_time": "check_in",
+    "intime": "check_in",
+    "punch_in": "check_in",
+    "check_out": "check_out",
+    "out": "check_out",
+    "out_time": "check_out",
+    "outtime": "check_out",
+    "punch_out": "check_out",
+}
 
 
 def _employee_label(emp: Employee | None) -> tuple[str | None, str | None]:
@@ -39,6 +73,43 @@ async def generate_timesheets(
     cycle. Idempotent — existing timesheets are left untouched."""
     result = await timesheet_service.generate_for_cycle(db, company_id, cycle_id)
     return TimesheetGenerateResult(**result)
+
+
+@router.post("/cycles/{cycle_id}/import", response_model=AttendanceImportResult)
+async def import_cycle_attendance(
+    cycle_id: uuid.UUID,
+    db: DBSessionDep,
+    file: UploadFile = File(...),
+    company_id: uuid.UUID = Depends(get_current_company_id),
+    _: object = Depends(require_permission(Permission.PAYROLL_CONFIGURE)),
+) -> AttendanceImportResult:
+    """Import a CSV attendance export (e.g. from a biometric device) onto the
+    cycle's timesheets. Columns (header row, case-insensitive): employee_code,
+    date (YYYY-MM-DD), and any of status / hours / check_in / check_out. Rows that
+    can't be applied are reported, not fatal. Generate the cycle's timesheets
+    first — rows for employees without one are skipped."""
+    raw = await file.read()
+    if len(raw) > _MAX_IMPORT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Attendance file is too large (max 1 MB).",
+        )
+    text = raw.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The file is empty or has no header row."
+        )
+    rows: list[dict] = []
+    for raw_row in reader:
+        norm: dict[str, str] = {}
+        for header, value in raw_row.items():
+            canonical = _HEADER_ALIASES.get((header or "").strip().lower())
+            if canonical:
+                norm[canonical] = (value or "").strip()
+        rows.append(norm)
+    result = await timesheet_service.import_attendance(db, company_id, cycle_id, rows)
+    return AttendanceImportResult(**result)
 
 
 @router.get("/cycles/{cycle_id}", response_model=list[TimesheetSummaryOut])

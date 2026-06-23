@@ -381,3 +381,12 @@ class EmailFailure(BaseModel):
 class BulkEmailResult(BaseModel):
     sent: int = 0
     failed: list[EmailFailure] = Field(default_factory=list)
+
+
+class MyPayslipOut(PayslipDetailOut):
+    """A payslip with its cycle context, for the employee self-service view."""
+
+    cycle_name: str | None = None
+    period_start: date | None = None
+    period_end: date | None = None
+    pay_date: date | None = None

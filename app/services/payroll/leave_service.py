@@ -22,7 +22,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.payroll.leave import LeaveBalance, LeaveRequest, LeaveType
-from app.payroll.constants import DEFAULT_FINANCIAL_YEAR, AccrualMethod, DayStatus, LeaveStatus
+from app.payroll.constants import (
+    DEFAULT_FINANCIAL_YEAR,
+    DEFAULT_LEAVE_TYPES,
+    AccrualMethod,
+    DayStatus,
+    LeaveStatus,
+)
 from app.services.payroll import calendar_service
 
 _EDITABLE_REQUEST = {LeaveStatus.PENDING.value}
@@ -69,6 +75,39 @@ async def create_type(db: AsyncSession, company_id: uuid.UUID, payload) -> Leave
         await db.rollback()
         raise
     return lt
+
+
+async def seed_default_types(db: AsyncSession, company_id: uuid.UUID) -> list[LeaveType]:
+    """Create the standard India-market leave types (constants.DEFAULT_LEAVE_TYPES)
+    that the company doesn't already have. Idempotent — matches by code and skips
+    existing ones. Returns the rows it created (empty if all already existed)."""
+    existing = {t.code for t in await list_types(db, company_id)}
+    created: list[LeaveType] = []
+    for d in DEFAULT_LEAVE_TYPES:
+        if d["code"] in existing:
+            continue
+        cap = d.get("carry_forward_cap")
+        lt = LeaveType(
+            company_id=company_id,
+            name=d["name"],
+            code=d["code"],
+            is_paid=d["is_paid"],
+            annual_quota=Decimal(str(d["annual_quota"])),
+            accrual=d["accrual"],
+            carry_forward_cap=(Decimal(str(cap)) if cap is not None else None),
+            is_active=True,
+        )
+        db.add(lt)
+        created.append(lt)
+    if created:
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        for lt in created:
+            await db.refresh(lt)
+    return created
 
 
 async def _get_type(db: AsyncSession, company_id: uuid.UUID, leave_type_id: uuid.UUID) -> LeaveType:
@@ -222,6 +261,27 @@ async def create_request(
         raise HTTPException(status_code=400, detail="A half-day leave must be a single day.")
     await _get_type(db, company_id, payload.leave_type_id)
 
+    # Block a range that overlaps an existing active (PENDING/APPROVED) request
+    # for this employee — otherwise the day is leave twice and an approval would
+    # double-decrement the balance while the timesheet stamp silently overwrites.
+    clash = (
+        await db.execute(
+            select(LeaveRequest.id).where(
+                LeaveRequest.company_id == company_id,
+                LeaveRequest.employee_id == payload.employee_id,
+                LeaveRequest.deleted_at.is_(None),
+                LeaveRequest.status.in_([LeaveStatus.PENDING.value, LeaveStatus.APPROVED.value]),
+                LeaveRequest.start_date <= payload.end_date,
+                LeaveRequest.end_date >= payload.start_date,
+            )
+        )
+    ).first()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This employee already has a leave request overlapping these dates.",
+        )
+
     working = await _leave_working_days(db, company_id, payload.start_date, payload.end_date)
     if not working:
         raise HTTPException(
@@ -278,6 +338,17 @@ async def _get_request(db: AsyncSession, company_id: uuid.UUID, request_id: uuid
         )
     ).scalar_one_or_none()
     if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leave request not found.")
+    return req
+
+
+async def get_request_for_employee(
+    db: AsyncSession, company_id: uuid.UUID, request_id: uuid.UUID, employee_id: uuid.UUID
+) -> LeaveRequest:
+    """Load a leave request only if it belongs to `employee_id` (else 404).
+    Used by the self-service endpoints to scope a request to its owner."""
+    req = await _get_request(db, company_id, request_id)
+    if req.employee_id != employee_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Leave request not found.")
     return req
 
@@ -371,7 +442,41 @@ async def reject_request(db, company_id, request_id, actor_id=None, note=None) -
 
 
 async def cancel_request(db, company_id, request_id, actor_id=None, note=None) -> LeaveRequest:
-    return await _decide_no_balance(db, company_id, request_id, LeaveStatus.CANCELLED.value, actor_id, note)
+    """Cancel a PENDING or APPROVED request.
+
+    For an APPROVED paid request this credits the consumed days back to the
+    balance; the router then resyncs the covered timesheets so the days revert
+    from PAID_LEAVE/UNPAID_LEAVE to PRESENT (the run picks up the lower LOP)."""
+    req = await _get_request(db, company_id, request_id)
+    if req.status not in {LeaveStatus.PENDING.value, LeaveStatus.APPROVED.value}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Leave request is {req.status}; only PENDING or APPROVED requests can be cancelled.",
+        )
+
+    # Reverse the balance only for an APPROVED paid request (PENDING never
+    # decremented it). Clamp at zero so a quota change can't drive `used` negative.
+    if req.status == LeaveStatus.APPROVED.value:
+        lt = await _get_type(db, company_id, req.leave_type_id)
+        if lt.is_paid:
+            bal = await ensure_balance(
+                db, company_id, req.employee_id, lt, DEFAULT_FINANCIAL_YEAR, as_of=datetime.utcnow().date()
+            )
+            restored = Decimal(str(bal.used or "0")) - Decimal(str(req.days))
+            bal.used = max(Decimal("0"), restored)
+
+    req.status = LeaveStatus.CANCELLED.value
+    req.approved_by_id = actor_id
+    req.decided_at = datetime.utcnow()
+    if note is not None:
+        req.decision_note = note or None
+    try:
+        await db.commit()
+        await db.refresh(req)
+    except Exception:
+        await db.rollback()
+        raise
+    return req
 
 
 # ---------------------------------------------------------------------------
@@ -412,14 +517,17 @@ async def get_approved_leave_days(
 
     out: dict[date, str] = {}
     for r in reqs:
+        is_paid = paid.get(r.leave_type_id, True)
         if r.half_day:
             d = r.start_date
             if start <= d <= end:
-                out[d] = DayStatus.HALF_DAY.value
+                # Paid half-day: the off-half is paid leave -> no LOP. Unpaid
+                # half-day: the off-half is loss-of-pay -> 0.5 LOP.
+                out[d] = DayStatus.HALF_DAY_PAID.value if is_paid else DayStatus.HALF_DAY.value
             continue
         lo = max(r.start_date, start)
         hi = min(r.end_date, end)
-        full = DayStatus.PAID_LEAVE.value if paid.get(r.leave_type_id, True) else DayStatus.UNPAID_LEAVE.value
+        full = DayStatus.PAID_LEAVE.value if is_paid else DayStatus.UNPAID_LEAVE.value
         day = lo
         while day <= hi:
             out[day] = full

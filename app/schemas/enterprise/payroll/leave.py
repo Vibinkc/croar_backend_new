@@ -83,6 +83,17 @@ class LeaveRequestIn(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
+class MyLeaveRequestIn(BaseModel):
+    """Self-service leave application. No employee_id — the server fills it from
+    the caller's linked employee so a user can only file leave for themselves."""
+
+    leave_type_id: uuid.UUID
+    start_date: date
+    end_date: date
+    half_day: bool = False
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class LeaveDecisionIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
 

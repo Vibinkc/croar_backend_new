@@ -80,3 +80,11 @@ class TimesheetGenerateResult(BaseModel):
 
 class TimesheetRejectIn(BaseModel):
     note: str | None = Field(default=None, max_length=500)
+
+
+class AttendanceImportResult(BaseModel):
+    """Outcome of a CSV/biometric attendance import: how many daily entries were
+    updated, and a per-row list of rows that couldn't be applied (with reasons)."""
+
+    updated: int
+    skipped: list[dict] = Field(default_factory=list)

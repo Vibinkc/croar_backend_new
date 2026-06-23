@@ -37,6 +37,9 @@ _FULL_LOP = {DayStatus.UNPAID_LEAVE.value}
 # Days that are not scheduled work (never count toward working days or LOP).
 _NON_WORKING = {DayStatus.WEEKLY_OFF.value, DayStatus.HOLIDAY.value}
 _HALF = DayStatus.HALF_DAY.value
+# Half worked + half *paid* leave: counts as a half-day for display but adds no
+# LOP (the off-half is covered by a paid leave type).
+_HALF_PAID = DayStatus.HALF_DAY_PAID.value
 
 # Timesheet states in which the daily grid may still be edited.
 _EDITABLE_STATES = {TimesheetStatus.DRAFT.value, TimesheetStatus.REJECTED.value}
@@ -61,10 +64,13 @@ async def _load_cycle(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
 def recompute_aggregates(ts: Timesheet) -> None:
     """Recompute the cached aggregates from the timesheet's loaded entries.
 
-    - lop_days   = full unpaid days + 0.5 * half-days
+    - lop_days   = full unpaid days + 0.5 * unpaid half-days
     - worked_days = scheduled working days - lop_days  (paid days)
-    - half_days  = count of HALF_DAY entries
+    - half_days  = count of half-day entries (paid + unpaid)
     - total_hours = sum of logged hours (HOURLY mode)
+
+    A paid half-day (HALF_DAY_PAID) is a half-day for display but contributes no
+    LOP — only the unpaid HALF_DAY adds 0.5.
     """
     scheduled = Decimal("0")
     lop = Decimal("0")
@@ -81,6 +87,8 @@ def recompute_aggregates(ts: Timesheet) -> None:
         elif e.day_status == _HALF:
             halves += Decimal("1")
             lop += Decimal("0.5")
+        elif e.day_status == _HALF_PAID:
+            halves += Decimal("1")  # paid off-half: no LOP
     ts.lop_days = lop
     ts.half_days = halves
     ts.worked_days = scheduled - lop
@@ -239,6 +247,42 @@ async def get_detail(db: AsyncSession, timesheet_id: uuid.UUID, company_id: uuid
     return ts
 
 
+async def list_for_employee(
+    db: AsyncSession, company_id: uuid.UUID, employee_id: uuid.UUID
+) -> list[Timesheet]:
+    """Every timesheet belonging to one employee, newest period first. Used by
+    the self-service (/api/v1/me) endpoints — always scoped to the caller."""
+    rows = (
+        (
+            await db.execute(
+                select(Timesheet)
+                .where(
+                    Timesheet.company_id == company_id,
+                    Timesheet.employee_id == employee_id,
+                    Timesheet.deleted_at.is_(None),
+                )
+                .order_by(Timesheet.period_start.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
+
+
+async def get_owned_detail(
+    db: AsyncSession, timesheet_id: uuid.UUID, company_id: uuid.UUID, employee_id: uuid.UUID
+) -> Timesheet:
+    """Load a timesheet detail only if it belongs to `employee_id`.
+
+    A mismatch raises 404 (not 403) so a self-service user can't probe which
+    timesheet ids exist for other employees."""
+    ts = await get_detail(db, timesheet_id, company_id)
+    if ts.employee_id != employee_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Timesheet not found.")
+    return ts
+
+
 async def list_for_cycle(db: AsyncSession, company_id: uuid.UUID, cycle_id: uuid.UUID) -> list[Timesheet]:
     rows = (
         (
@@ -297,6 +341,247 @@ async def bulk_update_entries(
         await db.rollback()
         raise
     return await get_detail(db, timesheet_id, company_id)
+
+
+# Statuses an employee may set on their OWN day via self-mark. Deliberately
+# excludes leave/LOP/half-day — an employee can't dock their own pay or grant
+# themselves leave (that's the leave flow + HR). Just attendance: in, or WFH.
+_SELF_MARKABLE = {DayStatus.PRESENT.value, DayStatus.WFH.value}
+# Days driven by approved leave — self-mark must not clobber them.
+_LEAVE_LOCKED = {
+    DayStatus.PAID_LEAVE.value,
+    DayStatus.UNPAID_LEAVE.value,
+    DayStatus.HALF_DAY.value,
+    DayStatus.HALF_DAY_PAID.value,
+}
+
+
+async def self_mark_entries(
+    db: AsyncSession,
+    timesheet_id: uuid.UUID,
+    company_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    entries_in: list,
+    *,
+    today: date,
+) -> Timesheet:
+    """Employee self-service attendance marking on their OWN timesheet.
+
+    Reuses the daily grid but with tight guards vs. the HR ``bulk_update_entries``:
+    ownership (404 if not theirs), only while DRAFT/REJECTED + cycle editable,
+    only PRESENT/WFH statuses (no self-LOP / self-leave), never a future date, and
+    never over a leave-stamped day. Hours may be logged (hourly mode). HR still
+    submits/approves the sheet — this only edits the draft.
+    """
+    ts = await get_owned_detail(db, timesheet_id, company_id, employee_id)
+    if ts.status not in _EDITABLE_STATES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Your timesheet is {ts.status} and can no longer be edited.",
+        )
+    cycle = await _load_cycle(db, ts.cycle_id, company_id)
+    if cycle.status not in _EDITABLE_CYCLE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This period is {cycle.status}; attendance can no longer be marked.",
+        )
+
+    by_date = {e.entry_date: e for e in ts.entries}
+    for item in entries_in:
+        entry = by_date.get(item.entry_date)
+        if entry is None:
+            continue
+        if entry.entry_date > today:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="You can't mark attendance for a future date.",
+            )
+        if entry.day_status in _NON_WORKING:
+            continue  # weekly-off / holiday — nothing to mark
+        if entry.day_status in _LEAVE_LOCKED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(f"{entry.entry_date} is on approved leave; cancel the leave request to change it."),
+            )
+        if item.day_status is not None:
+            if item.day_status.value not in _SELF_MARKABLE:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="You can only mark a working day Present or Work From Home.",
+                )
+            entry.day_status = item.day_status.value
+        if item.hours is not None:
+            entry.hours = item.hours
+        if item.note is not None:
+            entry.note = item.note or None
+
+    recompute_aggregates(ts)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return await get_owned_detail(db, timesheet_id, company_id, employee_id)
+
+
+# CSV/biometric status token (uppercased) -> DayStatus. ABSENT/LOP land as a
+# full unpaid (LOP) day; this is an HR-driven import so docking pay is allowed.
+_IMPORT_STATUS = {
+    "PRESENT": DayStatus.PRESENT.value,
+    "P": DayStatus.PRESENT.value,
+    "WFH": DayStatus.WFH.value,
+    "WORK_FROM_HOME": DayStatus.WFH.value,
+    "HALF_DAY": DayStatus.HALF_DAY.value,
+    "HALF": DayStatus.HALF_DAY.value,
+    "ABSENT": DayStatus.UNPAID_LEAVE.value,
+    "A": DayStatus.UNPAID_LEAVE.value,
+    "LOP": DayStatus.UNPAID_LEAVE.value,
+}
+
+
+def _parse_hhmm(value: str) -> int | None:
+    """'09:05' -> minutes since midnight, or None if unparseable."""
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        h, m = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        return None
+    return h * 60 + m
+
+
+async def import_attendance(
+    db: AsyncSession, company_id: uuid.UUID, cycle_id: uuid.UUID, rows: list[dict]
+) -> dict:
+    """Bulk-import daily attendance (e.g. a biometric device export / CSV) onto a
+    cycle's timesheets — the realistic high-volume capture path.
+
+    Each row identifies an employee (``employee_code`` = Employee.employee_id, or
+    ``employee_id`` UUID), a ``date``, and either a ``status`` (PRESENT/WFH/
+    HALF_DAY/ABSENT) and/or punch times (``check_in``/``check_out`` HH:MM, from
+    which hours are derived) or an explicit ``hours`` value. Overlays onto the
+    matching ``TimesheetEntry`` exactly like the manual grid, then recomputes
+    aggregates. Rows that can't be applied are reported in ``skipped`` (never
+    fatal), so one bad line doesn't sink the whole file.
+    """
+    await _load_cycle(db, cycle_id, company_id)
+
+    employees = (
+        (
+            await db.execute(
+                select(Employee).where(Employee.company_id == company_id, Employee.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    by_key: dict[str, uuid.UUID] = {}
+    for e in employees:
+        by_key[str(e.id)] = e.id
+        if e.employee_id:
+            by_key[e.employee_id.strip().upper()] = e.id
+
+    ts_rows = (
+        (
+            await db.execute(
+                select(Timesheet)
+                .where(
+                    Timesheet.cycle_id == cycle_id,
+                    Timesheet.company_id == company_id,
+                    Timesheet.deleted_at.is_(None),
+                )
+                .options(selectinload(Timesheet.entries))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    ts_by_emp = {t.employee_id: t for t in ts_rows}
+
+    updated = 0
+    skipped: list[dict] = []
+    touched: dict[uuid.UUID, Timesheet] = {}
+
+    def skip(i: int, reason: str) -> None:
+        skipped.append({"row": i, "reason": reason})
+
+    for i, row in enumerate(rows, start=1):
+        key = (row.get("employee_code") or row.get("employee_id") or "").strip()
+        if not key:
+            skip(i, "missing employee_code")
+            continue
+        emp_id = by_key.get(key) or by_key.get(key.upper())
+        if emp_id is None:
+            skip(i, f"unknown employee '{key}'")
+            continue
+        ts = ts_by_emp.get(emp_id)
+        if ts is None:
+            skip(i, "no timesheet for this employee in the cycle")
+            continue
+        if ts.status not in _EDITABLE_STATES:
+            skip(i, f"timesheet is {ts.status} (not editable)")
+            continue
+        try:
+            d = date.fromisoformat((row.get("date") or "").strip())
+        except ValueError:
+            skip(i, f"bad or missing date '{row.get('date')}'")
+            continue
+        entry = next((e for e in ts.entries if e.entry_date == d), None)
+        if entry is None:
+            skip(i, "date outside the timesheet period")
+            continue
+        if entry.day_status in _NON_WORKING:
+            skip(i, "non-working day (weekly-off/holiday)")
+            continue
+        if entry.day_status in _LEAVE_LOCKED:
+            skip(i, "day is on approved leave")
+            continue
+
+        status_tok = (row.get("status") or "").strip().upper()
+        check_in = (row.get("check_in") or "").strip()
+        check_out = (row.get("check_out") or "").strip()
+        hours_raw = (row.get("hours") or "").strip()
+
+        if status_tok:
+            mapped = _IMPORT_STATUS.get(status_tok)
+            if mapped is None:
+                skip(i, f"unknown status '{status_tok}'")
+                continue
+            entry.day_status = mapped
+        elif check_in or check_out:
+            entry.day_status = DayStatus.PRESENT.value  # a punch implies present
+
+        if check_in and check_out:
+            mins = None
+            ci, co = _parse_hhmm(check_in), _parse_hhmm(check_out)
+            if ci is not None and co is not None and co > ci:
+                mins = co - ci
+            if mins is None:
+                skip(i, "bad check_in/check_out times")
+                continue
+            entry.hours = (Decimal(mins) / Decimal("60")).quantize(Decimal("0.01"))
+        elif hours_raw:
+            try:
+                entry.hours = Decimal(hours_raw)
+            except (ArithmeticError, ValueError):
+                skip(i, f"bad hours '{hours_raw}'")
+                continue
+
+        touched[ts.id] = ts
+        updated += 1
+
+    for ts in touched.values():
+        recompute_aggregates(ts)
+    if touched:
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+    return {"updated": updated, "skipped": skipped}
 
 
 async def _transition(
@@ -406,6 +691,7 @@ _LEAVE_OVERLAY = {
     DayStatus.PAID_LEAVE.value,
     DayStatus.UNPAID_LEAVE.value,
     DayStatus.HALF_DAY.value,
+    DayStatus.HALF_DAY_PAID.value,
 }
 
 
