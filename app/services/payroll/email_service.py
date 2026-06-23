@@ -102,6 +102,8 @@ def send_payslip_email(
         to_email=to_email, subject=subject, html=html, pdf_bytes=pdf_bytes, filename=filename
     )
     context = ssl.create_default_context()
+    # Enforce a strong minimum TLS version (clears Sonar python:S4423).
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
 
     if _settings.smtp_use_ssl:
         with smtplib.SMTP_SSL(_settings.smtp_host, _settings.smtp_port, context=context) as server:
