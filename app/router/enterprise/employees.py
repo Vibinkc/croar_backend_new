@@ -3,11 +3,15 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.core.security import get_password_hash
 from app.models.enterprise.employee import Department, Employee
+from app.models.enterprise.user_role import EnterpriseUser
+from app.models.shared.auth import Role
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.employees import (
     DepartmentCreate,
@@ -230,3 +234,84 @@ async def convert_candidate(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {e!s}") from e
+
+
+class EmployeeAccountCreate(BaseModel):
+    """Admin sets an initial password to create a login for an employee."""
+
+    password: str = Field(min_length=6, max_length=128)
+
+
+class EmployeeAccountOut(BaseModel):
+    email: str
+    role: str
+    created: bool
+
+
+@router.post("/{employee_id}/account", response_model=EmployeeAccountOut, status_code=201)
+async def create_employee_account(
+    employee_id: UUID,
+    request: EmployeeAccountCreate,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.moderate))
+    ],
+) -> EmployeeAccountOut:
+    """Create a self-service LOGIN account for an existing employee.
+
+    The account is a tenant-scoped user with the EMPLOYEE role (no enterprise
+    access) whose email equals the employee's email — so signing in lands them on
+    their own /employee workspace (own timesheets, payslips, leave). Separate from
+    creating the employee record itself.
+    """
+    company_id = getattr(current_user, "company_id", None)
+
+    employee = (
+        await session.execute(
+            select(Employee).where(
+                Employee.id == employee_id, Employee.company_id == company_id, Employee.deleted_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
+
+    # One login per email (EnterpriseUser.email is globally unique).
+    existing = (
+        await session.execute(select(EnterpriseUser).where(EnterpriseUser.email == employee.email))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"A login account for '{employee.email}' already exists.",
+        )
+
+    # Get-or-create the tenant's EMPLOYEE role (self-service only; no perms so the
+    # enterprise/admin area stays hidden and 403-guarded).
+    role = (
+        await session.execute(select(Role).where(Role.name == "EMPLOYEE", Role.tenant_id == company_id))
+    ).scalar_one_or_none()
+    if role is None:
+        role = Role(
+            name="EMPLOYEE",
+            description="Employee self-service (own timesheets, payslips, leave)",
+            tenant_id=company_id,
+            is_system=True,
+            role_rank=100,
+        )
+        session.add(role)
+        await session.flush()
+
+    user = EnterpriseUser(
+        email=employee.email,
+        password_hash=get_password_hash(request.password),
+        first_name=employee.first_name,
+        last_name=employee.last_name,
+        company_id=company_id,
+        is_active=True,
+    )
+    user.roles = [role]
+    session.add(user)
+    await session.commit()
+
+    return EmployeeAccountOut(email=employee.email, role="EMPLOYEE", created=True)
