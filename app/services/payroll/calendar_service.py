@@ -8,7 +8,7 @@ working days in the period (calendar days minus weekly-offs minus holidays).
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -128,7 +128,7 @@ async def delete_holiday(db: AsyncSession, company_id: uuid.UUID, holiday_id: uu
     ).scalar_one_or_none()
     if not holiday:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Holiday not found.")
-    holiday.deleted_at = datetime.utcnow()
+    holiday.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     try:
         await db.commit()
     except Exception:

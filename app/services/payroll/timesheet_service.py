@@ -11,7 +11,7 @@ re-walking the entries.
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -612,7 +612,7 @@ async def _transition(
                 ),
             )
     ts.status = to
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     if set_submitted:
         ts.submitted_at = now
         ts.submitted_by_id = actor_id

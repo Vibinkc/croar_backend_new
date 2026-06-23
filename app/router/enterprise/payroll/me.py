@@ -11,7 +11,7 @@ the link, never the payload, so a user can only ever act on themselves.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -119,7 +119,12 @@ async def mark_my_attendance(
     Guarded server-side: own sheet only, editable status, no future dates, no
     self-LOP, and leave days are protected. HR still submits/approves."""
     ts = await timesheet_service.self_mark_entries(
-        db, timesheet_id, company_id, employee_id, payload.entries, today=datetime.utcnow().date()
+        db,
+        timesheet_id,
+        company_id,
+        employee_id,
+        payload.entries,
+        today=datetime.now(UTC).replace(tzinfo=None).date(),
     )
     return await _timesheet_detail_out(db, ts)
 

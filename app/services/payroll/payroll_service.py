@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -867,7 +867,7 @@ async def mark_paid(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UUID
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Cycle must be APPROVED to mark paid (is {cycle.status})",
         )
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     cycle.status = PayrollCycleStatus.PAID.value
     await db.execute(
         update(Payslip)

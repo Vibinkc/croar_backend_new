@@ -1,6 +1,6 @@
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -201,7 +201,7 @@ async def delete_challan(
     ).scalar_one_or_none()
     if not challan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Challan not found")
-    challan.deleted_at = datetime.utcnow()
+    challan.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     try:
         await db.commit()
         await db.refresh(challan)

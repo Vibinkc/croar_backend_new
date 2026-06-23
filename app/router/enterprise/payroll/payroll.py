@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.concurrency import run_in_threadpool
@@ -256,7 +256,7 @@ async def delete_salary_structure(
     ).scalar_one_or_none()
     if not struct:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Salary structure not found")
-    struct.deleted_at = datetime.utcnow()
+    struct.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     struct.is_active = False
     try:
         await db.commit()
@@ -382,7 +382,7 @@ async def delete_template(
     _: object = Depends(require_permission(Permission.PAYROLL_CONFIGURE)),
 ) -> SalaryTemplate:
     template = await _load_template(db, id, company_id)
-    template.deleted_at = datetime.utcnow()
+    template.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     try:
         await db.commit()
         await db.refresh(template)
@@ -519,7 +519,7 @@ async def delete_payroll_cycle(
     cycle = await payroll_service._load_cycle(db, id, company_id)
     if cycle.status == PayrollCycleStatus.PAID:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A PAID cycle cannot be deleted")
-    cycle.deleted_at = datetime.utcnow()
+    cycle.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     try:
         await db.commit()
         await db.refresh(cycle)
@@ -634,7 +634,7 @@ async def delete_adjustment(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Adjustments can only be changed while the cycle is DRAFT or PROCESSING (is {cycle.status}).",
         )
-    adjustment.deleted_at = datetime.utcnow()
+    adjustment.deleted_at = datetime.now(UTC).replace(tzinfo=None)
     try:
         await db.commit()
         await db.refresh(adjustment)
@@ -894,7 +894,8 @@ def _render_payslip_doc(
     """Fill the company's uploaded .docx template, or None if there isn't one."""
     if not company or not company.payslip_doc_template:
         return None
-    ps = PayslipSettings.from_stored(company.payslip_settings if company else None)
+    # company is guaranteed non-None past the guard above.
+    ps = PayslipSettings.from_stored(company.payslip_settings)
     ctx = _docx_context(payslip, cycle, employee, company)
     # Embed the company logo (from the branding logo_url) as a real image for the
     # {{ logo }} token; falls back to the company-name text when none is set.

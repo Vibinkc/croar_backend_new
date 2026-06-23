@@ -13,7 +13,7 @@ single working day worth 0.5 days.
 """
 
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -212,7 +212,7 @@ async def list_balances(
         emp_q = emp_q.where(Employee.id == employee_id)
     employees = (await db.execute(emp_q)).scalars().all()
 
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).replace(tzinfo=None).date()
     for emp in employees:
         for lt in types:
             if not lt.is_paid:
@@ -382,7 +382,12 @@ async def approve_request(
     lt = await _get_type(db, company_id, req.leave_type_id)
     if lt.is_paid:
         bal = await ensure_balance(
-            db, company_id, req.employee_id, lt, DEFAULT_FINANCIAL_YEAR, as_of=datetime.utcnow().date()
+            db,
+            company_id,
+            req.employee_id,
+            lt,
+            DEFAULT_FINANCIAL_YEAR,
+            as_of=datetime.now(UTC).replace(tzinfo=None).date(),
         )
         left = _balance_left(bal)
         requested = Decimal(str(req.days))
@@ -397,7 +402,7 @@ async def approve_request(
 
     req.status = LeaveStatus.APPROVED.value
     req.approved_by_id = approver_id
-    req.decided_at = datetime.utcnow()
+    req.decided_at = datetime.now(UTC).replace(tzinfo=None)
     if note is not None:
         req.decision_note = note or None
     try:
@@ -425,7 +430,7 @@ async def _decide_no_balance(
         )
     req.status = to
     req.approved_by_id = actor_id
-    req.decided_at = datetime.utcnow()
+    req.decided_at = datetime.now(UTC).replace(tzinfo=None)
     if note is not None:
         req.decision_note = note or None
     try:
@@ -460,14 +465,19 @@ async def cancel_request(db, company_id, request_id, actor_id=None, note=None) -
         lt = await _get_type(db, company_id, req.leave_type_id)
         if lt.is_paid:
             bal = await ensure_balance(
-                db, company_id, req.employee_id, lt, DEFAULT_FINANCIAL_YEAR, as_of=datetime.utcnow().date()
+                db,
+                company_id,
+                req.employee_id,
+                lt,
+                DEFAULT_FINANCIAL_YEAR,
+                as_of=datetime.now(UTC).replace(tzinfo=None).date(),
             )
             restored = Decimal(str(bal.used or "0")) - Decimal(str(req.days))
             bal.used = max(Decimal("0"), restored)
 
     req.status = LeaveStatus.CANCELLED.value
     req.approved_by_id = actor_id
-    req.decided_at = datetime.utcnow()
+    req.decided_at = datetime.now(UTC).replace(tzinfo=None)
     if note is not None:
         req.decision_note = note or None
     try:
