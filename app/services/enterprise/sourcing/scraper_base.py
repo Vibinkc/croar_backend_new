@@ -137,6 +137,69 @@ class BaseScraperProvider(SourcingProvider):
 
         return profiles[:page_size]
 
+    def _oxylabs_organic(self, query: str, page: int) -> list[dict[str, Any]]:
+        """Run one Oxylabs google_search query and return its organic result items.
+
+        Shared helper so individual providers don't each re-implement the request +
+        response parsing. Returns ``[]`` when Oxylabs creds are missing or the call
+        fails (callers then fall back to their own search path).
+        """
+        import os
+
+        username = os.getenv("OXYLABS_USERNAME")
+        password = os.getenv("OXYLABS_PASSWORD")
+        if not username or not password:
+            return []
+        payload = {
+            "source": "google_search",
+            "query": query,
+            "geo_location": "United States",
+            "parse": True,
+            "start_page": page,
+            "pages": 1,
+        }
+        try:
+            response = requests.post(
+                "https://realtime.oxylabs.io/v1/queries", auth=(username, password), json=payload, timeout=20
+            )
+            if response.status_code != 200:
+                return []
+            items: list[dict[str, Any]] = []
+            for res in response.json().get("results", []):
+                content = res.get("content", {})
+                organic = content.get("results", {}).get("organic", []) or content.get("organic", [])
+                items.extend(organic)
+            return items
+        except Exception as e:  # pragma: no cover - network/parse best-effort
+            print(f"DEBUG: Oxylabs exception ({self._platform_name}): {e}")
+            return []
+
+    def _make_profile(
+        self,
+        *,
+        url: str,
+        title: str,
+        snippet: str,
+        location: str | None,
+        source: str,
+        full_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the standard candidate-profile dict every provider returns."""
+        if not full_name:
+            full_name = title.split("–")[0].split("|")[0].split("-")[0].strip()
+            if not full_name:
+                full_name = url.split("/")[-1].replace("-", " ").title()
+        return {
+            "full_name": full_name,
+            "headline": snippet,
+            "location": location,
+            "platform": self._platform_name,
+            "profile_url": url,
+            "skills": [],
+            "social_links": [],
+            "raw_data": {"source": source, "title": title, "snippet": snippet},
+        }
+
     def _search_google(self, full_query: str, location: str | None, page_size: int) -> list[dict[str, Any]]:
         url = "https://www.google.com/search"
         headers = {
