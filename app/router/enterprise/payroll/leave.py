@@ -42,7 +42,14 @@ async def list_leave_types(
     company_id: uuid.UUID = Depends(get_current_company_id),
     _: object = Depends(require_permission(Permission.PAYROLL_READ)),
 ) -> list[LeaveType]:
-    return await leave_service.list_types(db, company_id)
+    # Auto-seed the standard defaults the first time a company has no leave types,
+    # so the Apply-for-leave / Leave-types screens are never empty. Idempotent;
+    # admins can edit or disable them afterwards.
+    types = await leave_service.list_types(db, company_id)
+    if not types:
+        await leave_service.seed_default_types(db, company_id)
+        types = await leave_service.list_types(db, company_id)
+    return types
 
 
 @router.post("/types/seed-defaults", response_model=list[LeaveTypeOut])

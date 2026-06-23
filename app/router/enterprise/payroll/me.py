@@ -214,8 +214,17 @@ async def my_leave_types(
     company_id: uuid.UUID = Depends(get_current_company_id),
     _: uuid.UUID = Depends(get_current_employee_id),
 ) -> list[LeaveType]:
-    """Active leave types — so the apply form can offer the right options."""
-    return await leave_service.list_types(db, company_id, active_only=True)
+    """Active leave types — so the apply form can offer the right options.
+
+    If the company has no leave types yet, seed the standard defaults
+    (CL/SL/EL/ML/PL/BL/LOP) so an employee always has something to request;
+    admins can edit/disable them afterwards in Payroll → Leave.
+    """
+    types = await leave_service.list_types(db, company_id, active_only=True)
+    if not types:
+        await leave_service.seed_default_types(db, company_id)
+        types = await leave_service.list_types(db, company_id, active_only=True)
+    return types
 
 
 @router.get("/leave/balances", response_model=list[LeaveBalanceOut])
