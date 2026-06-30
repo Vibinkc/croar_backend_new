@@ -172,6 +172,83 @@ async def list_templates(
     return list(res.scalars().all())
 
 
+@router.get("/templates/{template_id}", response_model=SurveyTemplateSchema)
+async def get_template(
+    template_id: uuid.UUID,
+    db: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.read))],
+) -> SurveyTemplateModel:
+    stmt = (
+        select(SurveyTemplateModel)
+        .where(
+            SurveyTemplateModel.id == template_id,
+            SurveyTemplateModel.company_id == getattr(current_user, "company_id", None),
+        )
+        .options(selectinload(SurveyTemplateModel.questions), selectinload(SurveyTemplateModel.survey_type))
+    )
+    res = await db.execute(stmt)
+    tpl = res.scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Survey template not found.")
+    return tpl
+
+
+@router.put("/templates/{template_id}", response_model=SurveyTemplateSchema)
+async def update_template(
+    template_id: uuid.UUID,
+    request: SurveyTemplateCreate,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.surveys, PermissionAction.moderate))
+    ],
+) -> SurveyTemplateModel:
+    company_id = getattr(current_user, "company_id", None)
+    stmt = (
+        select(SurveyTemplateModel)
+        .where(SurveyTemplateModel.id == template_id, SurveyTemplateModel.company_id == company_id)
+        .options(selectinload(SurveyTemplateModel.questions))
+    )
+    res = await db.execute(stmt)
+    tpl = res.scalar_one_or_none()
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Survey template not found.")
+
+    tpl.survey_type_id = request.survey_type_id
+    tpl.title = request.title
+    tpl.description = request.description
+    tpl.is_active = request.is_active
+
+    # The builder form submits the full question list (without ids), so the
+    # simplest correct update is to replace the question set wholesale.
+    for q in list(tpl.questions):
+        await db.delete(q)
+    await db.flush()
+
+    for idx, q_data in enumerate(request.questions):
+        db.add(
+            SurveyQuestionModel(
+                template_id=tpl.id,
+                text=q_data.text,
+                type=q_data.type,
+                order=idx,
+                scale_min=q_data.scale_min,
+                scale_max=q_data.scale_max,
+                options=q_data.options,
+                company_id=cast("uuid.UUID", company_id),
+            )
+        )
+
+    await db.commit()
+
+    stmt2 = (
+        select(SurveyTemplateModel)
+        .where(SurveyTemplateModel.id == tpl.id)
+        .options(selectinload(SurveyTemplateModel.questions), selectinload(SurveyTemplateModel.survey_type))
+    )
+    res2 = await db.execute(stmt2)
+    return res2.scalar_one()
+
+
 @router.post("/launch", response_model=SurveyInstanceSchema)
 async def launch_survey(
     request: SurveyInstanceCreate,

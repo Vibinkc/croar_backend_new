@@ -21,6 +21,7 @@ from .onboarding_automation import router as onboarding_automation_router
 from .onboarding_templates import router as onboarding_templates_router
 from .projects import router as projects_router
 from .public import router as public_router
+from .public_assessment import router as public_assessment_router
 from .public_onboarding import router as public_onboarding_router
 from .simulation import router as simulation_router
 from .sourcing import router as sourcing_router
@@ -32,6 +33,7 @@ from .x360 import router as x360_router
 
 router = APIRouter()
 router.include_router(public_router)
+router.include_router(public_assessment_router)
 router.include_router(communication_router)
 router.include_router(applications_router)
 router.include_router(dashboard_router)

@@ -367,7 +367,7 @@ async def send_interview_invite(
         subject=subject,
         body=body,
         status="SENT",
-        direction="outbound",
+        direction="OUTBOUND",
         sent_at=cast("Any", datetime.now()),
         company_id=application.company_id,
     )
@@ -392,7 +392,7 @@ async def send_interview_invite(
         subject=f"[Interviewer] {subject}",
         body=f"You have an upcoming interview with {candidate.full_name} ({candidate.email}).\n\n{body}",
         status="SENT",
-        direction="outbound",
+        direction="OUTBOUND",
         sent_at=cast("Any", datetime.now()),
         company_id=application.company_id,
     )

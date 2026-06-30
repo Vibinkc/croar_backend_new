@@ -226,3 +226,59 @@ async def add_team_member(
     )
     result = await session.execute(stmt)
     return result.scalar_one()
+
+
+async def _get_team_member(session: DBSessionDep, tenant_id: object, user_id: UUID) -> EnterpriseUser:
+    """Fetch a team member that belongs to the current tenant, with roles loaded."""
+    stmt = (
+        select(EnterpriseUser)
+        .options(selectinload(EnterpriseUser.roles).selectinload(Role.permissions))
+        .where(EnterpriseUser.id == user_id, EnterpriseUser.company_id == tenant_id)
+    )
+    result = await session.execute(stmt)
+    member = result.scalar_one_or_none()
+    if not member:
+        raise HTTPException(status_code=404, detail="Team member not found.")
+    return member
+
+
+@router.put("/members/{user_id}/roles", response_model=UserInTeam)
+async def update_team_member_roles(
+    user_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, team_manage_dep],
+    role_ids: list[UUID] = Body(..., embed=True),
+) -> object:
+    """Reassign the roles of an existing team member."""
+    tenant_id = getattr(current_user, "company_id", None)
+    member = await _get_team_member(session, tenant_id, user_id)
+
+    role_stmt = (
+        select(Role)
+        .options(selectinload(Role.permissions))
+        .where(Role.id.in_(role_ids), (Role.tenant_id == tenant_id) | (Role.tenant_id.is_(None)))
+    )
+    result = await session.execute(role_stmt)
+    roles = result.scalars().all()
+    if role_ids and not roles:
+        raise HTTPException(status_code=400, detail="Invalid roles provided.")
+
+    member.roles = list(roles)
+    await session.commit()
+    return await _get_team_member(session, tenant_id, user_id)
+
+
+@router.delete("/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_team_member(
+    user_id: UUID, session: DBSessionDep, current_user: Annotated[object, team_manage_dep]
+) -> None:
+    """Remove a member from the organization team."""
+    tenant_id = getattr(current_user, "company_id", None)
+
+    # Don't let a user delete themselves and lock the org out.
+    if getattr(current_user, "id", None) == user_id:
+        raise HTTPException(status_code=400, detail="You cannot remove your own account.")
+
+    member = await _get_team_member(session, tenant_id, user_id)
+    await session.delete(member)
+    await session.commit()

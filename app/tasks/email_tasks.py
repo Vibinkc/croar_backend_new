@@ -107,7 +107,7 @@ async def _send_scheduled_email_async(
                 recipient_email=cast("str", candidate.email),
                 subject=subject,
                 body=body,
-                direction="outbound",
+                direction="OUTBOUND",
             )
             session.add(email_log)
 

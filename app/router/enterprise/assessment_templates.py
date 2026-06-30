@@ -1,7 +1,8 @@
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -14,6 +15,12 @@ from app.schemas.enterprise.assessment import (
     AssessmentTemplateUpdate,
 )
 from app.services.enterprise.ai_service import generate_assessment_questions
+
+
+class BulkSendRequest(BaseModel):
+    application_ids: list[UUID]
+    template_id: UUID
+
 
 router = APIRouter(prefix="/assessment-templates", tags=["Assessment Templates"])
 
@@ -171,3 +178,116 @@ async def generate_template_questions(
     )
     result = await db.execute(stmt)
     return result.scalar_one()
+
+
+@router.post("/bulk-send")
+async def bulk_send_assessment(
+    request: BulkSendRequest,
+    db: DBSessionDep,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.moderate))
+    ],
+) -> dict[str, Any]:
+    """Send an assessment (by template) to a set of candidates by application id."""
+    from app.core.settings import get_settings
+    from app.models.enterprise.candidate import Candidate, CandidateApplication
+    from app.models.enterprise.communication import EmailLog
+    from app.models.enterprise.company import Company
+    from app.models.enterprise.job import JobRequirement
+    from app.router.enterprise.communication import send_smtp_email
+    from app.utils.template_render import build_candidate_variables, render_template
+
+    settings = get_settings()
+    company_id = getattr(current_user, "company_id", None)
+
+    template = (
+        await db.execute(
+            select(AssessmentTemplate)
+            .where(AssessmentTemplate.id == request.template_id, AssessmentTemplate.company_id == company_id)
+            .options(selectinload(AssessmentTemplate.email_template))
+        )
+    ).scalar_one_or_none()
+    if not template:
+        raise HTTPException(status_code=404, detail="Assessment template not found.")
+    if not template.generated_questions:
+        raise HTTPException(
+            status_code=400,
+            detail="This assessment template has no questions yet. Add or generate questions before sending.",
+        )
+
+    email_tpl = template.email_template
+    company = (await db.execute(select(Company).where(Company.id == company_id))).scalar_one_or_none()
+    # Candidate take page: /assessment/take/{id} (verifies by email).
+    assessment_link = f"{settings.frontend_url}/assessment/take/{template.id}"
+
+    sent = 0
+    skipped: list[str] = []
+    for app_id in request.application_ids:
+        application = (
+            await db.execute(
+                select(CandidateApplication).where(
+                    CandidateApplication.id == app_id, CandidateApplication.company_id == company_id
+                )
+            )
+        ).scalar_one_or_none()
+        if not application:
+            skipped.append(str(app_id))
+            continue
+
+        candidate = (
+            await db.execute(select(Candidate).where(Candidate.id == application.candidate_id))
+        ).scalar_one_or_none()
+        if not candidate or not candidate.email:
+            skipped.append(str(app_id))
+            continue
+
+        job = (
+            await db.execute(
+                select(JobRequirement).where(JobRequirement.id == application.job_requirement_id)
+            )
+        ).scalar_one_or_none()
+
+        variables: dict[str, object] = {
+            **build_candidate_variables(candidate.full_name),
+            "job_title": job.title if job else "the role",
+            "company_name": company.name if company else "Our Company",
+            "assessment_link": assessment_link,
+            "test_duration": str(template.test_duration),
+            "topic": template.topic,
+        }
+
+        if email_tpl:
+            subject = render_template(email_tpl.subject, variables)
+            body = render_template(email_tpl.body, variables)
+        else:
+            subject = f"Assessment invitation: {template.topic}"
+            body = (
+                f"Hi {variables.get('candidate_name', 'Candidate')},\n\n"
+                f"You've been invited to complete an assessment on {template.topic} "
+                f"(about {template.test_duration} minutes).\n\n"
+                f"Start it here: {assessment_link}\n\n"
+                f"Use the same email you applied with to begin.\n\n"
+                f"Best regards,\n{variables.get('company_name', 'The hiring team')}"
+            )
+
+        recipient = candidate.email
+        background_tasks.add_task(send_smtp_email, recipient, subject, body)
+
+        db.add(
+            EmailLog(
+                candidate_id=candidate.id,
+                application_id=application.id,
+                template_id=email_tpl.id if email_tpl else None,
+                sender_email=settings.mailer_sender_email,
+                recipient_email=recipient,
+                subject=subject,
+                body=body,
+                direction="OUTBOUND",
+                status="sent",
+            )
+        )
+        sent += 1
+
+    await db.commit()
+    return {"sent": sent, "skipped": skipped}

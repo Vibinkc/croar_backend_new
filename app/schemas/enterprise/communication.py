@@ -45,6 +45,8 @@ class EmailLogResponse(BaseModel):
     body: str
     status: str
     is_read: bool
+    is_favorite: bool = False
+    is_trashed: bool = False
     error_message: str | None
     sent_at: datetime
     message_id: str | None

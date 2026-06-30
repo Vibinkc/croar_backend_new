@@ -10,7 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from openai import AsyncOpenAI
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.core.settings import get_settings
@@ -30,6 +30,7 @@ from app.schemas.enterprise.communication import (
 )
 from app.services.enterprise.hiring_agent import hiring_agent_service
 from app.services.enterprise.imap_service import imap_service
+from app.utils.template_render import build_candidate_variables, render_template
 
 _settings = get_settings()
 
@@ -233,11 +234,24 @@ async def get_email_logs(
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
     ],
     direction: str | None = None,
+    favorite: bool = False,
+    trashed: bool = False,
 ) -> list[EmailLog]:
-    """Get history of emails."""
+    """Get history of emails for a folder (inbox / sent / favorites / trash)."""
     stmt = select(EmailLog).where(EmailLog.company_id == getattr(current_user, "company_id", None))
-    if direction:
-        stmt = stmt.where(EmailLog.direction == direction)
+
+    if trashed:
+        # Trash folder: only trashed items (regardless of direction/favorite).
+        stmt = stmt.where(EmailLog.is_trashed.is_(True))
+    else:
+        # Every other folder hides trashed items.
+        stmt = stmt.where(EmailLog.is_trashed.is_(False))
+        if favorite:
+            stmt = stmt.where(EmailLog.is_favorite.is_(True))
+        if direction:
+            # Case-insensitive: automation/interview logs historically used
+            # lowercase "outbound", so match regardless of casing.
+            stmt = stmt.where(func.lower(EmailLog.direction) == direction.lower())
 
     stmt = stmt.order_by(EmailLog.sent_at.desc())
     result = await session.execute(stmt)
@@ -276,6 +290,67 @@ async def mark_as_read(
     return {"status": "success"}
 
 
+@router.patch("/logs/{log_id}/favorite")
+async def toggle_favorite(
+    log_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.update))
+    ],
+) -> dict[str, Any]:
+    """Toggle an email's Favorite flag."""
+    stmt = select(EmailLog).where(
+        EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None)
+    )
+    log = (await session.execute(stmt)).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Email not found")
+    log.is_favorite = not log.is_favorite
+    await session.commit()
+    return {"status": "success", "is_favorite": log.is_favorite}
+
+
+@router.patch("/logs/{log_id}/trash")
+async def set_trashed(
+    log_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
+    ],
+    trashed: bool = True,
+) -> dict[str, Any]:
+    """Move an email to Trash (trashed=true) or restore it (trashed=false)."""
+    stmt = select(EmailLog).where(
+        EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None)
+    )
+    log = (await session.execute(stmt)).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Email not found")
+    log.is_trashed = trashed
+    await session.commit()
+    return {"status": "success", "is_trashed": log.is_trashed}
+
+
+@router.delete("/logs/{log_id}")
+async def delete_email_log(
+    log_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.delete))
+    ],
+) -> dict[str, str]:
+    """Permanently delete an email log (used from the Trash folder)."""
+    stmt = select(EmailLog).where(
+        EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None)
+    )
+    log = (await session.execute(stmt)).scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Email not found")
+    await session.delete(log)
+    await session.commit()
+    return {"status": "deleted"}
+
+
 @router.get("/smart-reply/{log_id}")
 async def get_smart_reply(
     log_id: UUID,
@@ -310,6 +385,68 @@ async def get_smart_reply(
 
     reply = await hiring_agent_service.generate_smart_reply(log.body, candidate_name, job_title)
     return {"reply": reply}
+
+
+@router.get("/logs/{log_id}/candidate-fit", response_model=dict[str, Any])
+async def get_candidate_fit(
+    log_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.read))
+    ],
+) -> dict[str, Any]:
+    """Return the REAL AI fit metrics for the candidate on this email thread.
+
+    Resolves the email's candidate/application, then returns that application's
+    actual ai_match_score / sub-scores / ai_feedback (no static placeholders).
+    """
+    stmt = select(EmailLog).where(
+        EmailLog.id == log_id, EmailLog.company_id == getattr(current_user, "company_id", None)
+    )
+    res = await session.execute(stmt)
+    log = res.scalar_one_or_none()
+    if not log:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    candidate = await session.get(Candidate, log.candidate_id) if log.candidate_id else None
+
+    # Prefer the application linked to the email; otherwise the candidate's most recent one.
+    app: CandidateApplication | None = None
+    if log.application_id:
+        app = await session.get(CandidateApplication, log.application_id)
+    if app is None and log.candidate_id:
+        app_stmt = (
+            select(CandidateApplication)
+            .where(CandidateApplication.candidate_id == log.candidate_id)
+            .order_by(CandidateApplication.applied_at.desc())
+            .limit(1)
+        )
+        app = (await session.execute(app_stmt)).scalar_one_or_none()
+
+    job_title: str | None = None
+    if app is not None:
+        job = await session.get(JobRequirement, app.job_requirement_id)
+        job_title = job.title if job else None
+
+    feedback = cast("dict[str, Any]", (app.ai_feedback if app else None) or {})
+    has_scores = app is not None and app.ai_match_score is not None
+
+    return {
+        "available": bool(has_scores or feedback),
+        "candidate_name": (candidate.full_name if candidate else None) or "Candidate",
+        "job_title": job_title,
+        "ai_match_score": float(app.ai_match_score) if app and app.ai_match_score is not None else None,
+        "skill_match_percent": float(app.skill_match_percent)
+        if app and app.skill_match_percent is not None
+        else None,
+        "experience_fit": float(app.experience_fit) if app and app.experience_fit is not None else None,
+        "ranking_position": app.ranking_position if app else None,
+        "current_stage": app.current_stage if app else None,
+        "fit_reason": feedback.get("fit_reason"),
+        "not_fit_reason": feedback.get("not_fit_reason"),
+        "highlights": feedback.get("highlights") or [],
+        "skills": (candidate.skills if candidate else None) or [],
+    }
 
 
 @router.post("/send")
@@ -401,30 +538,29 @@ async def send_emails(
                     company_address = company.location or ""
                     company_logo = company.logo_url
 
-        candidate_name = (
-            getattr(candidate, "full_name", candidate.email if candidate else email_addr) or "Candidate"
-        )
+        candidate_full_name = getattr(candidate, "full_name", None) if candidate else None
+        # Fall back to the email local-part if we have no real name on file.
+        if not candidate_full_name:
+            candidate_full_name = (candidate.email if candidate else email_addr) or "Candidate"
 
-        replacements = {
-            "{{candidate_name}}": str(candidate_name),
-            "{{job_title}}": str(job_title),
-            "{{company_name}}": str(company_name),
-            "{{recruiter_name}}": str(recruiter_name),
-            "{{company_address}}": str(company_address),
-            "{{company_logo}}": str(company_logo or ""),
-            "{{frontend_url}}": str(_settings.frontend_url),
+        variables: dict[str, object] = {
+            **build_candidate_variables(candidate_full_name),
+            "job_title": job_title,
+            "company_name": company_name,
+            "recruiter_name": recruiter_name,
+            "company_address": company_address,
+            "company_logo": company_logo or "",
+            "frontend_url": str(_settings.frontend_url),
         }
 
         if request.custom_variables:
             for key, val in request.custom_variables.items():
-                k = key if key.startswith("{{") else f"{{{{{key}}}}}"
-                replacements[k] = str(val)
+                # Accept either "{{key}}" or "key"; render_template matches by bare key.
+                clean_key = key.strip().strip("{}").strip()
+                variables[clean_key] = val
 
-        final_body = body_template
-        final_subject = subject
-        for key, val in replacements.items():
-            final_body = final_body.replace(key, val)
-            final_subject = final_subject.replace(key, val)
+        final_body = render_template(body_template, variables)
+        final_subject = render_template(subject, variables)
 
         log_entry = EmailLog(
             recipient_email=email_addr,

@@ -15,6 +15,17 @@ from app.schemas.enterprise.jobs import JobRequirementResponse
 
 router = APIRouter(prefix="/public/jobs", tags=["Public Jobs"])
 
+# A job only accepts public applications while it is open. Status names are
+# inconsistent across seeds ("Active" vs "OPEN"), and the edit UI writes
+# status_id=3 for "Closed" while seeds map 3→"On Hold"/4→"Closed" — so match by
+# lowercased status name (anything that isn't active/open is treated as closed).
+ACCEPTING_STATUS_NAMES = {"active", "open"}
+
+
+def _is_accepting_applications(job: JobRequirement) -> bool:
+    status = getattr(job, "status", None)
+    return bool(status and (status.name or "").strip().lower() in ACCEPTING_STATUS_NAMES)
+
 
 @router.get("/list", response_model=list[JobRequirementResponse])
 async def list_active_jobs(
@@ -27,7 +38,10 @@ async def list_active_jobs(
     stmt = (
         select(JobRequirement)
         .join(JobStatus)
-        .where(JobStatus.name == "OPEN", JobRequirement.deleted_at.is_(None))
+        .where(
+            func.lower(JobStatus.name).in_(sorted(ACCEPTING_STATUS_NAMES)),
+            JobRequirement.deleted_at.is_(None),
+        )
         .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
     )
 
@@ -49,17 +63,23 @@ async def get_public_job(job_id: UUID, session: DBSessionDep) -> dict[str, Any]:
     """Get job details publicly."""
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
+        .options(
+            selectinload(JobRequirement.company),
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.status),
+        )
         .where(JobRequirement.id == job_id)
     )
     result = await session.execute(stmt)
     job = result.scalar_one_or_none()
 
-    if not job:
+    if not job or job.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return {
         "job": JobRequirementResponse.model_validate(job),
+        # Lets the public page show a "closed" state instead of the apply form.
+        "is_open": _is_accepting_applications(job),
         "organization": {
             "name": job.company.name if job.company else "Our Company",
             "logo_url": job.company.logo_url if job.company else None,
@@ -77,12 +97,17 @@ async def apply_to_job(
 
     from app.core.ai import analyze_text_with_llm
 
-    # 1. Verify job
-    stmt = select(JobRequirement).where(JobRequirement.id == job_id)
+    # 1. Verify job + enforce that it is still open before doing any work
+    #    (extraction, AI, candidate creation, automations/emails).
+    stmt = (
+        select(JobRequirement).options(selectinload(JobRequirement.status)).where(JobRequirement.id == job_id)
+    )
     result = await session.execute(stmt)
     job = result.scalar_one_or_none()
-    if not job:
+    if not job or job.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not _is_accepting_applications(job):
+        raise HTTPException(status_code=409, detail="This position is no longer accepting applications.")
 
     # 1.5. Extract all form fields
     try:
@@ -288,7 +313,9 @@ async def apply_to_job(
             pass
 
     if not original_source:
-        original_source = "Job Portal"
+        # Applied directly on the careers/job page with no tracked source — this is
+        # NOT a job-portal application, so don't mislabel it as one.
+        original_source = "Careers Page"
 
     application = CandidateApplication(
         candidate_id=candidate.id,

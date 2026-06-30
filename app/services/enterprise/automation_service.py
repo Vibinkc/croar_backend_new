@@ -16,6 +16,7 @@ from app.models.enterprise.communication import EmailLog, EmailTemplate, MailAut
 from app.models.enterprise.company import Company
 from app.models.enterprise.job import JobRequirement
 from app.models.enterprise.user_role import EnterpriseUser as HiringAgent
+from app.utils.template_render import build_candidate_variables, render_template
 
 logger = logging.getLogger(__name__)
 _settings = get_settings()
@@ -275,11 +276,13 @@ async def send_assessment_invitation(
     company = comp_res.scalar_one_or_none()
 
     # 3. Replace Placeholders
-    # Assessment-specific: add magic link
-    assessment_link = f"{_settings.frontend_url}/public/assessment/{application.id}/start"
+    # Assessment-specific: add magic link. The candidate take page lives at
+    # /assessment/take/{id} and verifies by email; the id is the automation
+    # (or template) id, NOT the application id.
+    assessment_link = f"{_settings.frontend_url}/assessment/take/{automation.id}"
 
-    variables: dict[str, str] = {
-        "candidate_name": candidate.full_name or "Candidate",
+    variables: dict[str, object] = {
+        **build_candidate_variables(candidate.full_name),
         "job_title": job.title,
         "company_name": company.name if company else "Our Company",
         "assessment_link": assessment_link,
@@ -287,13 +290,8 @@ async def send_assessment_invitation(
         "topic": automation.topic,
     }
 
-    subject = template.subject
-    body = template.body
-
-    for key, val in variables.items():
-        for placeholder in [f"{{{{{key}}}}}", f"{{{{ {key} }}}}"]:
-            subject = subject.replace(placeholder, str(val))
-            body = body.replace(placeholder, str(val))
+    subject = render_template(template.subject, variables)
+    body = render_template(template.body, variables)
 
     # 4. Send via Background Task
     from app.router.enterprise.communication import send_smtp_email
@@ -321,7 +319,7 @@ async def send_assessment_invitation(
         recipient_email=str(candidate.email),
         subject=subject,
         body=body,
-        direction="outbound",
+        direction="OUTBOUND",
         status="sent",
     )
     session.add(log)
@@ -359,8 +357,8 @@ async def send_automated_email(
     recruiter_name = f"{agent.first_name} {agent.last_name or ''}".strip() if agent else "Recruiting Team"
 
     # 3. Replace Placeholders
-    variables: dict[str, str] = {
-        "candidate_name": candidate.full_name or "Candidate",
+    variables: dict[str, object] = {
+        **build_candidate_variables(candidate.full_name),
         "job_title": job.title,
         "company_name": company.name if company else "Our Company",
         "recruiter_name": recruiter_name,
@@ -368,13 +366,8 @@ async def send_automated_email(
         "current_year": str(datetime.now().year),
     }
 
-    subject = template.subject
-    body = template.body
-
-    for key, val in variables.items():
-        for placeholder in [f"{{{{{key}}}}}", f"{{{{ {key} }}}}"]:
-            subject = subject.replace(placeholder, str(val))
-            body = body.replace(placeholder, str(val))
+    subject = render_template(template.subject, variables)
+    body = render_template(template.body, variables)
 
     # 4. Send via Background Task
     from app.router.enterprise.communication import send_smtp_email
@@ -402,7 +395,7 @@ async def send_automated_email(
         recipient_email=str(candidate.email),
         subject=subject,
         body=body,
-        direction="outbound",
+        direction="OUTBOUND",
         status="sent",
     )
     session.add(log)
@@ -441,8 +434,8 @@ async def schedule_automated_email(
     recruiter_name = f"{agent.first_name} {agent.last_name or ''}".strip() if agent else "Recruiting Team"
 
     # 3. Replace Placeholders
-    variables: dict[str, str] = {
-        "candidate_name": candidate.full_name or "Candidate",
+    variables: dict[str, object] = {
+        **build_candidate_variables(candidate.full_name),
         "job_title": job.title,
         "company_name": company.name if company else "Our Company",
         "recruiter_name": recruiter_name,
@@ -450,13 +443,8 @@ async def schedule_automated_email(
         "current_year": str(datetime.now().year),
     }
 
-    subject = template.subject
-    body = template.body
-
-    for key, val in variables.items():
-        for placeholder in [f"{{{{{key}}}}}", f"{{{{ {key} }}}}"]:
-            subject = subject.replace(placeholder, str(val))
-            body = body.replace(placeholder, str(val))
+    subject = render_template(template.subject, variables)
+    body = render_template(template.body, variables)
 
     # 4. Log as 'scheduled'
     log = EmailLog(
@@ -468,7 +456,7 @@ async def schedule_automated_email(
         recipient_email=str(candidate.email),
         subject=subject,
         body=body,
-        direction="outbound",
+        direction="OUTBOUND",
         sent_at=send_at,
         status="scheduled",
     )

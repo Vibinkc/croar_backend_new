@@ -54,6 +54,8 @@ class EmailLog(EnterpriseBase):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="pending")  # pending, sent, failed, received
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    is_trashed: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
