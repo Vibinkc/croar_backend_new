@@ -1,3 +1,4 @@
+import re
 from typing import Any
 
 from .sourcing.academicjournals import AcademicJournalsProvider
@@ -27,6 +28,83 @@ from .sourcing.researchgate import ResearchGateProvider
 from .sourcing.stackoverflow import StackOverflowProvider
 from .sourcing.twitter import TwitterProvider
 from .sourcing.wellfound import WellfoundProvider
+
+# Search engines sometimes return listing / asset / article pages (e.g. a Dribbble
+# "React Frontend Page designs, themes, templates…" collection) that get scraped as
+# if they were people. These keywords/patterns in the name or headline mark a result
+# as NOT a real person profile so it can be dropped before display.
+_NON_PERSON_KEYWORDS = (
+    "design",
+    "designs",
+    "template",
+    "templates",
+    "theme",
+    "themes",
+    "tutorial",
+    "examples",
+    "example",
+    "wallpaper",
+    "icon",
+    "icons",
+    "vector",
+    "stock photo",
+    "free download",
+    "download",
+    "pricing",
+    "documentation",
+    " docs",
+    "blog",
+    "article",
+    "newsletter",
+    "course",
+    "roadmap",
+    "cheat sheet",
+    "boilerplate",
+    "ui kit",
+    "mockup",
+    "wireframe",
+    "library",
+    "framework",
+    "snippet",
+    "plugin",
+    "best practices",
+    "top 10",
+    "browse",
+    "discover",
+    "explore ",
+    "results for",
+    "inspiration",
+    "gallery",
+    "collection",
+    "showcase",
+)
+
+
+def _is_valid_profile(p: dict[str, Any]) -> bool:
+    """Heuristic: keep only results that look like an actual person's profile."""
+    name = str(p.get("full_name") or "").strip()
+    if not name:
+        return False
+
+    low_name = name.lower()
+    low_head = str(p.get("headline") or "").strip().lower()
+
+    # Real names are short. Listing titles are long / multi-clause / truncated.
+    if len(name.split()) > 6 or len(name) > 50:
+        return False
+    if name.endswith(("...", "…")) or "|" in name:
+        return False
+    if re.match(r"^\d", name):  # "3 React designs…"
+        return False
+
+    # Listing/asset keywords anywhere in the name.
+    if any(k in low_name for k in _NON_PERSON_KEYWORDS):
+        return False
+
+    # Headlines that read like an article/listing.
+    return not low_head.startswith(
+        ("discover ", "browse ", "explore ", "top ", "best ", "shop ", "find ", "buy ")
+    )
 
 
 class SourcingService:
@@ -73,12 +151,16 @@ class SourcingService:
 
         results = provider.search(query, location, page, page_size)
 
-        # Debug: Print raw data of the first result if exists
-        if results:
-            print(f"DEBUG: Sourcing results found: {len(results)}")
-            print(f"DEBUG: Raw data for first result: {results[0].get('raw_data')}")
+        # Drop listing/asset/article pages that aren't real people.
+        cleaned = [r for r in (results or []) if _is_valid_profile(r)]
 
-        return results
+        if results:
+            dropped = len(results) - len(cleaned)
+            print(f"DEBUG: Sourcing results found: {len(results)} ({dropped} non-profile dropped)")
+            if cleaned:
+                print(f"DEBUG: Raw data for first result: {cleaned[0].get('raw_data')}")
+
+        return cleaned
 
 
 sourcing_service = SourcingService()
