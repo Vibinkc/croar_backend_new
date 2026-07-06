@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
@@ -205,6 +206,14 @@ async def add_team_member(
     if not roles:
         raise HTTPException(status_code=400, detail="Invalid roles provided.")
 
+    # EnterpriseUser.email is globally unique. Pre-check for a friendly message
+    # (a login may already exist — e.g. an auto-provisioned employee login).
+    existing = (
+        await session.execute(select(EnterpriseUser.id).where(EnterpriseUser.email == email))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=400, detail=f"A user with the email '{email}' already exists.")
+
     new_user = EnterpriseUser(
         email=email,
         password_hash=get_password_hash(password),
@@ -216,7 +225,14 @@ async def add_team_member(
     new_user.roles = roles
 
     session.add(new_user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Race (or another globally-unique collision) — surface a clean 400, not a 500.
+        await session.rollback()
+        raise HTTPException(
+            status_code=400, detail=f"A user with the email '{email}' already exists."
+        ) from None
 
     # Reload with relationships for response
     stmt = (

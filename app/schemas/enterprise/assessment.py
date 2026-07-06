@@ -49,6 +49,9 @@ class AssessmentAutomationUpdate(BaseModel):
     is_immediate: bool | None = None
     auto_move: bool | None = None
     send_at: datetime | None = None
+    # Included so the UI's "unlink the source template when questions are regenerated" (PATCH
+    # template_id: null) actually persists — it was silently dropped (not in the schema) before.
+    template_id: UUID | None = None
     email_template_id: UUID | None = None
 
 

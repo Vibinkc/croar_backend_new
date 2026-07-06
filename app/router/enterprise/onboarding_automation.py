@@ -48,9 +48,21 @@ async def create_onboarding_automation(
         object, Depends(PermissionChecker(ModuleScope.onboarding, PermissionAction.create))
     ],
 ) -> object:
-    new_automation = OnboardingAutomation(
-        **automation_in.model_dump(), company_id=getattr(current_user, "company_id", None)
-    )
+    from app.models.enterprise.job import JobRequirement
+
+    company_id = getattr(current_user, "company_id", None)
+    # Verify the target job belongs to the caller's company (parity with mail automation).
+    job = (
+        await db.execute(
+            select(JobRequirement).where(
+                JobRequirement.id == automation_in.job_requirement_id, JobRequirement.company_id == company_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    new_automation = OnboardingAutomation(**automation_in.model_dump(), company_id=company_id)
     db.add(new_automation)
     await db.commit()
     await db.refresh(new_automation)

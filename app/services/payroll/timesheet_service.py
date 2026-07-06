@@ -565,10 +565,16 @@ async def import_attendance(
             entry.hours = (Decimal(mins) / Decimal("60")).quantize(Decimal("0.01"))
         elif hours_raw:
             try:
-                entry.hours = Decimal(hours_raw)
+                hrs = Decimal(hours_raw)
             except (ArithmeticError, ValueError):
                 skip(i, f"bad hours '{hours_raw}'")
                 continue
+            # Same bound the manual grid / TimesheetEntryIn enforce (0–24), so a
+            # bad import line can't corrupt total_hours (and hourly pay).
+            if hrs < 0 or hrs > 24:
+                skip(i, f"hours out of range '{hours_raw}' (must be 0–24)")
+                continue
+            entry.hours = hrs
 
         touched[ts.id] = ts
         updated += 1

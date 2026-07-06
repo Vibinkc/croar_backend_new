@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.user_role import EnterpriseUser
@@ -83,6 +84,19 @@ async def get_audit_logs(
     return result.scalars().all()
 
 
+def _user_out(u: EnterpriseUser) -> dict[str, object]:
+    """Safe projection of an EnterpriseUser — never leaks `password_hash`."""
+    return {
+        "id": str(u.id),
+        "email": u.email,
+        "first_name": u.first_name,
+        "last_name": u.last_name,
+        "is_active": u.is_active,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+        "company_id": str(u.company_id) if u.company_id else None,
+    }
+
+
 @router.get("/users")
 async def get_all_users(session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]):
     """List all users who registered via the public signup flow."""
@@ -92,7 +106,7 @@ async def get_all_users(session: DBSessionDep, _admin: Annotated[object, platfor
         .order_by(EnterpriseUser.created_at.desc())
     )
     result = await session.execute(stmt)
-    return result.scalars().all()
+    return [_user_out(u) for u in result.scalars().all()]
 
 
 @router.patch("/users/{user_id}/toggle-status")
@@ -106,6 +120,14 @@ async def toggle_user_status(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_active = not user.is_active
+    session.add(
+        AuditLog(
+            admin_id=getattr(_admin, "id", None),
+            action="DISABLE_USER" if not user.is_active else "ENABLE_USER",
+            entity_id=user.id,
+            details={"email": user.email, "is_active": user.is_active},
+        )
+    )
     await session.commit()
     return {"status": "success", "is_active": user.is_active}
 
@@ -118,6 +140,24 @@ async def delete_user(user_id: str, session: DBSessionDep, _admin: Annotated[obj
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    email = user.email
+    session.add(
+        AuditLog(
+            admin_id=getattr(_admin, "id", None),
+            action="DELETE_USER",
+            entity_id=user.id,
+            details={"email": email},
+        )
+    )
     await session.delete(user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # User still owns linked records (candidates, jobs, etc.) — a hard delete
+        # would violate FK constraints. Steer the admin to disable instead.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="This user has linked records and can't be permanently deleted. Disable the account instead.",
+        ) from None
     return {"status": "success"}

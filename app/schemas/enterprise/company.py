@@ -26,6 +26,7 @@ class CompanyUpdate(BaseModel):
     logo_url: str | None = None
     config: dict[str, Any] | None = None
     is_consultancy: bool | None = None
+    is_active: bool | None = None
     parent_id: UUID | None = None
 
 
@@ -33,6 +34,7 @@ class CompanyResponse(CompanyBase):
     id: UUID
     slug: str
     is_consultancy: bool
+    is_active: bool = True
     parent_id: UUID | None
     created_at: datetime
     updated_at: datetime

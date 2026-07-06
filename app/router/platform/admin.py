@@ -3,18 +3,18 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.core.security import get_password_hash
+from app.core.settings import get_settings
 from app.models.enterprise.company import Company
-from app.models.enterprise.employee import Department
 from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.auth import Permission, Role
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.company import CompanyResponse, CompanyUpdate
-from app.schemas.enterprise.employees import DepartmentCreate, DepartmentOut
 from app.schemas.rbac import PermissionOut, RoleCreate, RoleOut, RoleUpdate
 
 router = APIRouter(tags=["Platform Administration"])
@@ -23,28 +23,67 @@ router = APIRouter(tags=["Platform Administration"])
 platform_admin_dep = Depends(PermissionChecker(ModuleScope.platform, PermissionAction.moderate))
 
 
+def _email_configured() -> bool:
+    """Whether outbound email can plausibly be sent (used by provisioning /
+    password-reset). Missing SMTP host or sender means those emails silently fail."""
+    s = get_settings()
+    return bool(getattr(s, "smtp_address", None) and getattr(s, "mailer_sender_email", None))
+
+
 @router.get("/stats")
 async def get_platform_stats(
     session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
 ) -> dict[str, object]:
-    """Get high-level platform statistics for the Super Admin dashboard."""
-    # Total Organizations
-    org_stmt = select(func.count(Company.id)).where(Company.deleted_at.is_(None))
-    total_orgs = (await session.execute(org_stmt)).scalar() or 0
+    """Get high-level platform statistics + a real system-health signal for the
+    Super Admin dashboard.
 
-    # Total Users across all orgs
-    user_stmt = select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at.is_(None))
-    total_users = (await session.execute(user_stmt)).scalar() or 0
+    ``system_status`` is derived from live checks rather than a constant:
+    - **Down** — the database ping fails (core dependency unreachable).
+    - **Degraded** — DB is up but outbound email isn't configured (so provisioning
+      / password-reset emails won't send).
+    - **Operational** — all checks pass.
+    """
+    health: dict[str, str] = {
+        "database": "up",
+        "email": "configured" if _email_configured() else "unconfigured",
+    }
 
-    # Total Global Roles
-    role_stmt = select(func.count(Role.id)).where(Role.tenant_id.is_(None))
-    total_roles = (await session.execute(role_stmt)).scalar() or 0
+    # DB liveness — probed defensively so a blip degrades the signal instead of 500-ing.
+    try:
+        await session.execute(text("SELECT 1"))
+    except Exception:
+        health["database"] = "down"
+
+    total_orgs = total_users = total_roles = 0
+    if health["database"] == "up":
+        try:
+            total_orgs = (
+                await session.execute(select(func.count(Company.id)).where(Company.deleted_at.is_(None)))
+            ).scalar() or 0
+            total_users = (
+                await session.execute(
+                    select(func.count(EnterpriseUser.id)).where(EnterpriseUser.deleted_at.is_(None))
+                )
+            ).scalar() or 0
+            total_roles = (
+                await session.execute(select(func.count(Role.id)).where(Role.tenant_id.is_(None)))
+            ).scalar() or 0
+        except Exception:
+            health["database"] = "down"
+
+    if health["database"] == "down":
+        system_status = "Down"
+    elif health["email"] != "configured":
+        system_status = "Degraded"
+    else:
+        system_status = "Operational"
 
     return {
         "tenants": total_orgs,
         "users": total_users,
         "global_roles": total_roles,
-        "system_status": "Operational",
+        "system_status": system_status,
+        "health": health,
     }
 
 
@@ -82,14 +121,42 @@ async def create_tenant(
     if not org_name:
         raise HTTPException(status_code=400, detail="Organization name is required")
 
+    # Reject a duplicate admin email up front (globally unique) with a clear message.
+    if (
+        await session.execute(select(EnterpriseUser.id).where(EnterpriseUser.email == admin_email))
+    ).scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"A user with the email '{admin_email}' already exists.")
+
     # 1. Create Company
     slug = org_dict.get("slug")
     if not slug:
         slug = re.sub(r"[^a-zA-Z0-9]", "-", org_name.lower())
         slug = re.sub(r"-+", "-", slug).strip("-")
 
+    # Slug is globally unique — auto-dedupe (acme, acme-2, acme-3, …) so a name
+    # collision with an existing (or archived) org doesn't 500.
+    base_slug = slug or "org"
+    slug = base_slug
+    suffix = 1
+    while (
+        await session.execute(select(Company.id).where(Company.slug == slug))
+    ).scalar_one_or_none() is not None:
+        suffix += 1
+        slug = f"{base_slug}-{suffix}"
+
     company_fields = {"name", "logo_url", "industry", "location", "config", "is_consultancy", "parent_id"}
     filtered_org = {k: v for k, v in org_dict.items() if k in company_fields}
+
+    # A client org may be linked to a parent consultancy — validate it.
+    parent_id = filtered_org.get("parent_id")
+    if parent_id:
+        parent = await session.get(Company, parent_id)
+        if parent is None or parent.deleted_at is not None:
+            raise HTTPException(status_code=400, detail="Parent consultancy not found.")
+        if not parent.is_consultancy:
+            raise HTTPException(
+                status_code=400, detail="The selected parent organization is not a consultancy."
+            )
 
     new_company = Company(slug=slug, **filtered_org)
     session.add(new_company)
@@ -132,7 +199,13 @@ async def create_tenant(
     session.add(new_user)
     await session.flush()
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="An organization with this name/slug or admin email already exists."
+        ) from None
     await session.refresh(new_company)
     return new_company
 
@@ -159,6 +232,20 @@ async def update_tenant(
         raise HTTPException(status_code=404, detail="Tenant not found")
 
     update_data = tenant_in.model_dump(exclude_unset=True)
+
+    # Validate a (re)assigned parent consultancy.
+    parent_id = update_data.get("parent_id")
+    if parent_id:
+        if str(parent_id) == str(tenant_id):
+            raise HTTPException(status_code=400, detail="An organization can't be its own parent.")
+        parent = await session.get(Company, parent_id)
+        if parent is None or parent.deleted_at is not None:
+            raise HTTPException(status_code=400, detail="Parent consultancy not found.")
+        if not parent.is_consultancy:
+            raise HTTPException(
+                status_code=400, detail="The selected parent organization is not a consultancy."
+            )
+
     for key, value in update_data.items():
         setattr(tenant, key, value)
 
@@ -183,33 +270,27 @@ async def delete_tenant(
 # --- Sub-resources ---
 
 
-@router.get("/tenants/{tenant_id}/divisions", response_model=list[DepartmentOut])
-async def list_tenant_divisions(
-    tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
-) -> list[object]:
-    stmt = select(Department).where(Department.company_id == tenant_id)
-    result = await session.execute(stmt)
-    return list(result.scalars().all())
+def _user_out(u: EnterpriseUser, *, role: str | None = None) -> dict[str, object]:
+    """Serialise a tenant user for the admin UI. A raw ORM object can't be
+    returned through a Pydantic response_model, so build a plain dict. `role`
+    can be passed for freshly-created users whose `roles` aren't eager-loaded."""
+    if role is None:
+        loaded = getattr(u, "roles", None) or []
+        role = loaded[0].name if loaded else ""
+    return {
+        "id": str(u.id),
+        "first_name": u.first_name,
+        "last_name": u.last_name,
+        "email": u.email,
+        "role": role,
+        "is_active": u.is_active,
+    }
 
 
-@router.post("/tenants/{tenant_id}/divisions", response_model=DepartmentOut)
-async def create_tenant_division(
-    tenant_id: UUID,
-    div_in: DepartmentCreate,
-    session: DBSessionDep,
-    _admin: Annotated[object, platform_admin_dep],
-) -> object:
-    new_div = Department(name=div_in.name, description=div_in.description, company_id=tenant_id)
-    session.add(new_div)
-    await session.commit()
-    await session.refresh(new_div)
-    return new_div
-
-
-@router.get("/tenants/{tenant_id}/admins", response_model=list[object])
+@router.get("/tenants/{tenant_id}/admins")
 async def list_tenant_admins(
     tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
-) -> list[object]:
+) -> list[dict[str, object]]:
     # Fetch users with ADMIN role for this tenant
     stmt = (
         select(EnterpriseUser)
@@ -218,16 +299,16 @@ async def list_tenant_admins(
         .options(selectinload(EnterpriseUser.roles))
     )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    return [_user_out(u) for u in result.scalars().all()]
 
 
-@router.post("/tenants/{tenant_id}/admins", response_model=object)
+@router.post("/tenants/{tenant_id}/admins")
 async def create_tenant_admin(
     tenant_id: UUID,
     session: DBSessionDep,
     _admin: Annotated[object, platform_admin_dep],
     admin_data: dict[str, object] = Body(...),
-) -> object:
+) -> dict[str, object]:
     # Get/Create ADMIN role for this company
     stmt = select(Role).where(Role.name == "ADMIN", Role.tenant_id == tenant_id)
     result = await session.execute(stmt)
@@ -270,36 +351,43 @@ async def create_tenant_admin(
     await session.flush()
     new_user.roles.append(admin_role)
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="A user with this email already exists") from None
     await session.refresh(new_user)
-    return new_user
+    return _user_out(new_user, role=admin_role.name)
 
 
-@router.get("/tenants/{tenant_id}/users", response_model=list[object])
+@router.get("/tenants/{tenant_id}/users")
 async def list_tenant_users(
     tenant_id: UUID, session: DBSessionDep, _admin: Annotated[object, platform_admin_dep]
-) -> list[object]:
+) -> list[dict[str, object]]:
     stmt = (
         select(EnterpriseUser)
         .where(EnterpriseUser.company_id == tenant_id)
         .options(selectinload(EnterpriseUser.roles))
     )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    return [_user_out(u) for u in result.scalars().all()]
 
 
-@router.post("/tenants/{tenant_id}/users", response_model=object)
+@router.post("/tenants/{tenant_id}/users")
 async def create_tenant_user(
     tenant_id: UUID,
     session: DBSessionDep,
     _admin: Annotated[object, platform_admin_dep],
     user_data: dict[str, object] = Body(...),
-) -> object:
+) -> dict[str, object]:
     # This is a guestimated implementation based on common patterns
     # In a real scenario, we'd use a specific schema
     user_email = user_data.get("email")
     if not user_email:
         raise HTTPException(status_code=400, detail="email is required")
+    first_name = user_data.get("first_name")
+    if not first_name:
+        raise HTTPException(status_code=400, detail="first_name is required")
     if (
         await session.execute(select(EnterpriseUser).where(EnterpriseUser.email == user_email))
     ).scalar_one_or_none():
@@ -309,15 +397,19 @@ async def create_tenant_user(
     new_user = EnterpriseUser(
         email=cast("str", user_email),
         password_hash=get_password_hash(cast("str", password)),
-        first_name=cast("str", user_data.get("first_name")),
-        last_name=cast("str", user_data.get("last_name")),
+        first_name=cast("str", first_name),
+        last_name=cast("str", user_data.get("last_name") or ""),
         company_id=tenant_id,
         is_active=True,
     )
     session.add(new_user)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="A user with this email already exists") from None
     await session.refresh(new_user)
-    return new_user
+    return _user_out(new_user, role=str(user_data.get("role") or ""))
 
 
 @router.delete("/tenants/{tenant_id}/users/{user_id}")
@@ -403,6 +495,11 @@ async def update_global_role(
     if not role:
         raise HTTPException(status_code=404, detail="Global role not found")
 
+    if role.is_system:
+        # System roles (e.g. SUPER_ADMIN) are seeded and load-bearing — renaming them or
+        # stripping their permissions could lock the platform out. They are read-only.
+        raise HTTPException(status_code=400, detail="System roles are read-only and cannot be edited.")
+
     update_data = role_in.model_dump(exclude={"permission_ids"}, exclude_unset=True)
     for key, value in update_data.items():
         setattr(role, key, value)
@@ -430,7 +527,14 @@ async def delete_global_role(
         raise HTTPException(status_code=400, detail="Cannot delete system roles")
 
     await session.delete(role)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Role is still referenced (e.g. a user's legacy role_id FK) — deleting would orphan it.
+        await session.rollback()
+        raise HTTPException(
+            status_code=409, detail="This role is still assigned to one or more users and can't be deleted."
+        ) from None
     return {"status": "success"}
 
 

@@ -58,7 +58,21 @@ async def create_assessment_automation(
         object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.create))
     ],
 ) -> AssessmentAutomation:
+    from app.models.enterprise.job import JobRequirement
+
     company_id = getattr(current_user, "company_id", None)
+    # Verify the target job belongs to the caller's company (parity with mail automation) so an
+    # automation can't be created against another tenant's job id.
+    job = (
+        await db.execute(
+            select(JobRequirement).where(
+                JobRequirement.id == automation_in.job_requirement_id, JobRequirement.company_id == company_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     data = automation_in.model_dump()
     if data.get("send_at") and data["send_at"].tzinfo:
         data["send_at"] = data["send_at"].replace(tzinfo=None)

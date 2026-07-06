@@ -12,6 +12,11 @@ class CandidateBase(BaseModel):
     phone: str | None = None
     skills: list[str] = []
     parsed_data: dict[str, Any] | None = None
+    # Surfaced so the Candidate Bank can show/open resumes and the upload date. Without these the
+    # page's `resume_url`/`created_at` were always undefined (the "With Resume" stat read 0 and the
+    # resume buttons never appeared).
+    resume_file_path: str | None = None
+    created_at: datetime | None = None
 
     @field_validator("skills", mode="before")
     @classmethod

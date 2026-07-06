@@ -47,7 +47,20 @@ async def create_interview_automation(
         object, Depends(PermissionChecker(ModuleScope.interviews, PermissionAction.create))
     ],
 ) -> InterviewAutomation:
+    from app.models.enterprise.job import JobRequirement
+
     company_id = getattr(current_user, "company_id", None)
+    # Verify the target job belongs to the caller's company (parity with mail automation).
+    job = (
+        await db.execute(
+            select(JobRequirement).where(
+                JobRequirement.id == automation_in.job_requirement_id, JobRequirement.company_id == company_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     new_automation = InterviewAutomation(**automation_in.model_dump(), company_id=cast("Any", company_id))
     db.add(new_automation)
     await db.commit()

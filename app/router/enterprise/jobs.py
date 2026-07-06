@@ -3,7 +3,7 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.ai import generate_job_description_ai
@@ -42,6 +42,30 @@ def normalize_workflow_stages(stages: list[dict[str, object]]) -> list[dict[str,
     for i, stage in enumerate(stages):
         stage["id"] = str(i + 1)
     return stages
+
+
+async def _get_scoped_job(session: Any, current_user: object, job_id: UUID) -> JobRequirement | None:
+    """Fetch a live (non-deleted) job the caller is allowed to act on.
+
+    A consultancy may manage its OWN jobs and its partners' (companies whose `parent_id`
+    is the consultancy). Everyone else is scoped to their own company. Returns None when the
+    job doesn't exist or is out of scope — callers turn that into a 404. Used by the mutating
+    endpoints so that "can view" (list/get) and "can manage" (update/delete/publish) stay in
+    sync — previously a consultancy could open a partner job but got 404 on edit/delete/publish.
+    """
+    cid = getattr(current_user, "company_id", None)
+    is_consultancy = getattr(getattr(current_user, "company", None), "is_consultancy", False)
+
+    stmt = select(JobRequirement).where(JobRequirement.id == job_id, JobRequirement.deleted_at.is_(None))
+    if is_consultancy:
+        partner_ids = (
+            (await session.execute(select(Company.id).where(Company.parent_id == cid))).scalars().all()
+        )
+        stmt = stmt.where(or_(JobRequirement.company_id == cid, JobRequirement.company_id.in_(partner_ids)))
+    else:
+        stmt = stmt.where(JobRequirement.company_id == cid)
+
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
 @router.post("/", response_model=JobRequirementResponse)
@@ -175,14 +199,6 @@ async def get_job(
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Calculate metrics
-    # Stages mapping logic (simplified/dynamic)
-    metrics_stmt = (
-        select(CandidateApplication.current_stage, func.count(CandidateApplication.id))
-        .where(CandidateApplication.job_requirement_id == job_id)
-        .group_by(CandidateApplication.current_stage)
-    )
-
     def _to_int(value: Any, default: int = 0) -> int:
         # Stage ids are usually ints but may be missing/non-numeric in stored JSON.
         try:
@@ -190,10 +206,33 @@ async def get_job(
         except (TypeError, ValueError):
             return default
 
-    metrics_result = await session.execute(metrics_stmt)
-    counts: dict[int, int] = {}
-    for stage, count in metrics_result.all():
-        counts[_to_int(stage)] = _to_int(count)
+    # Per-stage counts drive the pipeline tabs. `current_stage` is the workflow-stage index,
+    # so this is the RIGHT key for the stage cards. Exclude soft-deleted applications — otherwise
+    # deleted candidates keep inflating the stage counts (same bug the dashboard had).
+    stage_stmt = (
+        select(CandidateApplication.current_stage, func.count(CandidateApplication.id))
+        .where(CandidateApplication.job_requirement_id == job_id, CandidateApplication.deleted_at.is_(None))
+        .group_by(CandidateApplication.current_stage)
+    )
+    stage_result = await session.execute(stage_stmt)
+    stage_counts: dict[int, int] = {}
+    for stage, count in stage_result.all():
+        stage_counts[_to_int(stage)] = _to_int(count)
+
+    # The summary metrics (interviews / rejected / onboarded) are STATUS concepts, not stage
+    # indices — counting them off `current_stage` was wrong (e.g. "rejected" read stage 6, which
+    # doesn't exist in a 5-stage pipeline, so it was always 0). Group by `status_id` instead.
+    # application_statuses: 1 Applied · 2 Screening · 3 Interviewing · 4 Offered · 5 Hired ·
+    # 6 Rejected · 7 Withdrawn.
+    status_stmt = (
+        select(CandidateApplication.status_id, func.count(CandidateApplication.id))
+        .where(CandidateApplication.job_requirement_id == job_id, CandidateApplication.deleted_at.is_(None))
+        .group_by(CandidateApplication.status_id)
+    )
+    status_result = await session.execute(status_stmt)
+    status_counts: dict[int, int] = {}
+    for status_id, count in status_result.all():
+        status_counts[_to_int(status_id)] = _to_int(count)
 
     # Dynamic Stages (Rounds)
     stages_to_use = job.workflow_stages or []
@@ -205,19 +244,21 @@ async def get_job(
         JobStageResponse(
             id=_to_int(s.get("id", i + 1), i + 1),
             name=str(s.get("name", f"Stage {i + 1}")),
-            count=counts.get(_to_int(s.get("id", i + 1), i + 1), 0),
+            count=stage_counts.get(_to_int(s.get("id", i + 1), i + 1), 0),
         )
         for i, s in enumerate(stages_to_use)
     ]
 
-    # Metrics calculation
-    total_in_flow = sum(counts.values())
+    # Metrics: submitted = everyone who applied; pipeline = still-active (not Hired/Rejected/
+    # Withdrawn); the rest map directly to their status.
+    total_apps = sum(status_counts.values())
+    terminal = status_counts.get(5, 0) + status_counts.get(6, 0) + status_counts.get(7, 0)
     response.metrics = JobMetrics(
-        pipeline=total_in_flow,
-        submitted=counts.get(1, 0),
-        interviews=counts.get(2, 0),
-        rejected=counts.get(6, 0),
-        onboarded=counts.get(5, 0),
+        pipeline=total_apps - terminal,
+        submitted=total_apps,
+        interviews=status_counts.get(3, 0),
+        rejected=status_counts.get(6, 0),
+        onboarded=status_counts.get(5, 0),
     )
 
     return response
@@ -231,12 +272,7 @@ async def update_job(
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
 ) -> JobRequirement:
     """Update an existing job requisition."""
-    stmt = select(JobRequirement).where(
-        JobRequirement.id == job_id, JobRequirement.company_id == getattr(current_user, "company_id", None)
-    )
-    result = await session.execute(stmt)
-    job = result.scalar_one_or_none()
-
+    job = await _get_scoped_job(session, current_user, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -252,14 +288,12 @@ async def update_job(
     await session.commit()
     await session.refresh(job)
 
-    # Re-fetch with mappings
+    # Re-fetch with mappings. Scope by the job's OWN company_id (already access-checked above),
+    # not the caller's — otherwise a consultancy editing a partner job would fail the reload.
     stmt_reload = (
         select(JobRequirement)
         .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
-        .where(
-            JobRequirement.id == job_id,
-            JobRequirement.company_id == getattr(current_user, "company_id", None),
-        )
+        .where(JobRequirement.id == job_id)
     )
     result_reload = await session.execute(stmt_reload)
     return result_reload.scalar_one()
@@ -272,12 +306,7 @@ async def delete_job(
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.delete))],
 ) -> dict[str, str]:
     """Soft delete a job requisition."""
-    stmt = select(JobRequirement).where(
-        JobRequirement.id == job_id, JobRequirement.company_id == getattr(current_user, "company_id", None)
-    )
-    result = await session.execute(stmt)
-    job = result.scalar_one_or_none()
-
+    job = await _get_scoped_job(session, current_user, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -323,11 +352,7 @@ async def publish_job(
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.publish))],
 ) -> dict[str, str]:
     """Publish a job to specific platforms."""
-    stmt = select(JobRequirement).where(
-        JobRequirement.id == job_id, JobRequirement.company_id == getattr(current_user, "company_id", None)
-    )
-    result = await session.execute(stmt)
-    job = result.scalar_one_or_none()
+    job = await _get_scoped_job(session, current_user, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 

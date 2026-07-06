@@ -51,6 +51,13 @@ async def salary_register(
             detail="Run the cycle first — there are no payslips to report yet.",
         )
     records = await report_service.salary_register_records(db, company_id, cycle)
+    # A non-DRAFT cycle can still have no payslips (e.g. cancelled before it was
+    # ever run, or a run where every employee was skipped) — don't emit an empty
+    # register file.
+    if not records:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This cycle has no payslips to report."
+        )
     base = f"salary-register-{cycle.name}"
     if format == "csv":
         content = report_service.records_to_csv(report_service.SALARY_REGISTER_COLUMNS, records)

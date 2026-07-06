@@ -51,12 +51,15 @@ class OnboardingDocumentResponse(BaseModel):
 
 
 class OnboardingActivityResponse(BaseModel):
+    # Must match the OnboardingActivity model columns. It previously declared `action`/`timestamp`/
+    # `metadata_info`, which don't exist on the model — so once any activity was logged (e.g. on
+    # initiate), response validation failed and the whole onboarding list/detail returned 500.
     id: UUID
     onboarding_id: UUID
-    action: str
+    activity_type: str
+    description: str
     performed_by: str
-    timestamp: datetime
-    metadata_info: dict[str, Any] | None = None
+    created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 

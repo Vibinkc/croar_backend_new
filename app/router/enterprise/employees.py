@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
@@ -99,7 +100,17 @@ async def create_employee(
     data["company_id"] = getattr(current_user, "company_id", None)
     employee = Employee(**data)
     session.add(employee)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # The pre-checks above catch the common case, but a race (or an archived
+        # record still holding the globally-unique email/employee_id) can trip the
+        # DB constraint — surface a clean 400 instead of a 500.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="An employee with this email or ID already exists (it may be an archived record).",
+        ) from None
 
     # Eager load relationships for the response model to avoid MissingGreenlet
     stmt = (

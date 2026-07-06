@@ -492,16 +492,28 @@ async def delete_job(job_id: str, config: RunnableConfig) -> dict[str, Any]:
 
 @tool
 async def source_candidates(
-    job_id: str, role: str, skills: str | None = None, count: int = 10, location: str | None = None
+    job_id: str, role: str, skills: str | None = None, count: int | None = None, location: str | None = None
 ) -> dict[str, Any]:
     """Search LIVE candidate profiles for an existing job across all sourcing platforms. CALL THIS
     whenever the user wants to source / find candidates for a job (e.g. "source 10 candidates").
     Pass the job_id (from the build result or list_jobs), the `role` title, the key `skills`
-    (comma-separated), `count` (how many to return), and `location` if given. Do NOT ask "how many"
-    again if the user already gave a number — just call this with it. The UI renders the returned
-    candidates as a checkbox list and handles sending the invites; you do NOT send invites yourself.
-    After calling it, briefly tell the user to pick who to invite from the list."""
+    (comma-separated), `count` (how many to return — MUST come from the user), and `location`.
+
+    IMPORTANT — `count` has NO default. If the user has NOT told you how many candidates to source,
+    do NOT guess a number: either ask them first, or call this tool with `count` omitted and it will
+    return status "need_count" so you can ask. Only call with `count` set once the user gives a number.
+
+    The UI renders the returned candidates as a checkbox list and handles sending the invites; you do
+    NOT send invites yourself. After calling it, briefly tell the user to pick who to invite."""
     from app.router.enterprise.sourcing import backfill_contacts, search_all_platforms
+
+    # No count supplied → ask the user how many rather than defaulting. The Pilot must
+    # collect an explicit number before it sources anyone.
+    if count is None:
+        return {
+            "status": "need_count",
+            "message": "How many candidates would you like me to source for this role?",
+        }
 
     count = _clamp_int(count, 1, 25, 10)
     query = " ".join(p.strip() for p in [role, skills] if p and p.strip())

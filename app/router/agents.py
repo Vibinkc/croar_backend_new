@@ -60,7 +60,9 @@ class PilotSession(BaseModel):
 class SourceRequest(BaseModel):
     role: str
     skills: str | None = None
-    count: int = 10
+    # No default — the caller must state how many to source (consistent with the Pilot's
+    # ask-how-many flow); the tool/endpoint never silently assumes a number.
+    count: int
     location: str | None = None
 
 
@@ -76,7 +78,7 @@ class InviteRequest(BaseModel):
 
 from langchain_core.messages import HumanMessage
 
-from app.agents.agent import hr_agent_executor
+from app.agents.agent import get_agent_executor
 
 
 @router.post("/chat")
@@ -107,8 +109,10 @@ async def agent_chat(
         thread_id = f"{company_id}:{request.thread_id or 'default_thread'}"
         config = {"configurable": {"thread_id": thread_id, "session": session, "company_id": company_id}}
 
-        # Execute the graph (it resumes from the last state in the thread)
-        result = await hr_agent_executor.ainvoke(inputs, config=config)
+        # Execute the graph (it resumes from the last state in the thread). The executor uses a
+        # persistent Postgres checkpointer when available, else an in-memory fallback.
+        executor = await get_agent_executor()
+        result = await executor.ainvoke(inputs, config=config)
 
         # Get the last message from the agent (guard against an empty/odd result).
         messages = result.get("messages") if isinstance(result, dict) else None
@@ -140,8 +144,13 @@ async def agent_chat(
     except HTTPException:
         raise
     except Exception as e:
+        # Keep the real error in the server logs; return a generic message to the client so we
+        # don't leak internal exception detail (stack text, ids) into the chat UI.
         logger.exception("Croar Pilot chat failed")
-        raise HTTPException(status_code=500, detail=f"Croar Pilot error: {e}") from e
+        raise HTTPException(
+            status_code=500,
+            detail="Croar Pilot hit an unexpected error and couldn't complete that. Please try again.",
+        ) from e
 
 
 @router.get("/actions", response_model=list[dict[str, Any]])
@@ -274,7 +283,7 @@ async def pilot_source_candidates(payload: SourceRequest, _user: AuthUser):
     query = " ".join(p.strip() for p in [payload.role, payload.skills] if p and p.strip())
     if not query:
         raise HTTPException(status_code=422, detail="A role is required to search.")
-    count = max(1, min(payload.count or 10, 25))
+    count = max(1, min(payload.count, 25))
     try:
         profiles = await search_all_platforms(
             query, payload.location, page=1, page_size=min(max(count, 5), 15)
@@ -330,10 +339,12 @@ async def pilot_invite_candidates(
     sent, failed = 0, 0
     for c in payload.candidates:
         real_email = (c.email or "").strip()
-        recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
-        if not recipient:
+        # A candidate with no real email is unreachable — count it as failed even in test mode
+        # (otherwise the test-inbox redirect would report it as "sent" and overstate reach).
+        if not real_email:
             failed += 1
             continue
+        recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
         name = (c.name or "there").strip()
         test_banner = (
             "<div style='background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:8px;"

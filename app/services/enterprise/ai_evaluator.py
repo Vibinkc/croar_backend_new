@@ -86,6 +86,11 @@ class AIEvaluatorService:
     async def evaluate_code_response(
         self, question: str, test_cases: list[dict[str, str]], student_code: str
     ) -> dict[str, Any]:
+        # Guard: an empty/blank submission is always 0 — never ask the model to
+        # "grade" nothing (it can hallucinate a non-zero score).
+        if not (student_code or "").strip():
+            return {"score": 0, "feedback": "No code submitted.", "success_rate": 0}
+
         prompt = (
             "Evaluate the following student code against the problem statement and test cases.\n\n"
             f'Question: "{question}"\n'

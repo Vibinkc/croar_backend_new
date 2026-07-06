@@ -4,13 +4,15 @@ import json
 import os
 import re
 import socket
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from openai import OpenAI
 from pydantic import BaseModel
 
+from app.core.dependencies import get_optional_company_id
+from app.services.enterprise.sourcing import profile_store
 from app.services.enterprise.sourcing_service import sourcing_service
 
 router = APIRouter(prefix="/sourcing", tags=["Sourcing"])
@@ -470,38 +472,82 @@ async def search_profiles(
 
 @router.get("/chat_db")
 async def chat_search_profiles(
+    company_id: Annotated[str | None, Depends(get_optional_company_id)],
     q: str = Query(..., description="The chat prompt query"),
     page: int = Query(1, description="Page index"),
     limit: int = Query(10, description="Items per page"),
     enrich_contacts: bool = Query(True, description="Deep-scrape missing emails/socials"),
     has_contact: bool = Query(False, description="Only return profiles that have contact info"),
 ):
-    """Conversational sourcing search.
+    """Conversational sourcing search — **database-first**, scrape only as a fallback.
 
-    Parses the natural-language prompt into structured constraints, then searches live
-    across all sourcing platforms (or a single platform if the prompt names one).
-    No local store / cache is involved.
+    Parses the natural-language prompt into structured constraints, then resolves the
+    request in three tiers, stopping as soon as we have enough (`limit`) profiles:
+
+      1. **Client DB** — profiles THIS company already sourced for a similar role
+         (its own history). Instant, no internet.
+      2. **Croar DB** — the global pool of everything Croar has ever scraped
+         (built up by every company's past searches).
+      3. **Live scrape** — only for the shortfall; results are persisted back so the
+         next identical search is served from the DB.
+
+    Every DB-served profile carries `last_scraped_at` (when we last pulled it) plus an
+    `origin` (`client_db` / `croar_db` / `fresh`) so the UI can show freshness.
     """
     try:
         gpt_data = await asyncio.to_thread(parse_search_constraints, q)
 
-        search_query = (
-            " ".join(gpt_data.get("role_keywords", []) + gpt_data.get("seniority_keywords", [])).strip() or q
-        )
+        role_terms = list(gpt_data.get("role_keywords", [])) + list(gpt_data.get("seniority_keywords", []))
+        search_query = " ".join(role_terms).strip() or q
         location_str = gpt_data.get("location")
         target_platform = gpt_data.get("platform")
 
-        if target_platform and str(target_platform).lower() in sourcing_service.providers:
-            profiles = sanitize_profiles(
-                await _search_single_platform(
-                    str(target_platform).lower(), search_query, location_str, page, limit
-                )
-            )
-        else:
-            profiles = await search_all_platforms(search_query, location_str, page, limit)
+        merged: dict[str, dict[str, Any]] = {}
 
-        if enrich_contacts:
-            profiles = await backfill_contacts(profiles)
+        def _add(rows: list[dict[str, Any]], origin: str) -> None:
+            for p in rows:
+                pid = p.get("id") or profile_store.dedup_key(p)
+                if pid not in merged:
+                    merged[pid] = {**p, "origin": origin}
+
+        # ── Tier 1: this company's own sourcing history (client DB) ──────────
+        if company_id:
+            client_hits = await asyncio.to_thread(
+                profile_store.search, role_terms, location_str, limit, company_id
+            )
+            _add(client_hits, "client_db")
+
+        # ── Tier 2: the global Croar pool, excluding what tier 1 already gave ─
+        if len(merged) < limit:
+            croar_hits = await asyncio.to_thread(
+                profile_store.search, role_terms, location_str, limit - len(merged), None, set(merged.keys())
+            )
+            _add(croar_hits, "croar_db")
+
+        from_db_count = len(merged)
+
+        # ── Tier 3: live scrape ONLY the shortfall ───────────────────────────
+        scraped_count = 0
+        if len(merged) < limit:
+            if target_platform and str(target_platform).lower() in sourcing_service.providers:
+                profiles = sanitize_profiles(
+                    await _search_single_platform(
+                        str(target_platform).lower(), search_query, location_str, page, limit
+                    )
+                )
+            else:
+                profiles = await search_all_platforms(search_query, location_str, page, limit)
+
+            if enrich_contacts:
+                profiles = await backfill_contacts(profiles)
+
+            # Persist the fresh scrape (dedup by identity, tag it to this company).
+            stored_fresh = await asyncio.to_thread(profile_store.upsert_many, profiles, q, company_id)
+            scraped_count = len(stored_fresh)
+            _add(stored_fresh, "fresh")
+
+        profiles = list(merged.values())
+
         if has_contact:
             profiles = [p for p in profiles if _has_contact(p)]
 
@@ -525,13 +571,95 @@ async def chat_search_profiles(
             ),
         )
 
-        response_msg = (
-            f"I searched the connected platforms live and found {total_count} matching profiles, "
-            "including those with direct contact info."
-        )
-        return {"response": response_msg, "profiles": summarized, "total_count": total_count}
+        # Tell the recruiter how the results were assembled (reused vs freshly scraped).
+        if from_db_count and scraped_count:
+            response_msg = (
+                f"I found {total_count} matching profiles — {from_db_count} reused from your "
+                f"existing database and {scraped_count} freshly sourced to top up the results."
+            )
+        elif from_db_count:
+            response_msg = (
+                f"I found {total_count} matching profiles instantly from your existing database "
+                "(no re-scraping needed). Check each card's 'last updated' for freshness."
+            )
+        else:
+            response_msg = (
+                f"I searched the connected platforms live and found {total_count} matching profiles, "
+                "including those with direct contact info."
+            )
+        return {
+            "response": response_msg,
+            "profiles": summarized,
+            "total_count": total_count,
+            "from_db_count": from_db_count,
+            "scraped_count": scraped_count,
+        }
     except Exception as e:
         return {"response": f"Live sourcing search failed: {e}", "profiles": [], "total_count": 0}
+
+
+class TagRequest(BaseModel):
+    tags: list[str] = []
+
+
+class StatusRequest(BaseModel):
+    status: str
+
+
+_STORE_404 = (
+    "Profile not found in the store (it may not have been persisted yet, or the store is unavailable)."
+)
+
+
+@router.get("/profiles/{profile_id}")
+async def get_stored_profile(profile_id: str):
+    """Fetch a single stored profile with its tags and full history timeline."""
+    doc = await asyncio.to_thread(profile_store.get_profile, profile_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=_STORE_404)
+    return doc
+
+
+@router.post("/profiles/{profile_id}/tags")
+async def set_profile_tags(profile_id: str, body: TagRequest):
+    """Replace the full tag set on a stored (previously-sourced) profile."""
+    doc = await asyncio.to_thread(profile_store.set_tags, profile_id, body.tags)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=_STORE_404)
+    return doc
+
+
+@router.post("/profiles/{profile_id}/tags/add")
+async def add_profile_tags(profile_id: str, body: TagRequest):
+    """Add tags without removing existing ones (recorded in history)."""
+    doc = await asyncio.to_thread(profile_store.add_tags, profile_id, body.tags)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=_STORE_404)
+    return doc
+
+
+@router.post("/profiles/{profile_id}/tags/remove")
+async def remove_profile_tags(profile_id: str, body: TagRequest):
+    """Remove specific tags (recorded in history)."""
+    doc = await asyncio.to_thread(profile_store.remove_tags, profile_id, body.tags)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=_STORE_404)
+    return doc
+
+
+@router.post("/profiles/{profile_id}/status")
+async def set_profile_status(profile_id: str, body: StatusRequest):
+    """Advance a profile's lifecycle status (sourced → shortlisted → contacted → …); recorded in history."""
+    doc = await asyncio.to_thread(profile_store.set_status, profile_id, body.status)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=_STORE_404)
+    return doc
+
+
+@router.get("/profiles/by-tag/{tag}")
+async def list_profiles_by_tag(tag: str, limit: int = Query(50, description="Max profiles to return")):
+    """List stored profiles carrying a given tag."""
+    return await asyncio.to_thread(profile_store.list_by_tag, tag, limit)
 
 
 @router.get("/chat_distribution")

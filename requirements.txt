@@ -162,6 +162,10 @@ openai==2.30.0
 langchain-openai
 langchain-core
 langgraph
+# Persistent Croar Pilot conversation state (shared across workers, survives restarts).
+# Optional at runtime — agent.py falls back to in-memory MemorySaver if these are absent.
+langgraph-checkpoint-postgres
+psycopg[binary]
 
 packaging==25.0
 

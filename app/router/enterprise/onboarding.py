@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.core.dependencies import DBSessionDep, PermissionChecker, get_current_user
 from app.core.settings import get_settings
 from app.models.enterprise.candidate import CandidateApplication
+from app.models.enterprise.company import Company
 from app.models.enterprise.onboarding import (
     Onboarding,
     OnboardingActivity,
@@ -46,6 +47,19 @@ def generate_onboarding_code() -> str:
     return f"ONB-{suffix}"
 
 
+async def _allowed_company_ids(session: DBSessionDep, current_user: object) -> list[Any]:
+    """Company ids the caller may act on: own company, plus partner companies for a consultancy
+    (`Company.parent_id == own`). Mirrors the jobs/pipeline scoping so a consultancy that can see a
+    partner's jobs & candidates can also run/see their onboardings — previously onboarding was
+    own-company-only, so a consultancy couldn't initiate or view partner onboardings."""
+    cid = getattr(current_user, "company_id", None)
+    is_consultancy = getattr(getattr(current_user, "company", None), "is_consultancy", False)
+    if not is_consultancy:
+        return [cid]
+    partner_ids = (await session.execute(select(Company.id).where(Company.parent_id == cid))).scalars().all()
+    return [cid, *partner_ids]
+
+
 async def log_activity(
     session: DBSessionDep,
     onboarding_id: UUID,
@@ -75,7 +89,7 @@ async def list_onboardings(
     candidate_id: UUID | None = None,
 ) -> list[Onboarding]:
     """List all onboarding processes."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = select(Onboarding).options(
         selectinload(Onboarding.status),
         selectinload(Onboarding.template),
@@ -97,7 +111,7 @@ async def list_onboardings(
             CandidateApplication.candidate_id == candidate_id
         )
 
-    stmt = stmt.where(Onboarding.company_id == company_id).order_by(Onboarding.created_at.desc())
+    stmt = stmt.where(Onboarding.company_id.in_(allowed)).order_by(Onboarding.created_at.desc())
 
     result = await session.execute(stmt)
     return list(result.scalars().all())
@@ -113,7 +127,7 @@ async def initiate_onboarding(
     background_tasks: BackgroundTasks,
 ) -> Onboarding:
     """Initiate onboarding for a candidate."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = (
         select(CandidateApplication)
         .options(selectinload(CandidateApplication.candidate))
@@ -122,11 +136,15 @@ async def initiate_onboarding(
     result = await session.execute(stmt)
     application = result.scalar_one_or_none()
 
-    if not application or application.company_id != company_id:
+    if not application or application.company_id not in allowed:
         raise HTTPException(status_code=404, detail="Candidate application not found")
 
+    # The onboarding is owned by the APPLICATION's company (the partner's, for a consultancy),
+    # so it stays visible to that company and to the consultancy via partner scoping.
+    target_company_id = application.company_id
+
     check_stmt = select(Onboarding).where(
-        Onboarding.application_id == request.application_id, Onboarding.company_id == company_id
+        Onboarding.application_id == request.application_id, Onboarding.company_id == target_company_id
     )
     res_check = await session.execute(check_stmt)
     if res_check.scalar_one_or_none():
@@ -139,7 +157,7 @@ async def initiate_onboarding(
     onboarding = await initiate_onboarding_process(
         session=session,
         application_id=request.application_id,
-        company_id=cast("UUID", company_id),
+        company_id=cast("UUID", target_company_id),
         template_id=request.template_id,
         performed_by=f"{first_name} {last_name}".strip(),
         background_tasks=background_tasks,
@@ -160,7 +178,7 @@ async def initiate_onboarding(
             selectinload(Onboarding.application).selectinload(CandidateApplication.candidate),
             selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement),
         )
-        .where(Onboarding.id == onboarding.id, Onboarding.company_id == company_id)
+        .where(Onboarding.id == onboarding.id, Onboarding.company_id == target_company_id)
     )
 
     result_onb = await session.execute(stmt_onb)
@@ -194,6 +212,7 @@ async def get_onboarding(
     ],
 ) -> Onboarding:
     """Get detailed onboarding info."""
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = (
         select(Onboarding)
         .options(
@@ -206,7 +225,7 @@ async def get_onboarding(
             selectinload(Onboarding.application).selectinload(CandidateApplication.candidate),
             selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement),
         )
-        .where(Onboarding.id == id, Onboarding.company_id == getattr(current_user, "company_id", None))
+        .where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     )
 
     result = await session.execute(stmt)
@@ -229,20 +248,23 @@ async def resubmit_onboarding(
     background_tasks: BackgroundTasks,
 ) -> Onboarding:
     """Request corrections for onboarding (selective rejection)."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = (
         select(Onboarding)
         .options(
             selectinload(Onboarding.application).selectinload(CandidateApplication.candidate),
             selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement),
         )
-        .where(Onboarding.id == id, Onboarding.company_id == company_id)
+        .where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     )
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding not found")
+
+    # Child rows/activity belong to the onboarding's own company (partner-safe).
+    company_id = onboarding.company_id
 
     status_stmt = select(OnboardingStatus).where(OnboardingStatus.name.in_(["Action Required", "Rejected"]))
     res_status = await session.execute(status_stmt)
@@ -293,20 +315,22 @@ async def approve_onboarding(
     background_tasks: BackgroundTasks,
 ) -> Onboarding:
     """Finalize/Approve onboarding and move candidate to Hired."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = (
         select(Onboarding)
         .options(
             selectinload(Onboarding.application).selectinload(CandidateApplication.candidate),
             selectinload(Onboarding.application).selectinload(CandidateApplication.job_requirement),
         )
-        .where(Onboarding.id == id, Onboarding.company_id == company_id)
+        .where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     )
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding not found")
+
+    company_id = onboarding.company_id
 
     status_stmt = select(OnboardingStatus).where(OnboardingStatus.name == "Completed")
     res_status = await session.execute(status_stmt)
@@ -348,13 +372,15 @@ async def update_onboarding(
     ],
 ) -> Onboarding:
     """Update onboarding details or status."""
-    company_id = getattr(current_user, "company_id", None)
-    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id == company_id)
+    allowed = await _allowed_company_ids(session, current_user)
+    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding process not found")
+
+    company_id = onboarding.company_id
 
     update_data = request.model_dump(exclude_unset=True)
 
@@ -394,14 +420,15 @@ async def add_note(
     ],
 ) -> OnboardingNote:
     """Add a note to onboarding."""
-    company_id = getattr(current_user, "company_id", None)
-    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id == company_id)
+    allowed = await _allowed_company_ids(session, current_user)
+    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding not found")
 
+    company_id = onboarding.company_id
     first_name = getattr(current_user, "first_name", "")
     last_name = getattr(current_user, "last_name", "")
     agent_name = f"{first_name} {last_name}".strip()
@@ -424,15 +451,17 @@ async def add_task(
     ],
 ) -> OnboardingTask:
     """Add a task to onboarding."""
-    company_id = getattr(current_user, "company_id", None)
-    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id == company_id)
+    allowed = await _allowed_company_ids(session, current_user)
+    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding not found")
 
-    task = OnboardingTask(onboarding_id=id, company_id=cast("UUID", company_id), **request.model_dump())
+    task = OnboardingTask(
+        onboarding_id=id, company_id=cast("UUID", onboarding.company_id), **request.model_dump()
+    )
     session.add(task)
     await session.commit()
     await session.refresh(task)
@@ -449,14 +478,15 @@ async def request_document(
     ],
 ) -> OnboardingDocument:
     """Request a document from candidate."""
-    company_id = getattr(current_user, "company_id", None)
-    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id == company_id)
+    allowed = await _allowed_company_ids(session, current_user)
+    stmt = select(Onboarding).where(Onboarding.id == id, Onboarding.company_id.in_(allowed))
     result = await session.execute(stmt)
     onboarding = result.scalar_one_or_none()
 
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding not found")
 
+    company_id = onboarding.company_id
     doc = OnboardingDocument(
         onboarding_id=id, name=request.name, status="Pending", company_id=cast("UUID", company_id)
     )

@@ -24,6 +24,7 @@ from .public import router as public_router
 from .public_assessment import router as public_assessment_router
 from .public_onboarding import router as public_onboarding_router
 from .simulation import router as simulation_router
+from .skill_assessment import router as skill_assessment_router
 from .sourcing import router as sourcing_router
 from .sourcing_chat import router as sourcing_chat_router
 from .survey import router as survey_router
@@ -56,6 +57,7 @@ router.include_router(employees_router)
 router.include_router(candidates_router)
 router.include_router(projects_router)
 router.include_router(x360_router)
+router.include_router(skill_assessment_router)
 router.include_router(survey_router)
 router.include_router(simulation_router, prefix="/simulations", tags=["Simulations"])
 router.include_router(team_router)

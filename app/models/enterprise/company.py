@@ -22,6 +22,11 @@ class Company(EnterpriseBase):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     config: Mapped[dict[str, object]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     is_consultancy: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    # Platform-level tenant switch. A deactivated tenant's users are blocked at
+    # login (see get_current_user). Distinct from the soft-delete `deleted_at`.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )

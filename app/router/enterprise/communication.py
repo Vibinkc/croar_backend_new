@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from typing import Annotated, Any, cast
 from uuid import UUID
 
+import bleach
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from openai import AsyncOpenAI
@@ -35,6 +36,56 @@ from app.utils.template_render import build_candidate_variables, render_template
 _settings = get_settings()
 
 router = APIRouter(prefix="/communication", tags=["Enterprise Communication"])
+
+# Inbound emails are attacker-controlled HTML (fetched from external senders via IMAP) and the UI
+# renders them with dangerouslySetInnerHTML — so they MUST be sanitized to strip <script>, event
+# handlers, javascript: URLs, iframes, etc. Outbound emails are our own generated/branded HTML and
+# are left intact so their formatting survives.
+_ALLOWED_EMAIL_TAGS = [
+    "p",
+    "br",
+    "hr",
+    "a",
+    "b",
+    "i",
+    "u",
+    "strong",
+    "em",
+    "span",
+    "div",
+    "blockquote",
+    "ul",
+    "ol",
+    "li",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "table",
+    "thead",
+    "tbody",
+    "tr",
+    "td",
+    "th",
+    "pre",
+    "code",
+    "img",
+]
+_ALLOWED_EMAIL_ATTRS = {
+    "a": ["href", "title", "target", "rel"],
+    "img": ["src", "alt", "title", "width", "height"],
+}
+
+
+def sanitize_email_html(html: str | None) -> str:
+    """Strip anything executable from untrusted (inbound) email HTML. `strip=True` drops disallowed
+    tags/attrs; bleach only permits safe URL protocols (http/https/mailto/tel), so `javascript:` and
+    inline `on*` handlers are removed."""
+    if not html:
+        return html or ""
+    return bleach.clean(html, tags=_ALLOWED_EMAIL_TAGS, attributes=_ALLOWED_EMAIL_ATTRS, strip=True)
 
 
 async def get_communication_context(
@@ -236,7 +287,7 @@ async def get_email_logs(
     direction: str | None = None,
     favorite: bool = False,
     trashed: bool = False,
-) -> list[EmailLog]:
+) -> list[EmailLogResponse]:
     """Get history of emails for a folder (inbox / sent / favorites / trash)."""
     stmt = select(EmailLog).where(EmailLog.company_id == getattr(current_user, "company_id", None))
 
@@ -255,7 +306,15 @@ async def get_email_logs(
 
     stmt = stmt.order_by(EmailLog.sent_at.desc())
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+
+    # Sanitize inbound (untrusted, external) HTML before it reaches the browser's innerHTML.
+    out: list[EmailLogResponse] = []
+    for log in result.scalars().all():
+        resp = EmailLogResponse.model_validate(log)
+        if (log.direction or "").upper() == "INBOUND":
+            resp.body = sanitize_email_html(resp.body)
+        out.append(resp)
+    return out
 
 
 @router.post("/sync-imap")
@@ -453,8 +512,10 @@ async def get_candidate_fit(
 async def send_emails(
     request: EmailSendRequest,
     session: DBSessionDep,
+    # Sending an email is a "create" (matches the Compose/Reply UI gate) — was `moderate`, which
+    # the UI never checks, so users who could compose got a 403 on send.
     current_user: Annotated[
-        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
+        object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.create))
     ],
     _background_tasks: BackgroundTasks,
 ) -> dict[str, int]:

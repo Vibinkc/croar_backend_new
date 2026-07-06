@@ -257,20 +257,27 @@ async def create_and_start_cycle(
         start_date=request.start_date,
         end_date=request.end_date,
         status=CycleStatus.ACTIVE,
+        # Link the chosen template. Without this the cycle had no template, so
+        # every assessment resolved to ZERO questions and couldn't be filled in.
+        template_id=request.template_id,
         company_id=cast("UUID", company_id),
     )
     db.add(new_cycle)
     await db.flush()
 
-    # Create assignments for each employee
+    # Create assignments only for the ratees selected in the UI (scoped to the
+    # company + not soft-deleted). The previous code ignored request.ratee_ids and
+    # assessed the ENTIRE company regardless of who was chosen.
     from app.models.enterprise.employee import Employee
 
-    # 1. Get all employees in the company
-    emp_stmt = select(Employee).where(Employee.company_id == company_id)
+    emp_stmt = select(Employee).where(
+        Employee.company_id == company_id, Employee.id.in_(request.ratee_ids), Employee.deleted_at.is_(None)
+    )
     emp_res = await db.execute(emp_stmt)
     employees = emp_res.scalars().all()
 
-    # 2. For each employee, create a self-assessment and manager-assessment (Simplified logic)
+    # For each selected ratee: a self-assessment + a manager assessment (if any).
+    rater_ids: set = set()
     for emp in employees:
         # Self-assessment
         self_assign = X360AssessmentAssignment(
@@ -281,6 +288,7 @@ async def create_and_start_cycle(
             company_id=cast("UUID", company_id),
         )
         db.add(self_assign)
+        rater_ids.add(emp.id)
 
         # Manager assessment (if manager exists)
         if emp.reporting_to_id:
@@ -292,9 +300,24 @@ async def create_and_start_cycle(
                 company_id=cast("UUID", company_id),
             )
             db.add(mgr_assign)
+            rater_ids.add(emp.reporting_to_id)
 
     await db.commit()
     await db.refresh(new_cycle)
+
+    # Ensure every rater can sign in to their /employee workspace to respond
+    # (auto-provision a login + email a set-password link for anyone without one).
+    # Best-effort: the cycle is already committed, so a provisioning hiccup never
+    # fails the launch.
+    try:
+        from app.services.enterprise.account_service import ensure_logins_for_employees
+
+        await ensure_logins_for_employees(db, company_id, list(rater_ids))
+    except Exception as exc:  # pragma: no cover - provisioning must not break launch
+        from loguru import logger
+
+        logger.warning(f"360 cycle {new_cycle.id}: login provisioning failed: {exc}")
+
     return new_cycle
 
 
@@ -513,6 +536,12 @@ async def submit_assessment(
     assignment = res.scalar_one_or_none()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
+    # Idempotency: without this, re-submitting appended a second set of responses
+    # and double-counted the ratee's scores in the report.
+    if assignment.status == AssignmentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This assessment has already been submitted."
+        )
 
     # Save responses
     for resp_data in request.responses:
@@ -602,6 +631,11 @@ async def portal_submit_assessment(
     assignment = res.scalar_one_or_none()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found")
+    # Idempotency: block a second submission from double-counting the ratee's scores.
+    if assignment.status == AssignmentStatus.COMPLETED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="This assessment has already been submitted."
+        )
 
     # Save responses
     for resp_data in request.responses:

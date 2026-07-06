@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db, get_db_connect
 from app.core.settings import get_settings
+from app.models.enterprise.company import Company
 from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.auth import Role
 from app.models.shared.constants import ModuleScope, PermissionAction
@@ -23,6 +24,9 @@ DBSessionDep = Annotated[AsyncSession, Depends(get_db)]
 DBConnectionDep = Annotated[AsyncConnection, Depends(get_db_connect)]
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token")
+# Same scheme but non-fatal: used by endpoints that work anonymously yet want to
+# scope results to the caller's company when a valid token IS present.
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
 
 
 async def get_current_user(
@@ -50,7 +54,9 @@ async def get_current_user(
         select(EnterpriseUser)
         .options(
             selectinload(EnterpriseUser.roles).selectinload(Role.permissions),
-            selectinload(EnterpriseUser.company),
+            # Load the company AND its parent so a sub-org's login can be blocked
+            # when its parent consultancy is deactivated (cascade).
+            selectinload(EnterpriseUser.company).selectinload(Company.parent),
         )
         .where(EnterpriseUser.email == email)
     )
@@ -58,6 +64,25 @@ async def get_current_user(
     user_eu = result_eu.scalar_one_or_none()
 
     if user_eu:
+        # Offboarding / tenant lifecycle enforcement: a disabled user, a user whose
+        # organisation is deactivated or soft-deleted, OR a user whose parent
+        # consultancy is deactivated (cascade), can no longer authenticate.
+        if not user_eu.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Your account has been deactivated."
+            )
+
+        def _org_blocked(c: object | None) -> bool:
+            return c is not None and (
+                getattr(c, "deleted_at", None) is not None or not getattr(c, "is_active", True)
+            )
+
+        company = user_eu.company
+        # A sub-organisation is suspended when its parent consultancy is.
+        if _org_blocked(company) or _org_blocked(getattr(company, "parent", None)):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Your organization has been deactivated."
+            )
         return user_eu
 
     # 2. Check for SuperAdmin
@@ -70,8 +95,6 @@ async def get_current_user(
     user_sa = result_sa.scalar_one_or_none()
 
     if user_sa:
-        from app.models.enterprise.company import Company
-
         stmt_company = select(Company.id).limit(1)
         res_company = await session.execute(stmt_company)
         first_company_id = res_company.scalar()
@@ -84,6 +107,24 @@ async def get_current_user(
 
 # Deprecated alias for backward compatibility
 # Legacy alias removed after RBAC migration
+
+
+async def get_optional_company_id(
+    token: Annotated[str | None, Depends(oauth2_scheme_optional)], session: DBSessionDep
+) -> str | None:
+    """Best-effort company scoping for otherwise-anonymous endpoints.
+
+    Returns the caller's `company_id` as a string when a valid token is present,
+    otherwise `None`. Never raises — a missing/invalid token just means "no scope".
+    """
+    if not token:
+        return None
+    try:
+        user = await get_current_user(token, session)
+    except HTTPException:
+        return None
+    company_id = getattr(user, "company_id", None)
+    return str(company_id) if company_id else None
 
 
 class PermissionChecker:

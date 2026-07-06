@@ -586,11 +586,27 @@ async def forgot_password(session: DBSessionDep, data: dict[str, str] = Body(...
         reset_token = create_access_token(
             subject=email, extra_claims={"type": "reset_password"}, expires_delta=timedelta(minutes=15)
         )
+        from fastapi.concurrency import run_in_threadpool
 
-        # In a real app, send an email here.
-        # For now, we'll print it to the console for development.
-        reset_link = f"http://localhost:3000/enterprise/reset-password?token={reset_token}"
-        print(f"\n[PASSWORD RESET] Link for {email}:\n{reset_link}\n")
+        from app.core.settings import get_settings
+        from app.router.enterprise.communication import send_smtp_email
+
+        base = str(get_settings().frontend_url).rstrip("/")
+        reset_link = f"{base}/enterprise/reset-password?token={reset_token}"
+        body = (
+            "<p>We received a request to reset your Croar password.</p>"
+            f"<p><a href='{reset_link}' style='display:inline-block;padding:10px 18px;"
+            "background:#5B53E0;color:#fff;border-radius:8px;text-decoration:none;font-weight:600'>"
+            "Reset password</a></p>"
+            f"<p>Or paste this link into your browser (valid for 15 minutes):<br>{reset_link}</p>"
+            "<p>If you didn't request this, you can safely ignore this email.</p>"
+        )
+        try:
+            await run_in_threadpool(send_smtp_email, email, "Reset your Croar password", body)
+        except Exception as exc:  # pragma: no cover - email must not break the flow
+            from loguru import logger
+
+            logger.warning(f"Password-reset email to {email} failed: {exc}")
 
     # Always return success to prevent email enumeration
     return {"message": "If an account exists, a reset link has been sent."}

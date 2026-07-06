@@ -289,6 +289,18 @@ async def launch_survey(
 
     await db.commit()
 
+    # Ensure every participant can sign in to their /employee workspace to take
+    # the survey (auto-provision a login + set-password email for anyone without
+    # one). Best-effort — the instance is already committed.
+    try:
+        from app.services.enterprise.account_service import ensure_logins_for_employees
+
+        await ensure_logins_for_employees(db, getattr(current_user, "company_id", None), target_ids)
+    except Exception as exc:  # pragma: no cover - provisioning must not break launch
+        from loguru import logger
+
+        logger.warning(f"Survey {new_instance.id}: login provisioning failed: {exc}")
+
     # Notify in background
     background_tasks.add_task(survey_service.notify_participants, db, new_instance.id)
 

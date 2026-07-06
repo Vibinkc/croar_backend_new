@@ -3,11 +3,12 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.candidate import CandidateApplication
+from app.models.enterprise.company import Company
 from app.models.enterprise.interview import InterviewSchedule
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.applications import ApplicationResponse, UpdateStageRequest
@@ -15,14 +16,29 @@ from app.schemas.enterprise.applications import ApplicationResponse, UpdateStage
 router = APIRouter(prefix="/applications", tags=["Enterprise Applications"])
 
 
+async def _allowed_company_ids(session: DBSessionDep, current_user: object) -> list[Any]:
+    """Company ids the caller may act on: own company, plus partner companies for a consultancy
+    (`Company.parent_id == own`). Mirrors the jobs scoping so a consultancy that can see partner
+    jobs can also see/manage their candidates — previously applications were own-company-only, so a
+    consultancy selecting a partner job saw an empty board."""
+    cid = getattr(current_user, "company_id", None)
+    is_consultancy = getattr(getattr(current_user, "company", None), "is_consultancy", False)
+    if not is_consultancy:
+        return [cid]
+    partner_ids = (await session.execute(select(Company.id).where(Company.parent_id == cid))).scalars().all()
+    return [cid, *partner_ids]
+
+
 @router.get("/", response_model=list[ApplicationResponse])
 async def list_applications(
     session: DBSessionDep,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
     job_id: UUID | None = None,
 ) -> list[ApplicationResponse]:
     """List applications, optionally filtered by job_id."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = (
         select(CandidateApplication)
         .options(
@@ -31,7 +47,9 @@ async def list_applications(
             selectinload(CandidateApplication.onboarding),
             selectinload(CandidateApplication.interview_schedules).selectinload(InterviewSchedule.attempts),
         )
-        .where(CandidateApplication.company_id == company_id)
+        # Exclude soft-deleted applications — deleting a job soft-deletes its (non-hired)
+        # applications, and those must not keep showing up on the pipeline board.
+        .where(CandidateApplication.company_id.in_(allowed), CandidateApplication.deleted_at.is_(None))
     )
 
     if job_id:
@@ -85,12 +103,16 @@ async def update_stage(
     application_id: UUID,
     request: UpdateStageRequest,
     session: DBSessionDep,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.moderate))],
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.update))
+    ],
 ) -> dict[str, object]:
     """Move application to a new stage."""
-    company_id = getattr(current_user, "company_id", None)
+    allowed = await _allowed_company_ids(session, current_user)
     stmt = select(CandidateApplication).where(
-        CandidateApplication.id == application_id, CandidateApplication.company_id == company_id
+        CandidateApplication.id == application_id,
+        CandidateApplication.company_id.in_(allowed),
+        CandidateApplication.deleted_at.is_(None),
     )
     result = await session.execute(stmt)
     application = result.scalar_one_or_none()
@@ -112,7 +134,9 @@ async def update_stage(
 @router.get("/stages")
 async def get_stages(
     session: DBSessionDep,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
     job_id: UUID | None = None,
 ) -> list[Any]:
     """Return defined stages for the Kanban board."""
@@ -122,9 +146,9 @@ async def get_stages(
     try:
         from app.models.enterprise.job import JobRequirement
 
-        company_id = getattr(current_user, "company_id", None)
+        allowed = await _allowed_company_ids(session, current_user)
         stmt = select(JobRequirement).where(
-            JobRequirement.id == job_id, JobRequirement.company_id == company_id
+            JobRequirement.id == job_id, JobRequirement.company_id.in_(allowed)
         )
         result = await session.execute(stmt)
         job = result.scalar_one_or_none()
@@ -142,16 +166,29 @@ async def get_stages(
 async def bulk_delete_applications(
     application_ids: list[UUID],
     session: DBSessionDep,
-    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.delete))],
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.delete))
+    ],
 ) -> dict[str, object]:
-    """Bulk delete applications."""
-    from sqlalchemy import delete
+    """Bulk delete applications (soft delete).
 
-    company_id = getattr(current_user, "company_id", None)
-    stmt = delete(CandidateApplication).where(
-        CandidateApplication.id.in_(application_ids), CandidateApplication.company_id == company_id
+    Soft-delete (set `deleted_at`) rather than a hard `DELETE`: a hard delete would (a) be
+    inconsistent with how job deletion removes applications, and (b) fail with FK violations for
+    candidates that already have assessment attempts / interviews / onboarding rows referencing
+    them. The pipeline list already filters out `deleted_at IS NOT NULL`.
+    """
+    allowed = await _allowed_company_ids(session, current_user)
+    stmt = (
+        update(CandidateApplication)
+        .where(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.company_id.in_(allowed),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .values(deleted_at=datetime.now())
     )
-    await session.execute(stmt)
+    result = await session.execute(stmt)
     await session.commit()
 
-    return {"message": f"Successfully deleted {len(application_ids)} applications"}
+    deleted = getattr(result, "rowcount", None) or 0
+    return {"message": f"Successfully deleted {deleted} applications", "deleted": deleted}

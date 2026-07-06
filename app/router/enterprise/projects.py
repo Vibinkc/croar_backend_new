@@ -35,6 +35,10 @@ async def create_project(
         status=request.status,
         start_date=request.start_date,
         end_date=request.end_date,
+        # Persist the board stages chosen at creation — without this the custom
+        # kanban_columns were dropped and the project silently reverted to the
+        # default ["Planning","Development","Testing","Done"] until a later edit.
+        kanban_columns=request.kanban_columns,
         company_id=cast("UUID", getattr(current_user, "company_id", None)),
     )
     db.add(new_project)
@@ -368,6 +372,29 @@ async def update_project_task(
     )
     res_reload = await db.execute(stmt_reload)
     return res_reload.scalar_one()
+
+
+@router.delete("/tasks/{task_id}", status_code=204)
+async def delete_project_task(
+    task_id: UUID,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.projects, PermissionAction.delete))
+    ],
+) -> None:
+    """Delete a task. Company-scoped; the board's delete button calls this — it
+    previously hit no route (405) and failed silently."""
+    stmt = select(ProjectTask).where(
+        ProjectTask.id == task_id, ProjectTask.company_id == getattr(current_user, "company_id", None)
+    )
+    res = await db.execute(stmt)
+    task = res.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    await db.delete(task)
+    await db.commit()
+    return
 
 
 @router.patch("/tasks/{task_id}/move", response_model=ProjectTaskSchema)

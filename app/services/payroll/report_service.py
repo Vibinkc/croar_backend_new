@@ -194,16 +194,25 @@ def _table_pdf(
     weight_total = sum(w for *_, w in columns)
     widths = [usable * w / weight_total for *_, w in columns]
 
+    def _fit(text: str, width: float) -> str:
+        """Truncate `text` to the cell's inner width, measured in the *current*
+        font — so a value is clipped only when it genuinely doesn't fit (the old
+        rough char budget over-truncated names/PAN that would have fit)."""
+        avail = width - 2 * pdf.c_margin
+        if not text or pdf.get_string_width(text) <= avail:
+            return text
+        ellipsis = "…"
+        while text and pdf.get_string_width(text + ellipsis) > avail:
+            text = text[:-1]
+        return text + ellipsis if text else ellipsis
+
     def _row(values: list[str], *, head: bool) -> None:
         pdf.set_font("Helvetica", "B" if head else "", 8)
         if head:
             pdf.set_fill_color(*_HEAD_FILL)
         for (header, key, numeric, _), width in zip(columns, widths):
             text = header if head else _fmt(values_map.get(key), numeric)
-            # Truncate to fit the cell width (rough char budget at 8pt).
-            budget = max(3, int(width / 1.7))
-            if len(text) > budget:
-                text = text[: budget - 1] + "…"
+            text = _fit(text, width)
             align = "R" if (numeric and not head) else ("C" if head else "L")
             pdf.cell(width, 6.5, text, border=1, align=align, fill=head)
         pdf.ln()

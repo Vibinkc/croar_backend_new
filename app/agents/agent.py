@@ -1,3 +1,7 @@
+import asyncio
+import logging
+from typing import Any
+
 from langchain_core.messages import AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
@@ -25,6 +29,7 @@ from app.agents.tools import (
 from app.core.settings import get_settings
 
 _settings = get_settings()
+logger = logging.getLogger(__name__)
 
 # 1. Setup LLM and Tools
 tools = [
@@ -106,12 +111,14 @@ MANAGING EXISTING JOBS (list / update / delete):
   find it rather than guessing.
 
 SOURCING CANDIDATES (after a job exists):
-- Right after you build a job/pipeline, OFFER to source candidates, e.g.: "Want me to source
-  candidates for this role? Tell me how many to search." Keep the job_id from the build result.
-- When the user wants to source candidates (e.g. "source 10 candidates"), CALL the
-  source_candidates tool with: job_id (from the build result or list_jobs), role (the job title),
-  skills (comma-separated), count (the number they gave — DEFAULT 10 if unspecified), and location.
-  Do NOT ask "how many?" again if the user already gave a number — just call the tool with it.
+- Right after you build a job/pipeline, OFFER to source candidates and ASK how many, e.g.: "Want me
+  to source candidates for this role? How many should I search for?" Keep the job_id from the build result.
+- ALWAYS get an explicit number from the user FIRST. There is NO default count — never assume 10 or
+  any other number. If the user has not said how many, ask "How many candidates should I source?"
+  and wait for their answer. Do NOT call source_candidates until you have a number.
+- Once the user gives a number, CALL source_candidates with: job_id (from the build result or
+  list_jobs), role (the job title), skills (comma-separated), count (EXACTLY the number they gave),
+  and location. If you call it without a count it will reply "need_count" — then just ask the user.
 - The UI renders the returned candidates as a checkbox list and sends the invites itself; you do
   NOT send invites yourself. After the tool returns, just tell the user to pick who to invite.
 - NOTE (testing): invites are currently redirected to a single test inbox, not real candidates.
@@ -146,11 +153,12 @@ async def call_model(state: AgentState):
 
 
 # 3. Define the Graph
-def create_hr_graph():
+def create_hr_graph(checkpointer: Any = None):
     # pyright can't match a TypedDict against LangGraph's StateLike protocols
     # (TypedDictLikeV1/V2); the schema is valid and runs correctly at runtime.
     workflow = StateGraph(AgentState)  # pyright: ignore[reportArgumentType]
-    checkpointer = MemorySaver()
+    if checkpointer is None:
+        checkpointer = MemorySaver()
 
     # Add Nodes
     workflow.add_node("agent", call_model)
@@ -175,5 +183,67 @@ def create_hr_graph():
     return workflow.compile(checkpointer=checkpointer)
 
 
-# Singleton instance of the graph
+# In-memory fallback graph — ALWAYS available so the Pilot works even without the persistent
+# checkpointer dependency. MemorySaver loses conversation state on restart and isn't shared across
+# workers/pods, so we upgrade to a persistent Postgres checkpointer when it's installed (below).
 hr_agent_executor = create_hr_graph()
+
+# Lazily-built persistent graph. Built on first chat (needs a running event loop) and cached.
+# Falls back to `hr_agent_executor` on ANY failure, so the Pilot never breaks if the dependency
+# or DB connection is unavailable.
+_persistent_executor: Any = None
+_persistent_tried = False
+_persistent_cm: Any = None  # keep the saver's async context manager alive for the process lifetime
+_persistent_lock = asyncio.Lock()
+
+
+def _pg_conn_string() -> str:
+    """psycopg-style DSN for the app's Postgres (the SQLAlchemy engine uses asyncpg; the LangGraph
+    Postgres saver uses psycopg, so it needs a plain `postgresql://` URL, not `+asyncpg`)."""
+    from urllib.parse import quote_plus
+
+    user = quote_plus(_settings.db_user)
+    pwd = quote_plus(_settings.db_password)
+    return f"postgresql://{user}:{pwd}@{_settings.db_host}:{_settings.db_port}/{_settings.db_name}"
+
+
+async def _init_persistent_executor() -> Any:
+    """Build a Postgres-backed graph; return None (→ in-memory fallback) on any failure."""
+    try:
+        # Optional dependency: absent until `langgraph-checkpoint-postgres` (+ psycopg) is installed.
+        from langgraph.checkpoint.postgres.aio import (
+            AsyncPostgresSaver,  # type: ignore[import-not-found, import-untyped]
+        )
+    except Exception:
+        logger.info("langgraph-checkpoint-postgres not installed — Croar Pilot using in-memory state.")
+        return None
+
+    global _persistent_cm
+    try:
+        cm = AsyncPostgresSaver.from_conn_string(_pg_conn_string())
+        # Enter the context manager and keep it open for the process lifetime (never __aexit__),
+        # so the singleton saver/connection pool stays valid across requests.
+        saver = await cm.__aenter__()
+        await saver.setup()  # idempotent — creates the checkpoint tables on first run
+        _persistent_cm = cm
+        logger.info("Croar Pilot using persistent Postgres checkpointer.")
+        return create_hr_graph(saver)
+    except Exception:
+        logger.exception("Persistent Pilot checkpointer init failed — falling back to in-memory.")
+        return None
+
+
+async def get_agent_executor() -> Any:
+    """Return the persistent-state Pilot graph if available, else the in-memory one.
+
+    Tried once (cached); on failure we stick with the in-memory graph so a missing dependency or a
+    transient DB issue never takes the Pilot down.
+    """
+    global _persistent_executor, _persistent_tried
+    if _persistent_executor is not None:
+        return _persistent_executor
+    async with _persistent_lock:
+        if _persistent_executor is None and not _persistent_tried:
+            _persistent_tried = True
+            _persistent_executor = await _init_persistent_executor()
+    return _persistent_executor or hr_agent_executor
