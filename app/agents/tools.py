@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -25,6 +27,22 @@ def _company_id(config: RunnableConfig, fallback: str | None = None) -> str:
     if not cid:
         raise ValueError("No company_id in agent context")
     return str(cid)
+
+
+# Live "what the Pilot is doing right now" per conversation thread, so the UI can show the REAL
+# current step (e.g. "Generating questions…") instead of a guessed rotation. In-memory is fine —
+# the API runs a single uvicorn worker and the progress GET is served on the same event loop while
+# a build/source is awaiting. Keyed by the (namespaced) thread_id from the graph config.
+PILOT_PROGRESS: dict[str, str] = {}
+
+
+def _set_progress(config: "RunnableConfig", text: str) -> None:
+    try:
+        tid = config.get("configurable", {}).get("thread_id")
+        if tid:
+            PILOT_PROGRESS[str(tid)] = text
+    except Exception:
+        pass
 
 
 def _clamp_int(value: Any, lo: int, hi: int, default: int) -> int:
@@ -490,9 +508,217 @@ async def delete_job(job_id: str, config: RunnableConfig) -> dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
+# Generic role/seniority words that carry no discriminating signal — matching them would keep
+# almost any profile, so they're dropped when building the relevance keyword set.
+_GENERIC_ROLE_TERMS = {
+    "senior",
+    "junior",
+    "lead",
+    "mid",
+    "principal",
+    "staff",
+    "entry",
+    "intern",
+    "trainee",
+    "associate",
+    "engineer",
+    "developer",
+    "consultant",
+    "specialist",
+    "analyst",
+    "manager",
+    "architect",
+    "administrator",
+    "expert",
+    "professional",
+    "years",
+    "year",
+    "experience",
+    "exp",
+    "role",
+    "job",
+    "position",
+    "and",
+    "or",
+    "the",
+    "for",
+    "with",
+    "of",
+    "in",
+    "at",
+    "on",
+}
+
+
+# Candidate-grade platforms only — professional / hireable-profile sources. The content & academic
+# providers (devto, medium, arxiv, researchgate, academicjournals, conferencespeakers, reddit,
+# hackernews, hashnode, patentdatabases, openstreetmap, producthunt) return article/paper AUTHORS,
+# not candidates, and flooded results with noise — so candidate sourcing skips them.
+_CANDIDATE_PLATFORMS = [
+    "linkedin",
+    "github",
+    "stackoverflow",
+    "wellfound",
+    "crunchbase",
+    "hackerrank",
+    "leetcode",
+    "behance",
+    "dribbble",
+    "googlescholar",
+    "twitter",
+]
+
+# Result "names" that are actually site chrome / repo / file pages, not people — dropped outright.
+_JUNK_NAME_TERMS = {
+    "jobs",
+    "join",
+    "about",
+    "credits",
+    "directory",
+    "master",
+    "main",
+    "home",
+    "explore",
+    "pricing",
+    "docs",
+    "documentation",
+    "blog",
+    "sign in",
+    "log in",
+    "login",
+    "register",
+    "projects",
+    "packages",
+    "package",
+    "group",
+    "groups",
+    "topics",
+    "search",
+    "help",
+    "settings",
+    "dashboard",
+    "overview",
+    "readme",
+    "license",
+    "contributing",
+    "wiki",
+    "issues",
+    "members",
+    "activity",
+    "tags",
+    "branches",
+    "commits",
+    "tree",
+    "releases",
+    "marketing jobs",
+}
+
+
+def _is_junk_profile(p: dict[str, Any]) -> bool:
+    """True for rows that clearly aren't a person (repo/file/page titles the scrapers pick up)."""
+    name = (p.get("full_name") or "").strip().lower()
+    if len(name) < 2 or name in _JUNK_NAME_TERMS:
+        return True
+    # filenames / paths / obvious non-name tokens
+    return bool("/" in name or "·" in name or name.endswith((".txt", ".md", ".py", ".js", ".json", ".yml")))
+
+
+def _keyword_set(text: str | None) -> set[str]:
+    """Distinctive keywords from a piece of text (role title or skills)."""
+    tokens = re.findall(r"[a-z0-9][a-z0-9+#.\-]*", (text or "").lower())
+    return {t for t in tokens if len(t) >= 2 and t not in _GENERIC_ROLE_TERMS}
+
+
+def _rank_profiles_by_relevance(
+    profiles: list[dict[str, Any]], role: str | None, skills: str | None
+) -> list[dict[str, Any]]:
+    """Keep only profiles whose PROFESSIONAL descriptor actually references the role/skills, ranked
+    best-first. We score the headline / summary / title ONLY — never the person's name (so "SAP"
+    doesn't match "Maarten Sap") and never scraped content tags (which just echo the search term).
+
+    A profile is kept only if a ROLE-title term appears, or at least TWO distinct skills do — one
+    stray 2-letter acronym (e.g. "SD" inside an unrelated title) is not enough. Profiles with no
+    real signal are dropped, so sourcing reflects the job description instead of noise."""
+    role_kw = _keyword_set(role)
+    skill_kw = _keyword_set(skills) - role_kw
+    if not role_kw and not skill_kw:
+        return profiles
+
+    ranked: list[tuple[int, int, dict[str, Any]]] = []
+    for p in profiles:
+        raw_title = (p.get("raw_data") or {}).get("title") if isinstance(p.get("raw_data"), dict) else ""
+        haystack = (
+            f"{p.get('headline') or ''} {p.get('ai_summary') or ''} {p.get('title') or ''} "
+            f"{raw_title or ''} {p.get('profile_url') or ''}"
+        ).lower()
+        role_hits = sum(1 for k in role_kw if k in haystack)
+        skill_hits = sum(1 for k in skill_kw if k in haystack)
+        if role_hits >= 1 or skill_hits >= 2:
+            # sort: strongest match first (role terms weighted higher), then email-having profiles
+            score = role_hits * 3 + skill_hits
+            ranked.append((score, 0 if p.get("email") else 1, p))
+
+    ranked.sort(key=lambda t: (-t[0], t[1]))
+    return [p for _, _, p in ranked]
+
+
+async def _resolve_job_id(config: RunnableConfig | None, job_id: str, role: str | None) -> str:
+    """Resolve the REAL job UUID. The LLM sometimes passes the role name (e.g. "SAP") instead of the
+    job's UUID; match it to an existing job by id, then by title, so the candidate picker / invites
+    downstream carry a valid job id (a non-UUID here is exactly what 422'd every invite)."""
+    from sqlalchemy import func, select
+
+    cfg = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
+    session = cfg.get("session")
+    cid = cfg.get("company_id")
+    if session is None or not cid:
+        return str(job_id)
+    try:
+        cid_uuid = UUID(str(cid))
+    except (ValueError, TypeError):
+        return str(job_id)
+    # 1) already a valid UUID for this company?
+    try:
+        juid = UUID(str(job_id))
+        row = (
+            await session.execute(
+                select(JobRequirement.id).where(
+                    JobRequirement.id == juid, JobRequirement.company_id == cid_uuid
+                )
+            )
+        ).first()
+        if row:
+            return str(juid)
+    except (ValueError, TypeError, AttributeError):
+        pass
+    # 2) match by title (job_id may be the role name; also try the role arg)
+    for term in (job_id, role):
+        t = (term or "").strip()
+        if not t:
+            continue
+        row = (
+            await session.execute(
+                select(JobRequirement.id)
+                .where(
+                    func.lower(func.trim(JobRequirement.title)) == t.lower(),
+                    JobRequirement.company_id == cid_uuid,
+                )
+                .order_by(JobRequirement.created_at.desc())
+            )
+        ).first()
+        if row:
+            return str(row[0])
+    return str(job_id)
+
+
 @tool
 async def source_candidates(
-    job_id: str, role: str, skills: str | None = None, count: int | None = None, location: str | None = None
+    job_id: str,
+    role: str,
+    config: RunnableConfig,
+    skills: str | None = None,
+    count: int | None = None,
+    location: str | None = None,
 ) -> dict[str, Any]:
     """Search LIVE candidate profiles for an existing job across all sourcing platforms. CALL THIS
     whenever the user wants to source / find candidates for a job (e.g. "source 10 candidates").
@@ -505,7 +731,12 @@ async def source_candidates(
 
     The UI renders the returned candidates as a checkbox list and handles sending the invites; you do
     NOT send invites yourself. After calling it, briefly tell the user to pick who to invite."""
-    from app.router.enterprise.sourcing import backfill_contacts, search_all_platforms
+    from app.router.enterprise.sourcing import (
+        backfill_contacts,
+        parse_search_constraints,
+        search_all_platforms,
+    )
+    from app.services.enterprise.sourcing import profile_store
 
     # No count supplied → ask the user how many rather than defaulting. The Pilot must
     # collect an explicit number before it sources anyone.
@@ -516,12 +747,89 @@ async def source_candidates(
         }
 
     count = _clamp_int(count, 1, 25, 10)
-    query = " ".join(p.strip() for p in [role, skills] if p and p.strip())
-    if not query:
+    # `location` is still accepted (the Pilot passes the JD location) but intentionally NOT used to
+    # hard-filter the search — doing so dropped every strong global match. Kept for API compatibility.
+    _ = location
+    # Make sure the id we hand to the UI (and later the invite) is a REAL job UUID, even if the LLM
+    # passed the role name here.
+    job_id = await _resolve_job_id(config, job_id, role)
+    company_id = config.get("configurable", {}).get("company_id")
+
+    # Source EXACTLY the way the manual Sourcing chat does — the reason THAT returns rich, on-target
+    # profiles (e.g. GitHub ArcGIS devs at Esri) is that it is DATABASE-FIRST: it serves the pool
+    # Croar has already scraped before falling back to a fresh scrape. The Pilot previously only did a
+    # fresh scrape AND forced the JD location AND used a narrow platform set, so it returned local
+    # noise. Now we mirror the chat: parse the role into keywords, pull stored matches first, then
+    # live-scrape only the shortfall (professional platforms only) — never hard-filtering by location.
+    try:
+        constraints = await asyncio.to_thread(parse_search_constraints, role or "")
+        role_terms = list(constraints.get("role_keywords") or []) + list(
+            constraints.get("seniority_keywords") or []
+        )
+        search_query = " ".join(str(t).strip() for t in role_terms if t).strip() or (role or "").strip()
+        parsed_location = constraints.get("location") or None
+    except Exception:
+        role_terms = [t for t in re.split(r"[\s,]+", (role or "")) if t]
+        search_query = (role or "").strip()
+        parsed_location = None
+
+    if not search_query:
         return {"status": "error", "message": "Tell me the role to search candidates for."}
     try:
-        profiles = await search_all_platforms(query, location, page=1, page_size=min(max(count, 5), 15))
+
+        def _clean_rank(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Dedup by CONTENT identity (so live + stored copies of one person collapse), drop
+            # non-people, then rank by JD relevance (fall back to unranked if snippets are sparse).
+            uniq: dict[str, dict[str, Any]] = {}
+            for p in rows:
+                k = profile_store.dedup_key(p)
+                if k and k not in uniq and not _is_junk_profile(p):
+                    uniq[k] = p
+            ranked = _rank_profiles_by_relevance(list(uniq.values()), role, skills)
+            return ranked if ranked else list(uniq.values())
+
+        # DB-FIRST — reuse the candidates Croar has ALREADY sourced for this role (this company's own
+        # pool first, then the global pool), exactly like the manual Sourcing chat. The Pilot instantly
+        # serves the same profiles you see in Sourcing, with no re-scrape.
+        _set_progress(config, "Searching the candidate database…")
+        db_rows: list[dict[str, Any]] = []
+        try:
+            if company_id:
+                db_rows += await asyncio.to_thread(
+                    profile_store.search, role_terms, parsed_location, count * 3, str(company_id)
+                )
+            db_rows += await asyncio.to_thread(
+                profile_store.search, role_terms, parsed_location, count * 3, None
+            )
+        except Exception as db_err:
+            logger.warning(f"DB sourcing lookup failed: {db_err}")
+        profiles = _clean_rank(db_rows)
+
+        # Only live-scrape (professional platforms) when the DB doesn't already have enough strong
+        # matches — then persist the fresh results so they're in the DB for next time.
+        if len(profiles) < count:
+            try:
+                _set_progress(config, "Scanning GitHub, LinkedIn and more for fresh profiles…")
+                fresh = await search_all_platforms(
+                    search_query,
+                    parsed_location,
+                    page=1,
+                    page_size=min(max(count * 2, 10), 20),
+                    platforms=_CANDIDATE_PLATFORMS,
+                )
+                try:
+                    await asyncio.to_thread(
+                        profile_store.upsert_many, fresh, role or search_query, company_id
+                    )
+                except Exception:
+                    pass
+                profiles = _clean_rank(db_rows + fresh)
+            except Exception as live_err:
+                logger.warning(f"Live sourcing scrape failed: {live_err}")
+
+        _set_progress(config, "Ranking the strongest profiles & fetching contacts…")
         profiles = await backfill_contacts(profiles, limit=min(count, 8))
+        # Stable secondary sort: email-having first, preserving the relevance order within each group.
         profiles.sort(key=lambda p: 0 if p.get("email") else 1)
         slim = [
             {
@@ -735,7 +1043,12 @@ async def setup_onboarding_automation(
             "ONBOARDING",
             "Welcome to {{company_name}}!",
             "<p>Hi {{candidate_name}},</p><p>Congratulations &mdash; welcome aboard! "
-            "Please complete your onboarding to get started.</p>",
+            "Please complete your onboarding to get started.</p>"
+            '<p><a href="{{onboarding_url}}" style="display:inline-block;padding:12px 24px;'
+            "background-color:#4f46e5;color:#ffffff;text-decoration:none;border-radius:8px;"
+            'font-weight:600;">Complete Your Onboarding</a></p>'
+            '<p style="color:#6b7280;font-size:13px;">Or copy and paste this link into your '
+            "browser: {{onboarding_url}}</p>",
         )
         auto = OnboardingAutomation(
             job_requirement_id=job_uuid,
@@ -833,6 +1146,7 @@ async def build_hiring_pipeline(
     jd_content: str,
     config: RunnableConfig,
     location: str = "Remote",
+    job_type: str = "Full Time",
     min_exp: int = 0,
     max_exp: int = 10,
     skills: list[str] | None = None,
@@ -900,6 +1214,7 @@ async def build_hiring_pipeline(
         atype = _norm_assessment_type(assessment_type)
 
         # 1. LIVE job with the full 5-stage funnel.
+        _set_progress(config, "Creating the live job…")
         rounds = ["Screening", "Assessment", "AI Interview", "Offer", "Onboarding"]
         stages = [{"id": str(i + 1), "name": n, "order": i + 1} for i, n in enumerate(rounds)]
         job = JobRequirement(
@@ -907,6 +1222,7 @@ async def build_hiring_pipeline(
             description=jd_content,
             company_id=company_uuid,
             location=location,
+            job_type=job_type,
             experience_min=min_exp,
             experience_max=max_exp,
             required_skills=skills or [],
@@ -921,11 +1237,13 @@ async def build_hiring_pipeline(
         # assessment + interview questions CONCURRENTLY (these are the slow LLM calls).
         difficulty = "Advanced" if min_exp >= 5 else "Intermediate" if min_exp >= 2 else "Beginner"
         interview_topic = f"{role_title} ({', '.join(skills)})" if skills else role_title
+        _set_progress(config, "Generating the role-specific assessment & interview questions…")
         assess_questions, interview_questions = await asyncio.gather(
             generate_assessment_questions(atype, assessment_topic, question_count),
             generate_interview_questions_service(interview_topic, 8, difficulty),
         )
 
+        _set_progress(config, "Arming the automated pipeline (emails, assessment, interview, onboarding)…")
         # 2. Mail: screening acknowledgement (stage 1) -> auto-advances to Assessment.
         s_name, s_subj, s_body = _MAIL_TEMPLATES["screening"]
         screen_tpl = await _ensure_email_template(session, cid, s_name, "GENERAL", s_subj, s_body)
@@ -1070,7 +1388,12 @@ async def build_hiring_pipeline(
             "ONBOARDING",
             "Welcome to {{company_name}}!",
             "<p>Hi {{candidate_name}},</p><p>Congratulations &mdash; welcome aboard! "
-            "Please complete your onboarding to get started.</p>",
+            "Please complete your onboarding to get started.</p>"
+            '<p><a href="{{onboarding_url}}" style="display:inline-block;padding:12px 24px;'
+            "background-color:#4f46e5;color:#ffffff;text-decoration:none;border-radius:8px;"
+            'font-weight:600;">Complete Your Onboarding</a></p>'
+            '<p style="color:#6b7280;font-size:13px;">Or copy and paste this link into your '
+            "browser: {{onboarding_url}}</p>",
         )
         # Real, role-specific Onboarding Template (find-or-reuse by name -> no unique-name crash
         # on rebuild; populated with real sections/fields/documents the UI + candidate form use).

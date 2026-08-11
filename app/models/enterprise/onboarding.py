@@ -1,7 +1,17 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, SmallInteger, String, Text, func
+from sqlalchemy import (
+    TIMESTAMP,
+    Boolean,
+    ForeignKey,
+    Integer,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
@@ -11,11 +21,15 @@ from .base import EnterpriseBase
 
 class OnboardingTemplate(EnterpriseBase):
     __tablename__ = "onboarding_templates"
+    # Template names are unique PER COMPANY, not globally — otherwise one company creating a
+    # "<Role> · Onboarding" template blocks every other company from creating one with the same name
+    # (which broke Croar Pilot's pipeline build for common roles like "UI/UX Designer").
+    __table_args__ = (UniqueConstraint("company_id", "name", name="uq_onboarding_templates_company_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Configuration for sections (Welcome, Job Info, Personal, Education, Documents)

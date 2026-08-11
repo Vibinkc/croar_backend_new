@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 async def generate_assessment_questions(
-    type: AssessmentType, topic: str, count: int = 10
+    type: AssessmentType, topic: str, count: int = 10, language: str = "English"
 ) -> list[dict[str, object]]:
     """
     Generates assessment questions using LLM.
@@ -22,7 +22,9 @@ async def generate_assessment_questions(
 
     try:
         if type == AssessmentType.APTITUDE:
-            raw_questions = await generate_aptitude_questions(topic, count, difficulty, context)
+            raw_questions = await generate_aptitude_questions(
+                topic, count, difficulty, context, language=language
+            )
             return [
                 {
                     "id": str(i),
@@ -35,7 +37,9 @@ async def generate_assessment_questions(
                 for i, q in enumerate(raw_questions, 1)
             ]
         if type == AssessmentType.CODING:
-            raw_questions = await generate_coding_questions(topic, count, difficulty, context)
+            raw_questions = await generate_coding_questions(
+                topic, count, difficulty, context, language=language
+            )
             return [
                 {
                     "id": str(i),
@@ -61,8 +65,8 @@ async def generate_assessment_questions(
         apt_count = count // 2
         cod_count = count - apt_count
 
-        apt_raw = await generate_aptitude_questions(topic, apt_count, difficulty, context)
-        cod_raw = await generate_coding_questions(topic, cod_count, difficulty, context)
+        apt_raw = await generate_aptitude_questions(topic, apt_count, difficulty, context, language=language)
+        cod_raw = await generate_coding_questions(topic, cod_count, difficulty, context, language=language)
 
         questions: list[dict[str, object]] = []
         # Map Aptitude
@@ -106,11 +110,11 @@ async def generate_assessment_questions(
 
 
 async def generate_interview_questions_service(
-    topic: str, count: int = 10, difficulty: str = "Intermediate"
+    topic: str, count: int = 10, difficulty: str = "Intermediate", language: str = "English"
 ) -> list[dict[str, object]]:
     """
     Service wrapper for generating interview questions.
     """
     # Don't interpolate user-supplied topic/difficulty into logs (log-injection).
     logger.info("Generating %s interview questions", count)
-    return await giq(topic, count, difficulty)
+    return await giq(topic, count, difficulty, language=language)

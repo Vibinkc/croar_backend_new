@@ -122,14 +122,25 @@ async def _search_single_platform(
 
 
 async def search_all_platforms(
-    query: str, location: str | None = None, page: int = 1, page_size: int = 15
+    query: str,
+    location: str | None = None,
+    page: int = 1,
+    page_size: int = 15,
+    platforms: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fan out a live search across ALL registered sourcing providers, concurrently.
+    """Fan out a live search across sourcing providers, concurrently.
 
     Every provider is queried in parallel with a per-platform timeout; whatever responds
     in time is merged. No local store / cache is involved — results are always fresh.
+
+    `platforms` optionally restricts the fan-out to a subset (unknown names are ignored). This lets
+    candidate sourcing target professional/candidate platforms and skip content/academic ones that
+    only return article authors, not hireable profiles.
     """
-    platform_names = list(sourcing_service.providers.keys())
+    if platforms:
+        platform_names = [p for p in platforms if p in sourcing_service.providers]
+    else:
+        platform_names = list(sourcing_service.providers.keys())
     semaphore = asyncio.Semaphore(PROVIDER_CONCURRENCY)
 
     async def bounded(p: str) -> list[dict[str, Any]]:
@@ -388,6 +399,36 @@ def _has_contact(prof: dict[str, Any]) -> bool:
     )
 
 
+_JUNK_NAME_TERMS = (
+    "hackerrank",
+    "leetcode",
+    "hiring",
+    "coding challenge",
+    "interview solution",
+    "sign in",
+    "log in",
+    "home page",
+    "homepage",
+    "search results",
+    "job board",
+    "not found",
+)
+
+
+def _looks_like_junk_profile(prof: dict[str, Any]) -> bool:
+    """True for non-person results — site pages / domains scraped as candidates
+    (e.g. name = 'hackerrank.comhttps://www.hackerrank.com')."""
+    name = (prof.get("full_name") or "").strip().lower()
+    if not name:
+        return True
+    if "http" in name or "www." in name:
+        return True
+    # A single-token name that ends in a TLD is a domain, not a person.
+    if " " not in name and re.search(r"\.(com|io|org|net|ai|co|dev|edu|gov)\b", name):
+        return True
+    return bool(any(term in name for term in _JUNK_NAME_TERMS))
+
+
 async def backfill_contacts(profiles: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
     """Deep-scrape contact info for up to `limit` profiles that have no email yet."""
     if limit is None:
@@ -478,6 +519,9 @@ async def chat_search_profiles(
     limit: int = Query(10, description="Items per page"),
     enrich_contacts: bool = Query(True, description="Deep-scrape missing emails/socials"),
     has_contact: bool = Query(False, description="Only return profiles that have contact info"),
+    fresh: bool = Query(
+        False, description="Skip the DB tiers and live-scrape fresh profiles (used by the Agent)"
+    ),
 ):
     """Conversational sourcing search — **database-first**, scrape only as a fallback.
 
@@ -510,19 +554,26 @@ async def chat_search_profiles(
                 if pid not in merged:
                     merged[pid] = {**p, "origin": origin}
 
-        # ── Tier 1: this company's own sourcing history (client DB) ──────────
-        if company_id:
-            client_hits = await asyncio.to_thread(
-                profile_store.search, role_terms, location_str, limit, company_id
-            )
-            _add(client_hits, "client_db")
+        # The Agent asks for `fresh=true` — always live-scrape, never reuse DB profiles.
+        if not fresh:
+            # ── Tier 1: this company's own sourcing history (client DB) ──────────
+            if company_id:
+                client_hits = await asyncio.to_thread(
+                    profile_store.search, role_terms, location_str, limit, company_id
+                )
+                _add(client_hits, "client_db")
 
-        # ── Tier 2: the global Croar pool, excluding what tier 1 already gave ─
-        if len(merged) < limit:
-            croar_hits = await asyncio.to_thread(
-                profile_store.search, role_terms, location_str, limit - len(merged), None, set(merged.keys())
-            )
-            _add(croar_hits, "croar_db")
+            # ── Tier 2: the global Croar pool, excluding what tier 1 already gave ─
+            if len(merged) < limit:
+                croar_hits = await asyncio.to_thread(
+                    profile_store.search,
+                    role_terms,
+                    location_str,
+                    limit - len(merged),
+                    None,
+                    set(merged.keys()),
+                )
+                _add(croar_hits, "croar_db")
 
         from_db_count = len(merged)
 
@@ -547,6 +598,10 @@ async def chat_search_profiles(
             _add(stored_fresh, "fresh")
 
         profiles = list(merged.values())
+
+        # Drop non-person / junk results (site pages, domains-as-names, e.g.
+        # "hackerrank.comhttps://www.hackerrank.com") so only real candidates surface.
+        profiles = [p for p in profiles if not _looks_like_junk_profile(p)]
 
         if has_contact:
             profiles = [p for p in profiles if _has_contact(p)]

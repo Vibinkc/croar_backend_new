@@ -138,12 +138,31 @@ async def apply_to_job(
     skills_form = all_fields.get("skills") or all_fields.get("key_skills") or ""
     phone_form = all_fields.get("phone") or all_fields.get("phone_number") or ""
 
-    # 2. Process Resume (Extract Text)
+    # 2. Process Resume (Extract Text + persist the file so the Candidate Bank can show/open the CV)
     resume_text = ""
+    resume_saved_path: str | None = None
     if final_resume:
         try:
             await final_resume.seek(0)
             content = await final_resume.read()
+
+            # Save the uploaded CV under /uploads/resumes (served statically) so it can be viewed
+            # later from the candidate's profile. Best-effort — a save failure must not block applying.
+            try:
+                import os
+                import re as _re
+                from uuid import uuid4
+
+                upload_dir = os.path.join("uploads", "resumes")
+                os.makedirs(upload_dir, exist_ok=True)
+                safe_name = os.path.basename((final_resume.filename or "resume").replace("\\", "/"))
+                safe_name = _re.sub(r"[^A-Za-z0-9._-]", "_", safe_name).lstrip(".") or "resume.pdf"
+                path = os.path.join(upload_dir, f"{uuid4().hex[:8]}_{safe_name}")
+                with open(path, "wb") as fh:
+                    fh.write(content)
+                resume_saved_path = path.replace("\\", "/")
+            except Exception:
+                traceback.print_exc()
 
             text_parts = []
             try:
@@ -257,6 +276,7 @@ async def apply_to_job(
         "phone": phone_form or ai_details.get("phone"),
         "total_experience": ai_details.get("total_experience"),
         "source_platform": all_fields.get("source") or "Careers Page",
+        "resume_file_path": resume_saved_path,
         "parsed_data": {"resume_text": resume_text, "form_fields": all_fields, **ai_details, **ai_analysis}
         if (ai_details or all_fields)
         else None,
@@ -348,6 +368,15 @@ async def apply_to_job(
         coll.update_one({"job_id": str(job.id), "profile.email": email_form}, {"$set": {"status": "applied"}})
     except Exception as e:
         print(f"Error updating shortlist status: {e}")
+
+    # 5.2. Flag the job's Sourcing funnel: if this applicant was a sourced/invited profile, mark them
+    # as having filled the form so the Sourcing tab shows Invited -> Applied (now in the pipeline).
+    try:
+        from app.services.enterprise.sourcing import job_sourcing
+
+        job_sourcing.mark_applied(str(job.id), email_form, str(application.id))
+    except Exception as e:
+        print(f"Error updating sourcing funnel: {e}")
 
     # 6. Trigger Mail Automation (Stage 1 is initial application)
     from app.services.enterprise.automation_service import trigger_automations

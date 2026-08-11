@@ -3,6 +3,7 @@ from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
@@ -10,7 +11,7 @@ from app.core.ai import generate_job_description_ai
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.core.settings import settings
 from app.models.enterprise.assessment import AssessmentAutomation
-from app.models.enterprise.candidate import CandidateApplication
+from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.enterprise.communication import MailAutomation
 from app.models.enterprise.company import Company
 from app.models.enterprise.interview import InterviewAutomation
@@ -398,6 +399,7 @@ async def generate_jd_endpoint(
         location=request.location or "",
         experience_min=request.experience_min or "",
         experience_max=request.experience_max or "",
+        additional_instructions=request.additional_instructions or "",
     )
 
     workflow: list[dict[str, object]] = []
@@ -419,3 +421,278 @@ async def generate_workflow_endpoint(
         job_title=request.title, job_description=request.description
     )
     return workflow
+
+
+@router.get("/{job_id}/sourced-candidates")
+async def get_sourced_candidates(
+    job_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+) -> dict[str, Any]:
+    """The job's Profile Sourcing funnel: everyone Croar Pilot sourced + invited for this job, each
+    one's outreach-mail status, and whether they've since applied (filled the form → in the pipeline)."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.services.enterprise.sourcing import job_sourcing
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    rows = await run_in_threadpool(job_sourcing.list_for_job, str(job_id))
+    invited = len(rows)
+    mail_sent = sum(1 for r in rows if r.get("invite_status") == "sent")
+    applied = sum(1 for r in rows if r.get("applied"))
+    return {
+        "job_id": str(job_id),
+        "candidates": rows,
+        "summary": {
+            "invited": invited,
+            "mail_sent": mail_sent,
+            "mail_failed": invited - mail_sent,
+            "applied": applied,
+            "awaiting": mail_sent - applied,
+        },
+    }
+
+
+@router.get("/{job_id}/matching-candidates")
+async def get_matching_candidates(
+    job_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Candidate-Bank people whose skills fit THIS job, ranked best-first — for the job's
+    "Candidate Bank" tab, so you can reach out to people you already have for this role."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.services.enterprise.skill_match import overlap
+    from app.services.enterprise.sourcing import job_sourcing
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    cands = list(
+        (
+            await session.execute(
+                select(Candidate).where(
+                    Candidate.company_id == job.company_id, Candidate.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    scored: list[tuple[int, float, Candidate, list[str]]] = []
+    for c in cands:
+        cnt, matched, pct = overlap(c.skills, job.required_skills)
+        if cnt > 0:  # only surface people who actually share a skill with the role
+            scored.append((cnt, pct, c, matched))
+    scored.sort(key=lambda t: (-t[0], -t[1]))
+    scored = scored[:limit]
+
+    top_ids = [c.id for _, _, c, _ in scored]
+    applied_ids: set[Any] = set()
+    if top_ids:
+        rows = await session.execute(
+            select(CandidateApplication.candidate_id).where(
+                CandidateApplication.job_requirement_id == job.id,
+                CandidateApplication.candidate_id.in_(top_ids),
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+        applied_ids = {r[0] for r in rows.all()}
+    invited_emails: set[str] = set()
+    try:
+        funnel = await run_in_threadpool(job_sourcing.list_for_job, str(job.id))
+        invited_emails = {(r.get("email") or "").lower() for r in funnel if r.get("email")}
+    except Exception:
+        invited_emails = set()
+
+    return {
+        "job_id": str(job.id),
+        "job_title": job.title,
+        "candidates": [
+            {
+                "id": str(c.id),
+                "full_name": c.full_name,
+                "email": c.email,
+                "skills": c.skills or [],
+                "matched_skills": matched,
+                "match_count": cnt,
+                "match_pct": pct,
+                "already_applied": c.id in applied_ids,
+                "already_invited": (c.email or "").lower() in invited_emails,
+            }
+            for cnt, pct, c, matched in scored
+        ],
+    }
+
+
+class InviteCandidateBody(BaseModel):
+    candidate_id: UUID
+
+
+@router.post("/{job_id}/invite-candidate")
+async def invite_candidate_to_job(
+    job_id: UUID,
+    body: InviteCandidateBody,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+) -> dict[str, Any]:
+    """Email a specific Candidate-Bank person to invite them to apply to THIS job (with an apply
+    link). Records the outreach in the job's Sourcing funnel so it shows on the Profile Sourcing tab."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.router.agents import PILOT_TEST_EMAIL, PILOT_TEST_MODE
+    from app.router.enterprise.communication import send_smtp_email
+    from app.services.enterprise.skill_match import overlap
+    from app.services.enterprise.sourcing import job_sourcing
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    candidate = (
+        await session.execute(
+            select(Candidate).where(Candidate.id == body.candidate_id, Candidate.company_id == job.company_id)
+        )
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found in this organization.")
+    real_email = (candidate.email or "").strip()
+    if not real_email:
+        raise HTTPException(
+            status_code=400, detail="This candidate has no email on record, so they can't be invited."
+        )
+
+    _cnt, matched, _pct = overlap(candidate.skills, job.required_skills)
+    name = (candidate.full_name or "there").strip()
+    apply_url = f"{settings.frontend_url}/jobs/{job.id}"
+    recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
+    subject = ("[TEST] " if PILOT_TEST_MODE else "") + f"You're invited to apply: {job.title}"
+    location_bit = f" in {job.location}" if job.location else ""
+    skills_bit = f" Your experience with {', '.join(matched[:4])} stood out to us." if matched else ""
+    test_banner = (
+        "<div style='background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:8px;"
+        f"margin-bottom:14px;font-size:13px'>🧪 <b>TEST EMAIL</b> — in production this would go to "
+        f"<b>{name}</b> &lt;{real_email}&gt;.</div>"
+        if PILOT_TEST_MODE
+        else ""
+    )
+    email_body = (
+        f"{test_banner}<p>Hi {name},</p>"
+        f"<p>We came across your profile in our talent bank and think you could be a great fit for our "
+        f"<strong>{job.title}</strong> role{location_bit}.{skills_bit}</p>"
+        f'<p><a href="{apply_url}" style="display:inline-block;padding:12px 24px;background:#4f46e5;'
+        'color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">Apply now</a></p>'
+        "<p>Best regards,<br/>Hiring Team</p>"
+    )
+    try:
+        ok, _ = await run_in_threadpool(send_smtp_email, recipient, subject, email_body, None, None)
+    except Exception:
+        ok, _ = False, "send failed"
+
+    try:
+        await run_in_threadpool(
+            job_sourcing.record_invites,
+            str(job.id),
+            str(job.company_id),
+            [
+                {
+                    "full_name": candidate.full_name,
+                    "email": real_email,
+                    "platform": "Candidate Bank",
+                    "profile_url": None,
+                    "headline": None,
+                    "location": None,
+                    "invite_status": "sent" if ok else "failed",
+                }
+            ],
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "success" if ok else "failed",
+        "sent": bool(ok),
+        "test_mode": PILOT_TEST_MODE,
+        "test_email": PILOT_TEST_EMAIL if PILOT_TEST_MODE else None,
+    }
+
+
+class SendSourcedInviteBody(BaseModel):
+    email: str | None = None
+    profile_url: str | None = None
+    full_name: str | None = None
+
+
+@router.post("/{job_id}/send-sourced-invite")
+async def send_sourced_invite(
+    job_id: UUID,
+    body: SendSourcedInviteBody,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+) -> dict[str, Any]:
+    """Email the apply invite to a candidate that was SHORTLISTED from Profile Sourcing (a Mongo
+    sourced row — no Candidate DB record needed), then flip their Profile Sourcing status to 'sent'.
+    While testing, the mail is redirected to PILOT_TEST_EMAIL (see PILOT_TEST_MODE)."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.router.agents import PILOT_TEST_EMAIL, PILOT_TEST_MODE
+    from app.router.enterprise.communication import send_smtp_email
+    from app.services.enterprise.sourcing import job_sourcing
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    real_email = (body.email or "").strip()
+    # In production we need a real address to send to. In TEST mode the mail is redirected to the
+    # test inbox, so a candidate with no email on record (e.g. sourced from arxiv) can still be sent
+    # a test invite — the recruiter is just exercising the flow.
+    if not real_email and not PILOT_TEST_MODE:
+        raise HTTPException(
+            status_code=400, detail="This candidate has no email on record, so they can't be emailed."
+        )
+
+    name = (body.full_name or "there").strip()
+    apply_url = f"{settings.frontend_url}/jobs/{job.id}"
+    recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
+    subject = ("[TEST] " if PILOT_TEST_MODE else "") + f"You're invited to apply: {job.title}"
+    location_bit = f" in {job.location}" if job.location else ""
+    would_go_to = f"&lt;{real_email}&gt;" if real_email else "(no email on record)"
+    test_banner = (
+        "<div style='background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:8px;"
+        f"margin-bottom:14px;font-size:13px'>🧪 <b>TEST EMAIL</b> — in production this would go to "
+        f"<b>{name}</b> {would_go_to}.</div>"
+        if PILOT_TEST_MODE
+        else ""
+    )
+    email_body = (
+        f"{test_banner}<p>Hi {name},</p>"
+        f"<p>We came across your profile and think you could be a great fit for our "
+        f"<strong>{job.title}</strong> role{location_bit}. We'd love for you to apply.</p>"
+        f'<p><a href="{apply_url}" style="display:inline-block;padding:12px 24px;background:#4f46e5;'
+        'color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">Apply now</a></p>'
+        "<p>Best regards,<br/>Hiring Team</p>"
+    )
+    try:
+        ok, _err = await run_in_threadpool(send_smtp_email, recipient, subject, email_body, None, None)
+    except Exception:
+        ok = False
+
+    try:
+        await run_in_threadpool(
+            job_sourcing.mark_invite_sent, str(job.id), real_email, body.profile_url, bool(ok)
+        )
+    except Exception:
+        pass
+
+    return {
+        "status": "success" if ok else "failed",
+        "sent": bool(ok),
+        "test_mode": PILOT_TEST_MODE,
+        "test_email": PILOT_TEST_EMAIL if PILOT_TEST_MODE else None,
+    }

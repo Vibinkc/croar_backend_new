@@ -167,3 +167,69 @@ async def get_candidate(
         raise HTTPException(status_code=404, detail="Candidate not found")
 
     return candidate
+
+
+@router.get("/{candidate_id}/matching-jobs")
+async def get_matching_jobs(
+    candidate_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+    limit: int = 20,
+) -> dict[str, Any]:
+    """The company's jobs ranked by how well they fit THIS candidate's skills — powers the Candidate
+    Bank's "invite to a role" picker so you reach out about a role that actually suits them."""
+    from app.services.enterprise.skill_match import overlap
+
+    allowed = await _allowed_company_ids(session, current_user)
+    candidate = (
+        await session.execute(
+            select(Candidate).where(Candidate.id == candidate_id, Candidate.company_id.in_(allowed))
+        )
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    jobs = list(
+        (await session.execute(select(JobRequirement).where(JobRequirement.company_id.in_(allowed))))
+        .scalars()
+        .all()
+    )
+    applied_job_ids = {
+        r[0]
+        for r in (
+            await session.execute(
+                select(CandidateApplication.job_requirement_id).where(
+                    CandidateApplication.candidate_id == candidate_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+            )
+        ).all()
+    }
+
+    scored: list[tuple[int, float, JobRequirement, list[str]]] = []
+    for j in jobs:
+        cnt, matched, pct = overlap(candidate.skills, j.required_skills)
+        scored.append((cnt, pct, j, matched))
+    # Best match first; jobs with no shared skill still appear last, so you can invite anyway.
+    scored.sort(key=lambda t: (-t[0], -t[1]))
+    scored = scored[:limit]
+
+    return {
+        "candidate_id": str(candidate_id),
+        "candidate_name": candidate.full_name,
+        "jobs": [
+            {
+                "id": str(j.id),
+                "title": j.title,
+                "location": j.location,
+                "required_skills": j.required_skills or [],
+                "matched_skills": matched,
+                "match_count": cnt,
+                "match_pct": pct,
+                "already_applied": j.id in applied_job_ids,
+            }
+            for cnt, pct, j, matched in scored
+        ],
+    }

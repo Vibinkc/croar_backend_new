@@ -105,6 +105,9 @@ class JDGenerationRequest(BaseModel):
     location: str | None = ""
     experience_min: str | None = "0"
     experience_max: str | None = "5"
+    # Free-text extra requirements the user wants the AI to fold into the existing description
+    # (e.g. "add a section on on-call rotation and mention we use Kubernetes").
+    additional_instructions: str | None = ""
     generate_workflow: bool = False
 
 

@@ -69,6 +69,12 @@ class SourceRequest(BaseModel):
 class InviteCandidate(BaseModel):
     name: str | None = None
     email: str | None = None
+    # Optional profile context (sent by the Pilot candidate picker) so the job's Sourcing tab can
+    # show where each invited person came from.
+    platform: str | None = None
+    profile_url: str | None = None
+    headline: str | None = None
+    location: str | None = None
 
 
 class InviteRequest(BaseModel):
@@ -76,7 +82,7 @@ class InviteRequest(BaseModel):
     candidates: list[InviteCandidate]
 
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.agents.agent import get_agent_executor
 
@@ -102,11 +108,31 @@ async def agent_chat(
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
 
+    # Namespace the thread by company so conversation state never leaks across tenants.
+    thread_id = f"{company_id}:{request.thread_id or 'default_thread'}"
     try:
-        inputs = {"messages": [HumanMessage(content=message)]}
-
-        # Namespace the thread by company so conversation state never leaks across tenants.
-        thread_id = f"{company_id}:{request.thread_id or 'default_thread'}"
+        # If the UI handed off a specific job (e.g. "Source with Croar Pilot" after creating a job),
+        # give the agent the EXACT job_id so it never has to guess between similarly-named jobs or
+        # ask the user which one again. This context stays out of the visible chat.
+        turn_messages: list = []
+        meta = request.metadata or {}
+        source_job_id = str(meta.get("source_job_id") or "").strip()
+        source_job_title = str(meta.get("source_job_title") or "").strip()
+        if source_job_id:
+            turn_messages.append(
+                SystemMessage(
+                    content=(
+                        f"CONTEXT: The user is sourcing candidates for an EXISTING job in their company — "
+                        f"job_id='{source_job_id}'"
+                        + (f", title='{source_job_title}'" if source_job_title else "")
+                        + ". When they give a candidate count, call source_candidates with EXACTLY this "
+                        "job_id. Do NOT ask which job it is, do NOT call list_jobs to disambiguate, and "
+                        "do NOT build a new pipeline for it."
+                    )
+                )
+            )
+        turn_messages.append(HumanMessage(content=message))
+        inputs = {"messages": turn_messages}
         config = {"configurable": {"thread_id": thread_id, "session": session, "company_id": company_id}}
 
         # Execute the graph (it resumes from the last state in the thread). The executor uses a
@@ -121,12 +147,17 @@ async def agent_chat(
         )
 
         # Surface a UI action from a tool result — the candidate picker (source_candidates) or the
-        # pipeline-built result card (build_hiring_pipeline). Take the most recent recognized one.
+        # pipeline-built result card (build_hiring_pipeline). ONLY look at THIS turn's tool calls
+        # (iterate back until the current user message): otherwise a later turn that produced no UI
+        # action (e.g. sourcing returned "need_count") would re-surface an OLD action and the card
+        # would render a second time.
         pilot_action = None
         ui_tools = {"source_candidates", "build_hiring_pipeline"}
         known_ui = {"candidate_picker", "pipeline_built"}
         try:
             for m in reversed(messages or []):
+                if getattr(m, "type", None) == "human":
+                    break  # reached the current user message — stop; don't reuse prior turns' actions
                 if getattr(m, "type", None) == "tool" and getattr(m, "name", "") in ui_tools:
                     data = json.loads(m.content)
                     if isinstance(data, dict) and data.get("ui") in known_ui:
@@ -151,6 +182,22 @@ async def agent_chat(
             status_code=500,
             detail="Croar Pilot hit an unexpected error and couldn't complete that. Please try again.",
         ) from e
+    finally:
+        # Clear the live-progress marker so a finished/failed run doesn't leave a stale step showing.
+        from app.agents.tools import PILOT_PROGRESS
+
+        PILOT_PROGRESS.pop(thread_id, None)
+
+
+@router.get("/pilot/progress")
+async def pilot_progress(current_user: AuthUser, thread_id: str | None = None) -> dict[str, Any]:
+    """The step the Pilot is CURRENTLY on for this thread (drives the working animation). Returns
+    {"step": null} when idle. Namespaced by company so it matches what /chat wrote."""
+    from app.agents.tools import PILOT_PROGRESS
+
+    company_id = str(getattr(current_user, "company_id", "") or "")
+    key = f"{company_id}:{thread_id or 'default_thread'}"
+    return {"step": PILOT_PROGRESS.get(key)}
 
 
 @router.get("/actions", response_model=list[dict[str, Any]])
@@ -322,27 +369,66 @@ async def pilot_invite_candidates(
 
     settings = get_settings()
     company_id = getattr(current_user, "company_id", None)
+
+    # Resolve the job. The Pilot sometimes passes the ROLE NAME (e.g. "SAP") instead of the job's
+    # UUID, so accept either: try it as a UUID first, then fall back to matching the job title within
+    # the company. This is what previously 422'd every invite with a non-UUID job_id.
+    from sqlalchemy import func
+
+    job = None
     try:
-        job_uuid = uuid.UUID(payload.job_id)
-    except (ValueError, AttributeError) as e:
-        raise HTTPException(status_code=422, detail="Invalid job_id.") from e
-
-    stmt = select(JobRequirement).where(
-        JobRequirement.id == job_uuid, JobRequirement.company_id == company_id
-    )
-    job = (await session.execute(stmt)).scalar_one_or_none()
+        job_uuid = uuid.UUID(str(payload.job_id))
+        job = (
+            await session.execute(
+                select(JobRequirement).where(
+                    JobRequirement.id == job_uuid, JobRequirement.company_id == company_id
+                )
+            )
+        ).scalar_one_or_none()
+    except (ValueError, AttributeError):
+        job = None
+    if job is None:
+        job = (
+            (
+                await session.execute(
+                    select(JobRequirement)
+                    .where(
+                        func.lower(func.trim(JobRequirement.title)) == str(payload.job_id).strip().lower(),
+                        JobRequirement.company_id == company_id,
+                    )
+                    .order_by(JobRequirement.created_at.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        raise HTTPException(status_code=404, detail="Couldn't find that job to send invites for.")
 
+    # Always use the RESOLVED job id downstream (apply link, funnel tracking) — never the raw input,
+    # which may have been a role name.
+    resolved_job_id = str(job.id)
     # Public candidate-facing job page (has the apply form). NOT the /enterprise API path.
-    apply_url = f"{settings.frontend_url}/jobs/{payload.job_id}"
+    apply_url = f"{settings.frontend_url}/jobs/{resolved_job_id}"
     sent, failed = 0, 0
+    tracked: list[dict[str, Any]] = []  # persisted to the job's Sourcing funnel after the loop
     for c in payload.candidates:
         real_email = (c.email or "").strip()
         # A candidate with no real email is unreachable — count it as failed even in test mode
         # (otherwise the test-inbox redirect would report it as "sent" and overstate reach).
         if not real_email:
             failed += 1
+            tracked.append(
+                {
+                    "full_name": c.name,
+                    "email": None,
+                    "platform": c.platform,
+                    "profile_url": c.profile_url,
+                    "headline": c.headline,
+                    "location": c.location,
+                    "invite_status": "failed",
+                }
+            )
             continue
         recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else real_email
         name = (c.name or "there").strip()
@@ -363,16 +449,38 @@ async def pilot_invite_candidates(
             'color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">Apply now</a></p>'
             "<p>Best regards,<br/>Hiring Team</p>"
         )
+        invite_ok = False
         try:
             ok, err = await run_in_threadpool(send_smtp_email, recipient, subject, body, None, None)
             if ok:
                 sent += 1
+                invite_ok = True
             else:
                 failed += 1
                 logger.warning("Invite email failed for %s: %s", recipient, err)
         except Exception:
             failed += 1
             logger.exception("Invite email crashed")
+
+        tracked.append(
+            {
+                "full_name": c.name,
+                "email": real_email,
+                "platform": c.platform,
+                "profile_url": c.profile_url,
+                "headline": c.headline,
+                "location": c.location,
+                "invite_status": "sent" if invite_ok else "failed",
+            }
+        )
+
+    # Persist the invite funnel for the job's Sourcing tab (best-effort; never fails the request).
+    try:
+        from app.services.enterprise.sourcing import job_sourcing
+
+        await run_in_threadpool(job_sourcing.record_invites, resolved_job_id, str(company_id or ""), tracked)
+    except Exception:
+        logger.exception("Failed to record sourcing invites")
 
     return {
         "status": "success",

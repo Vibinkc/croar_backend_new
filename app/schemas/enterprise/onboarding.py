@@ -45,7 +45,10 @@ class OnboardingDocumentResponse(BaseModel):
     status: str
     due_date: datetime | None = None
     comment: str | None = None
-    created_at: datetime
+    # The OnboardingDocument model/table have no created_at column, so this MUST be optional —
+    # otherwise response validation 500s whenever an onboarding has documents (e.g. every
+    # Pilot-created pipeline seeds required documents from the template).
+    created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

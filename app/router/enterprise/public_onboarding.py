@@ -85,16 +85,17 @@ async def get_public_onboarding(token: UUID, session: DBSessionDep) -> object:
     if not onboarding:
         raise HTTPException(status_code=404, detail="Onboarding process not found or link expired")
 
-    # Populate branding fields for the schema
-    if (
-        onboarding.application
-        and onboarding.application.job_requirement
-        and onboarding.application.job_requirement.company
-    ):
-        # company_name/company_logo are response-only fields attached dynamically (not ORM columns).
-        ob: Any = onboarding
-        ob.company_name = onboarding.application.job_requirement.company.name
-        ob.company_logo = onboarding.application.job_requirement.company.logo_url
+    # Populate branding + identity fields for the schema (response-only, not ORM columns).
+    # candidate_email drives the portal's identity check and job_title/company_name the header —
+    # if these stay empty the candidate can never pass "Verify" even with the correct email.
+    ob: Any = onboarding
+    if onboarding.application and onboarding.application.candidate:
+        ob.candidate_email = onboarding.application.candidate.email
+    if onboarding.application and onboarding.application.job_requirement:
+        ob.job_title = onboarding.application.job_requirement.title
+        if onboarding.application.job_requirement.company:
+            ob.company_name = onboarding.application.job_requirement.company.name
+            ob.company_logo = onboarding.application.job_requirement.company.logo_url
 
     return onboarding
 
@@ -139,7 +140,8 @@ async def submit_onboarding_info(token: UUID, request: Request, session: DBSessi
     # Log activity
     activity = OnboardingActivity(
         onboarding_id=onboarding.id,
-        action="Candidate submitted final onboarding details",
+        activity_type="submission",
+        description="Candidate submitted final onboarding details",
         performed_by="Candidate",
         company_id=onboarding.company_id,
     )
@@ -177,7 +179,8 @@ async def upload_onboarding_document(
     # 4. Log activity
     activity = OnboardingActivity(
         onboarding_id=token,
-        action=f"Candidate uploaded document: {doc.name}",
+        activity_type="document_upload",
+        description=f"Candidate uploaded document: {doc.name}",
         performed_by="Candidate",
         company_id=doc.company_id,
     )
@@ -209,7 +212,8 @@ async def upload_dynamic_onboarding_file(
     # Log activity
     activity = OnboardingActivity(
         onboarding_id=token,
-        action=f"Candidate uploaded file for field: {field_name}",
+        activity_type="file_upload",
+        description=f"Candidate uploaded file for field: {field_name}",
         performed_by="Candidate",
         company_id=onboarding.company_id,
     )

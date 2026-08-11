@@ -54,10 +54,11 @@ async def generate_questions(
     topic: str,
     duration: int = 30,
     difficulty: str = "Intermediate",
+    language: str = "English",
 ) -> dict[str, Any]:
     # Calculate count: 1 question every 3 minutes, min 5 questions
     count = max(5, duration // 3)
-    questions = await generate_interview_questions_service(topic, count, difficulty)
+    questions = await generate_interview_questions_service(topic, count, difficulty, language=language)
     return {"questions": questions}
 
 

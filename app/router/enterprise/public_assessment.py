@@ -126,7 +126,35 @@ async def verify_assessment(request: VerifyRequest, session: DBSessionDep) -> di
         await session.commit()
         await session.refresh(attempt)
 
-    return {"id": str(attempt.id), "status": attempt.status, "score": attempt.score}
+    # Return the source metadata too, so the candidate's "Ready to start" intro screen can show
+    # the real question count / topic / round type (the frontend reads these off this response).
+    source = automation or template
+    src_type = (
+        source.type.value
+        if source and hasattr(source.type, "value")
+        else str(source.type)
+        if source
+        else None
+    )
+    # Strip correct answers before exposing questions to the candidate.
+    src_questions = (
+        [
+            {k: v for k, v in q.items() if k != "correct_answer"}
+            for q in (source.generated_questions or [])
+            if isinstance(q, dict)
+        ]
+        if source
+        else []
+    )
+    return {
+        "id": str(attempt.id),
+        "status": attempt.status,
+        "score": attempt.score,
+        "type": src_type,
+        "topic": source.topic if source else None,
+        "duration": source.test_duration if source else None,
+        "generated_questions": src_questions,
+    }
 
 
 @router.get("/{attempt_id}")

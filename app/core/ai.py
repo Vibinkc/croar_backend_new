@@ -106,23 +106,44 @@ async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, object]
         }
 
 
+def _language_directive(language: str | None) -> str:
+    """Instruction appended to generation prompts so the LLM writes output in the chosen language.
+
+    Returns "" for English (the model's default) so existing behaviour is unchanged. Code,
+    identifiers and JSON structure are always kept in English so parsing/validation still works.
+    """
+    lang = (language or "English").strip()
+    if lang.lower() in ("", "english", "en"):
+        return ""
+    return (
+        f"\n\nLANGUAGE REQUIREMENT: Write ALL human-readable text — question text, options, answer "
+        f"choices, correct answers, explanations, titles and problem statements — in {lang}. "
+        f"Keep programming code, code identifiers, technical keywords and every JSON key/enum value "
+        f'(e.g. "MCQ", "TECHNICAL", "difficulty") in English. Do NOT translate the JSON structure.\n'
+    )
+
+
 async def generate_aptitude_questions(
-    domain: str, count: int, difficulty: str, context: str
+    domain: str, count: int, difficulty: str, context: str, language: str = "English"
 ) -> list[dict[str, object]]:
     """
     Generate aptitude questions for a specific domain.
     """
     prompt = (
-        f"You are an expert technical interviewer. Generate {count} aptitude questions "
-        f"for the domain: {domain}.\n\n"
+        f"You are an expert assessment designer. Generate {count} multiple-choice (MCQ) questions "
+        f"that evaluate a candidate's PRACTICAL, ROLE-SPECIFIC skills and knowledge for: {domain}.\n\n"
         f"Difficulty: {difficulty}\n"
         f"Context from resume/JD: {context[:500]}\n\n"
-        "Generate questions that test:\n"
-        "- Logical reasoning\n"
-        "- Problem-solving\n"
-        "- Domain-specific knowledge\n"
-        "- Analytical thinking\n"
-        "- Technical concepts understanding\n\n"
+        "Tailor every question to the ACTUAL work of this role — not generic logic puzzles. Examples:\n"
+        "- Engineering / data: core concepts, tools, best practices, debugging & analysis scenarios.\n"
+        "- UI/UX design: design principles, usability heuristics, accessibility, Figma/prototyping, "
+        "design process & critique.\n"
+        "- Digital marketing: SEO/SEM, campaign strategy, funnels, analytics & metrics, content, "
+        "social & email marketing.\n"
+        "- Sales / HR / Ops / Finance / product / etc.: the concepts, tools and day-to-day judgement "
+        "calls that role actually performs.\n"
+        "Mix factual knowledge with real-world scenario/judgement questions. If the role is "
+        "non-technical, do NOT ask coding or heavy quantitative-reasoning questions.\n\n"
         "Return ONLY a JSON object with this structure:\n\n"
         "{\n"
         '  "questions": [\n'
@@ -137,12 +158,13 @@ async def generate_aptitude_questions(
         "  ]\n"
         "}\n\n"
         "IMPORTANT:\n"
-        f"- Make questions relevant to {domain} but suitable for aptitude testing\n"
+        f"- Keep every question directly relevant to a {domain} professional's day-to-day work\n"
         "- Ensure correct_answer EXACTLY matches one of the options\n"
         "- Keep questions clear and unambiguous\n"
         f"- Vary question difficulty within the {difficulty} range\n"
         f"- Generate exactly {count} questions\n"
     )
+    prompt += _language_directive(language)
 
     try:
         response_str = await analyze_text_with_llm(prompt)
@@ -161,7 +183,7 @@ async def generate_aptitude_questions(
 
 
 async def generate_coding_questions(
-    domain: str, count: int, difficulty: str, context: str
+    domain: str, count: int, difficulty: str, context: str, language: str = "English"
 ) -> list[dict[str, object]]:
     """
     Generate coding questions for a specific domain.
@@ -211,6 +233,7 @@ async def generate_coding_questions(
         "  ]\n"
         "}\n"
     )
+    prompt += _language_directive(language)
     try:
         response_str = await analyze_text_with_llm(prompt)
 
@@ -233,26 +256,47 @@ async def generate_job_description_ai(
     location: str = "",
     experience_min: str = "",
     experience_max: str = "",
+    additional_instructions: str = "",
 ) -> dict[str, object]:
     """
     Generate or enhance a job description based on title and existing content.
+
+    `additional_instructions` is free-text the user wants folded INTO the existing description —
+    the AI must integrate those points into the appropriate sections while preserving the rest of
+    the current draft, rather than rewriting it from scratch.
     """
-    is_enhancement = len(existing_description.strip()) > 10
+    has_existing = len(existing_description.strip()) > 10
+    has_additional = len(additional_instructions.strip()) > 0
+
+    if has_additional and has_existing:
+        goal = (
+            "incorporate the user's additional requirements into the existing job description and refine it"
+        )
+    elif has_existing:
+        goal = "enhance and fine-tune the existing job description"
+    else:
+        goal = "generate a professional, high-impact job description from scratch"
 
     prompt = (
         "You are an expert technical recruiter and HR consultant.\n"
-        "Your goal is to "
-        + (
-            "enhance and fine-tune the existing job description"
-            if is_enhancement
-            else "generate a professional, high-impact job description from scratch"
-        )
-        + f" for the role of '{title}'.\n\n"
+        f"Your goal is to {goal} for the role of '{title}'.\n\n"
         "Context:\n"
         f"- Title: {title}\n"
         f"- Location: {location or 'Remote'}\n"
         f"- Experience Range: {experience_min or '0'} to {experience_max or '5'} years\n"
-        + (f"- Existing Draft: {existing_description}" if is_enhancement else "")
+        + (f"- Existing Draft: {existing_description}" if has_existing else "")
+        + (
+            "\n\nThe user wants to ADD the following extra requirements/details to the job "
+            "description. Integrate them naturally into the most appropriate sections while "
+            "preserving ALL of the existing draft's content and structure above. Do not drop or "
+            "summarise away existing details; only add and gently refine for coherence:\n"
+            f'"{additional_instructions.strip()}"\n'
+            "IMPORTANT: Wrap ONLY the newly added words/sentences in <mark>...</mark> HTML tags so "
+            "the user can see exactly what was added. Do NOT put <mark> around any pre-existing "
+            "content, and do not use <mark> anywhere else."
+            if has_additional
+            else ""
+        )
         + "\n\nRequirements:\n"
         "1. Provide a comprehensive JD in professional HTML format.\n"
         "2. Suggest a market-competitive salary range (Minimum and Maximum) in LPA.\n"
@@ -282,7 +326,7 @@ async def generate_job_description_ai(
 
 
 async def generate_interview_questions(
-    topic: str, count: int, difficulty: str, context: str = ""
+    topic: str, count: int, difficulty: str, context: str = "", language: str = "English"
 ) -> list[dict[str, object]]:
     """
     Generate interactive interview questions for a 1-on-1 AI interview.
@@ -314,6 +358,7 @@ async def generate_interview_questions(
         "  ]\n"
         "}\n"
     )
+    prompt += _language_directive(language)
     try:
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)

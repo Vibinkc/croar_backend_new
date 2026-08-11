@@ -303,6 +303,13 @@ class GitHubProvider(SourcingProvider):
 
         try:
             response = requests.get(search_url, headers=self.headers, params=params, timeout=10)
+            # A bad/expired GITHUB_TOKEN returns 401; an over-limit token returns 403. In BOTH cases
+            # the UNAUTHENTICATED search still works (just a lower rate limit), so retry without the
+            # token rather than silently returning zero candidates (which killed dev-role sourcing).
+            if response.status_code in (401, 403) and "Authorization" in self.headers:
+                print(f"DEBUG: GitHub token rejected ({response.status_code}); retrying unauthenticated")
+                anon_headers = {k: v for k, v in self.headers.items() if k != "Authorization"}
+                response = requests.get(search_url, headers=anon_headers, params=params, timeout=10)
             if response.status_code != 200:
                 return []
 

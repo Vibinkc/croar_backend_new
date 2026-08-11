@@ -43,11 +43,12 @@ async def generate_preview_questions(
     type: AssessmentType,
     topic: str,
     count: int = 10,
+    language: str = "English",
 ) -> list[dict[str, Any]]:
     """
     Generates preview questions without saving to DB.
     """
-    return await generate_assessment_questions(type, topic, count)
+    return await generate_assessment_questions(type, topic, count, language=language)
 
 
 @router.post("/", response_model=AssessmentAutomationResponse)
@@ -98,6 +99,7 @@ async def generate_questions(
     automation_id: UUID,
     db: DBSessionDep,
     _count: int = 10,
+    language: str = "English",
 ) -> AssessmentAutomation:
     company_id = getattr(current_user, "company_id", None)
     stmt = select(AssessmentAutomation).where(
@@ -109,7 +111,9 @@ async def generate_questions(
     if not db_auto:
         raise HTTPException(status_code=404, detail="Automation not found")
 
-    questions = await generate_assessment_questions(db_auto.type, db_auto.topic, db_auto.question_count)
+    questions = await generate_assessment_questions(
+        db_auto.type, db_auto.topic, db_auto.question_count, language=language
+    )
     db_auto.generated_questions = questions
 
     await db.commit()
