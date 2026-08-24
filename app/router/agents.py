@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any
@@ -16,6 +17,19 @@ from app.core.dependencies import get_current_user
 from app.models.shared.agents import AgentAction, ApprovalRequest
 
 logger = logging.getLogger(__name__)
+
+# The job context the UI hands us is injected into a SYSTEM message, which the model trusts
+# far more than ordinary chat text. Strip the characters a crafted value would need to break
+# out of the quoted field and smuggle in its own instructions (newlines, quotes, braces,
+# backticks, backslashes, control chars), then cap the length. Letters in every script are
+# left untouched, so Korean and Japanese job titles still come through intact.
+_PROMPT_UNSAFE = re.compile(r"""[\r\n\t\x00-\x1f\x7f'"{}`\\]""")
+
+
+def _prompt_safe(value: object, max_len: int) -> str:
+    """Neutralise caller-controlled text before it becomes part of a privileged prompt."""
+    return _PROMPT_UNSAFE.sub("", str(value or "").strip())[:max_len]
+
 
 router = APIRouter(prefix="/agents", tags=["Agent OS"])
 
@@ -136,8 +150,8 @@ async def agent_chat(
         # ask the user which one again. This context stays out of the visible chat.
         turn_messages: list = []
         meta = request.metadata or {}
-        source_job_id = str(meta.get("source_job_id") or "").strip()
-        source_job_title = str(meta.get("source_job_title") or "").strip()
+        source_job_id = _prompt_safe(meta.get("source_job_id"), 64)
+        source_job_title = _prompt_safe(meta.get("source_job_title"), 120)
         if source_job_id:
             turn_messages.append(
                 SystemMessage(

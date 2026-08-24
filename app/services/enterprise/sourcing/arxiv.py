@@ -16,7 +16,7 @@ class ArXivProvider(SourcingProvider):
     ) -> list[dict[str, Any]]:
         # ArXiv API uses an XML atom feed
         start = (page - 1) * page_size
-        url = f"http://export.arxiv.org/api/query?search_query=all:{query}&start={start}&max_results={page_size}"
+        url = f"https://export.arxiv.org/api/query?search_query=all:{query}&start={start}&max_results={page_size}"
 
         try:
             response = requests.get(url, timeout=10)
@@ -24,8 +24,10 @@ class ArXivProvider(SourcingProvider):
                 return []
 
             root = ET.fromstring(response.content)
-            # Namespace for Atom feed
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            # Namespace for Atom feed. The http:// below is an XML namespace identifier,
+            # not a network endpoint: it is matched literally against the feed, so switching
+            # it to https would break parsing outright.
+            ns = {"atom": "http://www.w3.org/2005/Atom"}  # NOSONAR
 
             profiles = []
             for entry in root.findall("atom:entry", ns):

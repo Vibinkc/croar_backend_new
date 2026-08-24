@@ -25,6 +25,30 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "croar_sourcing")
 _mongo_client = MongoClient(MONGO_URI)
 
 
+# Ids we mint are uuid4 hex and company ids are UUID strings; the url-safe charset below
+# covers both while keeping legacy values working. Anything else can only be an attempt to
+# push a non-string (a Mongo operator document) into a query filter, so it never gets there.
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _clean_id(value: Any) -> str:
+    """Coerce an identifier to a charset-checked string for use in a query filter.
+
+    Returns "" for anything malformed, which yields an empty result set - the same outcome
+    an unknown id already produced - instead of letting the value steer the query.
+    """
+    text = value if isinstance(value, str) else ""
+    return text if _SAFE_ID.match(text) else ""
+
+
+def _require_id(value: Any, field: str) -> str:
+    """Same check for ids that arrive straight off the URL, where a bad one is worth a 400."""
+    cleaned = _clean_id(value)
+    if not cleaned:
+        raise HTTPException(status_code=400, detail=f"Invalid {field}.")
+    return cleaned
+
+
 def _db():
     return _mongo_client[MONGO_DB_NAME]
 
@@ -290,10 +314,11 @@ async def list_project_candidates(
 ):
     """All candidates tied to a project (AI-sourced, manually approved, or directly shortlisted),
     for the in-project Candidates tab where the user reviews & verifies."""
-    company_id = str(getattr(current_user, "company_id", ""))
+    company_id = _clean_id(str(getattr(current_user, "company_id", "")))
+    safe_project_id = _require_id(project_id, "project_id")
     rows = list(
         _db()["project_shortlists"]
-        .find({"company_id": company_id, "project_id": project_id}, {"_id": 0})
+        .find({"company_id": company_id, "project_id": safe_project_id}, {"_id": 0})
         .sort("shortlisted_at", -1)
         .limit(500)
     )
@@ -571,7 +596,8 @@ def _project_stats(company_id: str, project_id: str) -> dict[str, int]:
     """Live counts from the shortlist rows tagged with this project."""
     rows = list(
         _db()["project_shortlists"].find(
-            {"company_id": company_id, "project_id": project_id}, {"status": 1, "_id": 0}
+            {"company_id": _clean_id(company_id), "project_id": _clean_id(project_id)},
+            {"status": 1, "_id": 0},
         )
     )
     contacted_states = {"Contacted", "mail_sent", "Responded", "Interested", "Interest Expressed", "Hired"}
@@ -800,8 +826,11 @@ async def check_responses(
     from app.models.enterprise.communication import EmailLog
 
     company_uuid = getattr(current_user, "company_id", None)
-    company_id = str(company_uuid or "")
-    proj = _projects().find_one({"project_id": project_id, "company_id": company_id}, {"_id": 0, "agent": 1})
+    company_id = _clean_id(str(company_uuid or ""))
+    safe_project_id = _require_id(project_id, "project_id")
+    proj = _projects().find_one(
+        {"project_id": safe_project_id, "company_id": company_id}, {"_id": 0, "agent": 1}
+    )
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -811,7 +840,7 @@ async def check_responses(
     coll = _db()["project_shortlists"]
 
     contacted_docs = list(
-        coll.find({"project_id": project_id, "company_id": company_id, "status": "Contacted"})
+        coll.find({"project_id": safe_project_id, "company_id": company_id, "status": "Contacted"})
     )
 
     # Index the latest INBOUND reply per sender for this company (from the synced inbox), so a
@@ -1295,8 +1324,11 @@ def _fill_merge_fields(text: str) -> str:
     out = text or ""
     for key, val in _PREVIEW_SAMPLE.items():
         out = out.replace("{{" + key + "}}", val)
-    # {Hi|Hello|Hey} -> first option
-    out = _re.sub(r"\{([^{}|]+(?:\|[^{}]+)+)\}", lambda m: m.group(1).split("|")[0], out)
+    # {Hi|Hello|Hey} -> first option.
+    # Every branch excludes '|' as well as braces: letting the repeated group match '|'
+    # too made the alternatives ambiguous, so unclosed input like "{a|b|b|b|b..." forced
+    # exponential backtracking (ReDoS). Matching is otherwise unchanged.
+    out = _re.sub(r"\{([^{}|]+(?:\|[^{}|]+)+)\}", lambda m: m.group(1).split("|")[0], out)
     # Any leftover {{...}} -> stripped braces
     out = _re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", r"\1", out)
     return out

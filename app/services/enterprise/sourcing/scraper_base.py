@@ -1,5 +1,5 @@
-import random
 import re
+import secrets
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -203,7 +203,7 @@ class BaseScraperProvider(SourcingProvider):
     def _search_google(self, full_query: str, location: str | None, page_size: int) -> list[dict[str, Any]]:
         url = "https://www.google.com/search"
         headers = {
-            "User-Agent": random.choice(self.user_agents),
+            "User-Agent": secrets.choice(self.user_agents),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.5",
         }
@@ -302,7 +302,7 @@ class BaseScraperProvider(SourcingProvider):
         self, full_query: str, location: str | None, page_size: int
     ) -> list[dict[str, Any]]:
         url = "https://duckduckgo.com/lite/"
-        headers = {"User-Agent": random.choice(self.user_agents)}
+        headers = {"User-Agent": secrets.choice(self.user_agents)}
         response = requests.get(url, params={"q": full_query}, headers=headers, timeout=10)
         profiles = []
 
@@ -344,7 +344,7 @@ class BaseScraperProvider(SourcingProvider):
 
     def _search_bing(self, full_query: str, location: str | None, page_size: int) -> list[dict[str, Any]]:
         url = "https://www.bing.com/search"
-        headers = {"User-Agent": random.choice(self.user_agents)}
+        headers = {"User-Agent": secrets.choice(self.user_agents)}
         params = {"q": full_query}
 
         response = requests.get(url, headers=headers, params=params, timeout=10)

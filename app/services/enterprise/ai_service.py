@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import cast
 
 from app.core.ai import generate_aptitude_questions, generate_coding_questions
@@ -6,6 +7,14 @@ from app.core.ai import generate_interview_questions as giq
 from app.models.enterprise.assessment import AssessmentType
 
 logger = logging.getLogger(__name__)
+
+# CR/LF and control characters in a caller-supplied value let it forge extra log lines
+# (log injection), so strip them and cap the length before anything reaches the log.
+_LOG_UNSAFE = re.compile(r"[\r\n\x00-\x1f\x7f]")
+
+
+def _log_safe(value: object, max_len: int = 32) -> str:
+    return _LOG_UNSAFE.sub("", str(value or ""))[:max_len]
 
 
 async def generate_assessment_questions(
@@ -23,7 +32,9 @@ async def generate_assessment_questions(
             return result
         if attempt == 0:
             logger.warning(
-                "Assessment generation returned 0 questions (%s, %s); retrying once", type, language
+                "Assessment generation returned 0 questions (%s, %s); retrying once",
+                type,
+                _log_safe(language),
             )
     return []
 

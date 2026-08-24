@@ -1,5 +1,5 @@
-import random
 import re
+import secrets
 import time
 from typing import Any, ClassVar
 from urllib.parse import urlparse
@@ -307,7 +307,7 @@ class TwitterProvider(BaseScraperProvider):
         username = self._extract_username(profile_url)
 
         try:
-            ua = random.choice(self.user_agents)
+            ua = secrets.choice(self.user_agents)
             resp = requests.get(
                 profile_url,
                 headers={
