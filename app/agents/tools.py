@@ -457,6 +457,102 @@ async def update_job(
         return {"status": "error", "message": str(e)}
 
 
+# The job form's stage-type dropdown, and the icon it pairs with each type. A stage whose `type`
+# is not one of these renders as a blank dropdown, so every round we write must map onto one.
+_STAGE_TYPES: dict[str, str] = {
+    "Screening": "Search",
+    "Aptitude": "Brain",
+    "Coding": "Code",
+    "Technical Interview": "Zap",
+    "HR Interview": "Users",
+    "Final Selection": "ShieldCheck",
+}
+# Word -> stage type, used to infer a type when the caller only gives a round name.
+_STAGE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("screen", "resume", "shortlist", "cv", "phone"), "Screening"),
+    (("aptitude", "cognitive", "reasoning", "psychometric"), "Aptitude"),
+    (("cod", "programming", "algorithm", "take-home", "take home", "live cod"), "Coding"),
+    (("tech", "system design", "architecture", "engineering"), "Technical Interview"),
+    (("hr", "culture", "behaviour", "behavior", "manager", "people"), "HR Interview"),
+    (("final", "offer", "director", "ceo", "founder", "onboard"), "Final Selection"),
+)
+
+
+def _infer_stage_type(name: str, given: str | None = None) -> str:
+    """Pick the dropdown value for a round, from an explicit type or the round's own name."""
+    if given:
+        for t in _STAGE_TYPES:
+            if t.lower() == given.strip().lower():
+                return t
+    low = (name or "").lower()
+    for words, stage_type in _STAGE_HINTS:
+        if any(w in low for w in words):
+            return stage_type
+    return "Technical Interview"  # the same default the form's "Add stage" button uses
+
+
+@tool
+async def set_job_rounds(
+    job_id: str, rounds: list[str], config: RunnableConfig, round_types: list[str] | None = None
+) -> dict[str, Any]:
+    """Replace a job's interview rounds (its hiring workflow stages) with the given ordered list.
+
+    `rounds` is the full ordered list of round names, e.g.
+    ["Initial Screening", "Aptitude Test", "Technical Interview", "HR Interview", "Final Selection"].
+    The whole workflow is REPLACED, so always pass every round the job should end up with, not
+    just the new ones.
+
+    `round_types` is optional and positional-matched to `rounds`. Each entry must be one of:
+    "Screening", "Aptitude", "Coding", "Technical Interview", "HR Interview", "Final Selection".
+    Leave it out and the type is inferred from each round's name.
+
+    Use this whenever the user asks you to design, add, or rework the interview rounds of a job
+    that already exists — update_job cannot change rounds.
+    """
+    session: AsyncSession = config["configurable"]["session"]
+    try:
+        cid = _company_id(config)
+        job = await _get_company_job(session, cid, job_id)
+        if not job:
+            return {"status": "error", "message": "Job not found (or already deleted)."}
+
+        raw = rounds.split(",") if isinstance(rounds, str) else (rounds or [])
+        names = [f"{r}".strip() for r in raw if f"{r}".strip()]
+        if not names:
+            return {"status": "error", "message": "Give at least one round name."}
+        if len(names) > 12:
+            return {"status": "error", "message": "That's too many rounds — keep it to 12 or fewer."}
+
+        raw_types = round_types.split(",") if isinstance(round_types, str) else (round_types or [])
+        types = [f"{t}".strip() for t in raw_types]
+
+        # Match the shape the job form reads: id / name / type / icon. `type` has to be one of the
+        # form's dropdown values or the stage renders with an empty selector.
+        stages: list[dict[str, object]] = []
+        for i, name in enumerate(names):
+            stage_type = _infer_stage_type(name, types[i] if i < len(types) else None)
+            stages.append(
+                {
+                    "id": str(i + 1),
+                    "name": name,
+                    "type": stage_type,
+                    "icon": _STAGE_TYPES[stage_type],
+                    "order": i + 1,
+                }
+            )
+        job.workflow_stages = stages
+        await session.commit()
+        return {
+            "status": "success",
+            "job_id": str(job.id),
+            "rounds": [{"name": s["name"], "type": s["type"]} for s in stages],
+            "message": f"'{job.title}' now has {len(stages)} rounds: {', '.join(names)}.",
+        }
+    except Exception as e:
+        logger.error(f"Error setting job rounds: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @tool
 async def delete_job(job_id: str, config: RunnableConfig) -> dict[str, Any]:
     """Delete a job and its ENTIRE pipeline (assessment / mail / interview / onboarding
