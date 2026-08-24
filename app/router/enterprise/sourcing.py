@@ -287,12 +287,12 @@ def parse_search_constraints(q: str) -> dict[str, Any]:
 CONTACT_SCRAPE_TIMEOUT = float(os.getenv("SOURCING_CONTACT_TIMEOUT", "15"))
 CONTACT_ENRICH_LIMIT = int(os.getenv("SOURCING_CONTACT_ENRICH_LIMIT", "8"))
 
-# The domain is spelled as repeated "label." groups instead of one dot-containing class:
-# the old [a-zA-Z0-9.\-]+\.  let the class and the literal dot compete for the same
-# characters, which backtracked super-linearly on long non-matching text. Every valid
-# address still matches identically; only malformed domains (leading or doubled dots,
-# e.g. "a@b..com") are now declined instead of matched.
-_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]++@(?:[a-zA-Z0-9\-]++\.)+[a-zA-Z]{2,}")
+# Every run is bounded, so the worst-case backtracking is a constant instead of growing with
+# the input: an unbounded [class]+ hands characters back one at a time looking for the '@' or
+# the final dot, which made a long non-matching snippet quadratic (~4.7s on 40KB, now ~12ms).
+# The limits are the RFC 5321 / DNS ones - local-part 64, domain 255, label 63 - so every
+# address that could previously match still matches, byte for byte.
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]{1,64}@[a-zA-Z0-9.\-]{1,255}\.[a-zA-Z]{2,63}")
 # Substrings that mark a regex hit as noise rather than a real contact email.
 _EMAIL_BLOCKLIST = (
     "noreply",

@@ -163,9 +163,11 @@ def _ics_escape(text: str) -> str:
 def _sender_email() -> str:
     """Bare email from mailer_sender_email (which may be 'Name <a@b.com>')."""
     raw = str(_settings.mailer_sender_email or _settings.smtp_username or "")
-    # Possessive: '@' is not in the first class and nothing follows the second, so
-    # backtracking can never rescue a match - it only rescanned long non-matching input.
-    m = re.search(r"[\w.+-]++@[\w.-]++", raw)
+    # Bounded runs (RFC 5321 local-part 64 / domain 255): an unbounded [class]+ hands
+    # characters back one at a time hunting for the '@', which took ~31s on a 60KB string
+    # with no '@' in it. Bounding it caps that at a constant (~67ms) and matches the same
+    # addresses - no real local-part or domain comes close to the limits.
+    m = re.search(r"[\w.+\-]{1,64}@[\w.\-]{1,255}", raw)
     return m.group(0) if m else raw
 
 

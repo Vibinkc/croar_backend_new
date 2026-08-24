@@ -279,7 +279,7 @@ class BaseScraperProvider(SourcingProvider):
                                 title = parts[-1].replace("-", " ").title()
 
                     name = title.split("-")[0].split("|")[0].split("...")[0].strip()
-                    email_match = re.search(r"[\w.-]++@(?:[\w-]++\.)+\w++", snippet)
+                    email_match = re.search(r"[\w.\-]{1,64}@[\w.\-]{1,255}\.\w{1,63}", snippet)
                     email = email_match.group(0) if email_match else None
 
                     if not any(p["profile_url"] == href for p in profiles):
@@ -319,7 +319,7 @@ class BaseScraperProvider(SourcingProvider):
                         snippet_row = row.find_next_sibling("tr")
                         snippet = snippet_row.get_text().strip() if snippet_row else ""
 
-                        email_match = re.search(r"[\w.-]++@(?:[\w-]++\.)+\w++", snippet)
+                        email_match = re.search(r"[\w.\-]{1,64}@[\w.\-]{1,255}\.\w{1,63}", snippet)
                         email = email_match.group(0) if email_match else None
 
                         if not any(p["profile_url"] == href for p in profiles):

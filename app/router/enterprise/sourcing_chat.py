@@ -1328,9 +1328,10 @@ def _fill_merge_fields(text: str) -> str:
     # Every branch excludes '|' as well as braces: letting the repeated group match '|'
     # too made the alternatives ambiguous, so unclosed input like "{a|b|b|b|b..." forced
     # exponential backtracking (ReDoS). Matching is otherwise unchanged.
-    # Both runs are possessive: neither class can match '|', so giving characters back can
-    # never help the match - it only made an unclosed "{a|b|b..." retry at every position.
-    out = _re.sub(r"\{([^{}|]++(?:\|[^{}|]++)+)\}", lambda m: m.group(1).split("|")[0], out)
+    # Bounded runs cap the backtracking an unclosed "{a|b|b|b..." can trigger. The limits are
+    # far above any real spintax (200 chars per option, 20 alternatives), so the same strings
+    # match and the same option is picked.
+    out = _re.sub(r"\{([^{}|]{1,200}(?:\|[^{}|]{1,200}){1,20})\}", lambda m: m.group(1).split("|")[0], out)
     # Any leftover {{...}} -> stripped braces
     out = _re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", r"\1", out)
     return out

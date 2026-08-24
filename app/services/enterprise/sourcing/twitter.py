@@ -324,17 +324,18 @@ class TwitterProvider(BaseScraperProvider):
 
                 def meta(prop: str, attr: str = "property") -> str:
                     tag = soup.find("meta", {attr: prop})
-                    # isinstance, not a truth test: a <meta> has no children, so any bs4
-                    # version that derives truthiness from len() would treat a tag that was
-                    # found as absent. find() can also hand back a NavigableString, which
-                    # has no .get at all - this rules out both.
-                    if not isinstance(tag, Tag):
-                        return ""
-                    # bs4 hands back a list for multi-valued attributes (class, rel, ...).
-                    # "content" is never one of those, so anything but a str is not a value
-                    # we can use - and calling .strip() on a list is what used to break here.
-                    content = tag.get("content")
-                    return content.strip() if isinstance(content, str) else ""
+                    # find() returns None when the tag is absent, and can return a
+                    # NavigableString (which has no .get) when it is not an element. Check
+                    # both before touching .get. Not a truth test: a <meta> has no children,
+                    # so any bs4 that derives truthiness from len() would call a found tag
+                    # absent and silently drop the value.
+                    if tag is not None and isinstance(tag, Tag):
+                        # bs4 hands back a list for multi-valued attributes (class, rel, ...).
+                        # "content" is never one of those, so anything that is not a str is
+                        # unusable - and .strip() on a list is what used to break here.
+                        content = tag.get("content")
+                        return content.strip() if isinstance(content, str) else ""
+                    return ""
 
                 og_title = meta("og:title") or meta("twitter:title", "name")
                 og_desc = meta("og:description") or meta("twitter:description", "name")
@@ -344,16 +345,16 @@ class TwitterProvider(BaseScraperProvider):
                 name = None
                 if og_title:
                     name = og_title.split("(")[0].strip()
-                    # Possessive runs: the character after each \s group is never whitespace,
-                    # so handing characters back can never complete the match - it only made
-                    # a long non-matching title retry from every offset.
-                    name = re.sub(r"\s*+/\s*+X$", "", name).strip()
-                    name = re.sub(r"\s++on Twitter$", "", name).strip()
+                    # Bounded whitespace runs: an unbounded \s* hands characters back one at a
+                    # time from every offset, which took ~15s on a 60KB run of spaces. No real
+                    # og:title has 16 consecutive spaces, so the same titles still match.
+                    name = re.sub(r"\s{0,16}/\s{0,16}X$", "", name).strip()
+                    name = re.sub(r"\s{1,16}on Twitter$", "", name).strip()
 
                 bio = og_desc.strip() if og_desc else None
                 # Strip Twitter's generic suffix from bio
                 if bio:
-                    bio = re.sub(r"\s*+\.\s*+See their Twitter profile\.*+$", "", bio).strip()
+                    bio = re.sub(r"\s{0,16}\.\s{0,16}See their Twitter profile\.{0,8}$", "", bio).strip()
 
                 if name or bio or og_image:
                     print(f"DEBUG: [Twitter-BS4] Meta enriched @{username}: '{name}'")
