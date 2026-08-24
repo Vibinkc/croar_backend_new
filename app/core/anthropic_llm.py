@@ -10,7 +10,7 @@ A single async Anthropic client + two helpers:
 
 from __future__ import annotations
 
-import re
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,24 +30,62 @@ _JSON_SYSTEM = "You output ONLY valid JSON — no prose, no explanations, no mar
 
 
 def _extract_json(text: str) -> str:
-    """Return just the JSON object/array from a model reply."""
+    """Return just the JSON object/array from a model reply.
+
+    Model replies routinely carry markdown fences and brackets INSIDE their JSON string
+    values — a generated coding question embeds ```python blocks and annotations like
+    List[bool]. The previous version grabbed the first ```...``` pair found anywhere and
+    sliced from the first '[' to the last ']', so those inner fences and brackets won: a
+    coding-question reply came back as the fragment "[int], limit: int, window: int) ->
+    List[bool]" and json.loads failed, leaving assessment generation with zero questions.
+
+    So: only unwrap a fence that wraps the WHOLE reply (closing on the last fence, not the
+    next one), then take the first balanced run that actually parses, tracking string state
+    so braces inside strings are ignored.
+    """
     t = (text or "").strip()
-    # \s*+ is possessive: with re.DOTALL the following (.*?) can match whitespace too, so a
-    # plain \s* left the two overlapping and a reply with an unclosed fence backtracked
-    # quadratically. Nothing can be gained by giving those characters back, so don't allow it.
-    fence = re.search(r"```(?:json)?\s*+(.*?)```", t, re.DOTALL)
-    if fence:
-        t = fence.group(1).strip()
-    # Outermost {...} or [...] — whichever appears and is well-formed at the ends.
-    candidates = []
+
+    # Unwrap only when the entire reply is fenced; close on the LAST fence so an inner
+    # ```python block cannot terminate the slice early.
+    if t.startswith("```"):
+        nl = t.find("\n")
+        last = t.rfind("```")
+        if nl != -1 and last > nl:
+            t = t[nl + 1 : last].strip()
+
     for open_c, close_c in (("{", "}"), ("[", "]")):
-        i, j = t.find(open_c), t.rfind(close_c)
-        if i != -1 and j > i:
-            candidates.append((i, t[i : j + 1]))
-    if candidates:
-        # Prefer the one that starts earliest (usually the intended top-level value).
-        candidates.sort(key=lambda c: c[0])
-        return candidates[0][1]
+        start = t.find(open_c)
+        tried = 0
+        # Bounded: a reply with many stray braces shouldn't cost more than a few scans.
+        while start != -1 and tried < 20:
+            tried += 1
+            depth = 0
+            in_str = False
+            esc = False
+            for k in range(start, len(t)):
+                ch = t[k]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == '"':
+                        in_str = False
+                    continue
+                if ch == '"':
+                    in_str = True
+                elif ch == open_c:
+                    depth += 1
+                elif ch == close_c:
+                    depth -= 1
+                    if depth == 0:
+                        candidate = t[start : k + 1]
+                        try:
+                            json.loads(candidate)
+                        except ValueError:
+                            break  # unbalanced/invalid — try the next opening brace
+                        return candidate
+            start = t.find(open_c, start + 1)
     return t or "{}"
 
 

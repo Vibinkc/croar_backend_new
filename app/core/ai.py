@@ -288,11 +288,11 @@ async def generate_coding_questions(
     try:
         response_str = await analyze_text_with_llm(prompt)
 
-        if "```json" in response_str:
-            response_str = response_str.split("```json")[1].split("```")[0].strip()
-        elif "```" in response_str:
-            response_str = response_str.split("```")[1].split("```")[0].strip()
-
+        # No fence-stripping here on purpose. analyze_text_with_llm already returns the
+        # extracted JSON, and a coding question's own payload CONTAINS ``` blocks (starter
+        # code, worked examples). Splitting on ``` therefore cut the reply at the first
+        # fence of the generated code and handed json.loads an empty string, so every
+        # coding assessment came back with zero questions.
         response_data = json.loads(response_str)
         questions = cast("list[dict[str, object]]", response_data.get("questions", []))
         return questions[:count]
