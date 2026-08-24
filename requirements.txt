@@ -162,6 +162,12 @@ openai==2.30.0
 langchain-openai
 langchain-core
 langgraph
+# Claude: agent.py binds tools through ChatAnthropic, and core/anthropic_llm.py +
+# sourcing/claude_ai.py use the SDK directly. Both were imported by the code but never
+# declared here, so the image built without them and app.main failed at import
+# (main -> router.agents -> agents.agent -> langchain_anthropic), taking the whole API down.
+langchain-anthropic
+anthropic
 # Persistent Croar Pilot conversation state (shared across workers, survives restarts).
 # Optional at runtime — agent.py falls back to in-memory MemorySaver if these are absent.
 langgraph-checkpoint-postgres
