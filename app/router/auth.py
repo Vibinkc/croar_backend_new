@@ -66,6 +66,11 @@ async def _provision_sso_org_and_user(
     session.add(admin_role)
     await session.flush()
 
+    # Seed default assignable roles for the new org (same as JSON signup).
+    from app.services.enterprise.seed_roles import seed_roles_for_company
+
+    await seed_roles_for_company(session, new_company.id)
+
     user_obj = EnterpriseUser(
         email=email,
         # SSO users authenticate via the IdP; store an unusable random hash.
@@ -178,6 +183,12 @@ async def signup(signup_data: EnterpriseSignUpRequest, session: DBSessionDep) ->
     )
     new_user.roles = [admin_role]
     session.add(new_user)
+
+    # Seed default assignable roles (Recruiter / Hiring Manager / HR Manager) so the new
+    # org's Permissions page + "assign role" dropdown aren't empty on day one.
+    from app.services.enterprise.seed_roles import seed_roles_for_company
+
+    await seed_roles_for_company(session, new_company.id)
 
     # Final commit
     await session.flush()
@@ -406,11 +417,18 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Check password
+    # Check password. bcrypt is CPU-bound (~100-300ms) and blocks the async event loop if run
+    # inline — under concurrent logins that serialises EVERY request. Offload it to a thread
+    # (bcrypt releases the GIL, so this gives real parallelism).
+    from fastapi.concurrency import run_in_threadpool
+
     hashed_password = cast(
         "str | None", getattr(user_obj, "password_hash", getattr(user_obj, "password", None))
     )
-    if not hashed_password or not verify_password(form_data.password, hashed_password):
+    password_ok = bool(hashed_password) and await run_in_threadpool(
+        verify_password, form_data.password, hashed_password
+    )
+    if not password_ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",

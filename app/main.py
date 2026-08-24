@@ -22,7 +22,7 @@ from app.core.settings import get_settings
 from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
-from app.router import agents, auth, enterprise, platform
+from app.router import agents, auth, enterprise, platform, public_feeds
 from app.router.enterprise.payroll import router as payroll_router
 
 # Setup Logging
@@ -34,6 +34,11 @@ _settings = get_settings()
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup logic
     print("Croar Backend Starting...")
+
+    # Ensure every company has the default assignable roles (Recruiter / Hiring Manager / HR Manager).
+    from app.services.enterprise.seed_roles import seed_default_org_roles
+
+    await seed_default_org_roles()
 
     yield
     # Shutdown logic
@@ -146,6 +151,8 @@ app.include_router(auth.router, prefix="/api/v1")
 app.include_router(enterprise.router, prefix="/api/v1/enterprise", tags=["Enterprise"])
 app.include_router(platform.router, prefix="/api/v1/super-admin", tags=["Platform Admin"])
 app.include_router(agents.router, prefix="/api/v1", tags=["Agent OS"])
+# Public job-syndication feeds (Indeed XML, schema.org JSON-LD) — no auth, crawled by boards
+app.include_router(public_feeds.router, prefix="/api/v1", tags=["Public Job Feeds"])
 # Payroll/HR module (sub-routers carry absolute /api/v1/enterprise/... prefixes)
 app.include_router(payroll_router)
 

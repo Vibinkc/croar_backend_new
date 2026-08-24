@@ -1,33 +1,39 @@
 import re
 from typing import Any
 
-from .sourcing.academicjournals import AcademicJournalsProvider
-from .sourcing.arxiv import ArXivProvider
-from .sourcing.behance import BehanceProvider
-from .sourcing.companywebsites import CompanyWebsitesProvider
-from .sourcing.conferencespeakers import ConferenceSpeakersProvider
-from .sourcing.crunchbase import CrunchbaseProvider
-from .sourcing.devto import DevToProvider
-from .sourcing.dribbble import DribbbleProvider
-from .sourcing.github import GitHubProvider
-from .sourcing.gitlab import GitLabProvider
-from .sourcing.googlescholar import GoogleScholarProvider
-from .sourcing.hackernews import HackerNewsProvider
-from .sourcing.hackerrank import HackerRankProvider
-from .sourcing.hashnode import HashnodeProvider
-from .sourcing.kaggle import KaggleProvider
-from .sourcing.leetcode import LeetCodeProvider
-from .sourcing.levelsfyi import LevelsFyiProvider
-from .sourcing.linkedin import LinkedInProvider
-from .sourcing.medium import MediumProvider
-from .sourcing.openstreetmap import OpenStreetMapProvider
-from .sourcing.patentdatabases import PatentDatabasesProvider
-from .sourcing.producthunt import ProductHuntProvider
-from .sourcing.reddit import RedditProvider
-from .sourcing.researchgate import ResearchGateProvider
-from .sourcing.stackoverflow import StackOverflowProvider
-from .sourcing.twitter import TwitterProvider
-from .sourcing.wellfound import WellfoundProvider
+from .sourcing.claude_ai import ClaudeSourcingProvider
+
+# --- Legacy scraper providers (disabled) ---------------------------------------------
+# The 27 platform scrapers below are replaced by Claude-powered sourcing (see
+# ClaudeSourcingProvider). They are kept here, commented out, so they can be re-enabled
+# quickly if needed — un-comment the imports + the matching entries in `self.providers`.
+# from .sourcing.academicjournals import AcademicJournalsProvider
+# from .sourcing.arxiv import ArXivProvider
+# from .sourcing.behance import BehanceProvider
+# from .sourcing.companywebsites import CompanyWebsitesProvider
+# from .sourcing.conferencespeakers import ConferenceSpeakersProvider
+# from .sourcing.crunchbase import CrunchbaseProvider
+# from .sourcing.devto import DevToProvider
+# from .sourcing.dribbble import DribbbleProvider
+# from .sourcing.github import GitHubProvider
+# from .sourcing.gitlab import GitLabProvider
+# from .sourcing.googlescholar import GoogleScholarProvider
+# from .sourcing.hackernews import HackerNewsProvider
+# from .sourcing.hackerrank import HackerRankProvider
+# from .sourcing.hashnode import HashnodeProvider
+# from .sourcing.kaggle import KaggleProvider
+# from .sourcing.leetcode import LeetCodeProvider
+# from .sourcing.levelsfyi import LevelsFyiProvider
+# from .sourcing.linkedin import LinkedInProvider
+# from .sourcing.medium import MediumProvider
+# from .sourcing.openstreetmap import OpenStreetMapProvider
+# from .sourcing.patentdatabases import PatentDatabasesProvider
+# from .sourcing.producthunt import ProductHuntProvider
+# from .sourcing.reddit import RedditProvider
+# from .sourcing.researchgate import ResearchGateProvider
+# from .sourcing.stackoverflow import StackOverflowProvider
+# from .sourcing.twitter import TwitterProvider
+# from .sourcing.wellfound import WellfoundProvider
 
 # Search engines sometimes return listing / asset / article pages (e.g. a Dribbble
 # "React Frontend Page designs, themes, templates…" collection) that get scraped as
@@ -109,34 +115,38 @@ def _is_valid_profile(p: dict[str, Any]) -> bool:
 
 class SourcingService:
     def __init__(self):
+        # Sourcing is now Claude-powered — one provider that web-searches real profiles
+        # from the recruiter's query. The 27 scrapers are disabled (kept commented for
+        # easy rollback).
         self.providers = {
-            "github": GitHubProvider(),
-            "linkedin": LinkedInProvider(),
-            "stackoverflow": StackOverflowProvider(),
-            "devto": DevToProvider(),
-            "arxiv": ArXivProvider(),
-            "reddit": RedditProvider(),
-            "hackernews": HackerNewsProvider(),
-            "gitlab": GitLabProvider(),
-            "behance": BehanceProvider(),
-            "dribbble": DribbbleProvider(),
-            "crunchbase": CrunchbaseProvider(),
-            "hashnode": HashnodeProvider(),
-            "openstreetmap": OpenStreetMapProvider(),
-            "medium": MediumProvider(),
-            "researchgate": ResearchGateProvider(),
-            "levelsfyi": LevelsFyiProvider(),
-            "kaggle": KaggleProvider(),
-            "hackerrank": HackerRankProvider(),
-            "leetcode": LeetCodeProvider(),
-            "producthunt": ProductHuntProvider(),
-            "twitter": TwitterProvider(),
-            "wellfound": WellfoundProvider(),
-            "googlescholar": GoogleScholarProvider(),
-            "companywebsites": CompanyWebsitesProvider(),
-            "patentdatabases": PatentDatabasesProvider(),
-            "conferencespeakers": ConferenceSpeakersProvider(),
-            "academicjournals": AcademicJournalsProvider(),
+            "claude": ClaudeSourcingProvider()
+            # "github": GitHubProvider(),
+            # "linkedin": LinkedInProvider(),
+            # "stackoverflow": StackOverflowProvider(),
+            # "devto": DevToProvider(),
+            # "arxiv": ArXivProvider(),
+            # "reddit": RedditProvider(),
+            # "hackernews": HackerNewsProvider(),
+            # "gitlab": GitLabProvider(),
+            # "behance": BehanceProvider(),
+            # "dribbble": DribbbleProvider(),
+            # "crunchbase": CrunchbaseProvider(),
+            # "hashnode": HashnodeProvider(),
+            # "openstreetmap": OpenStreetMapProvider(),
+            # "medium": MediumProvider(),
+            # "researchgate": ResearchGateProvider(),
+            # "levelsfyi": LevelsFyiProvider(),
+            # "kaggle": KaggleProvider(),
+            # "hackerrank": HackerRankProvider(),
+            # "leetcode": LeetCodeProvider(),
+            # "producthunt": ProductHuntProvider(),
+            # "twitter": TwitterProvider(),
+            # "wellfound": WellfoundProvider(),
+            # "googlescholar": GoogleScholarProvider(),
+            # "companywebsites": CompanyWebsitesProvider(),
+            # "patentdatabases": PatentDatabasesProvider(),
+            # "conferencespeakers": ConferenceSpeakersProvider(),
+            # "academicjournals": AcademicJournalsProvider(),
         }
 
     def register_provider(self, name: str, provider):

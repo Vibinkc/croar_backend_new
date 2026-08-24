@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import ipaddress
 import json
 import os
@@ -8,9 +9,9 @@ from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from openai import OpenAI
 from pydantic import BaseModel
 
+from app.core.anthropic_llm import SyncClaudeOpenAI
 from app.core.dependencies import get_optional_company_id
 from app.services.enterprise.sourcing import profile_store
 from app.services.enterprise.sourcing_service import sourcing_service
@@ -19,7 +20,9 @@ router = APIRouter(prefix="/sourcing", tags=["Sourcing"])
 
 # Per-platform live-search timeout (seconds). A slow or failing provider is skipped
 # after this, so it can never stall the rest of the fan-out.
-PLATFORM_TIMEOUT = float(os.getenv("SOURCING_PLATFORM_TIMEOUT", "10"))
+# Claude web-search sourcing runs several searches to return a full batch (~60-90s), so the
+# per-provider timeout is generous now that Claude is the sole provider.
+PLATFORM_TIMEOUT = float(os.getenv("SOURCING_PLATFORM_TIMEOUT", "220"))
 # Cap on concurrent OpenAI enrichment calls so a wide fan-out doesn't burst rate limits.
 ENRICH_CONCURRENCY = int(os.getenv("SOURCING_ENRICH_CONCURRENCY", "10"))
 # Cap on how many providers we hit concurrently, and how many profiles we keep before
@@ -186,7 +189,7 @@ async def enrich_profiles(
 
     profiles = profiles[:MAX_ENRICH_PROFILES]
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = SyncClaudeOpenAI()
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     semaphore = asyncio.Semaphore(ENRICH_CONCURRENCY)
 
@@ -247,7 +250,7 @@ def _normalize_constraints(data: Any) -> dict[str, Any]:
 
 def parse_search_constraints(q: str) -> dict[str, Any]:
     """Use the LLM to turn a natural-language sourcing request into structured constraints."""
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    client = SyncClaudeOpenAI()
     try:
         completion = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
@@ -485,11 +488,12 @@ class SourcingProfile(BaseModel):
 async def search_profiles(
     q: str = Query(..., description="The search query"),
     location: str | None = Query(None, description="Location filter"),
-    platform: str = Query("github", description="Sourcing platform"),
+    platform: str = Query("claude", description="Sourcing platform"),
     page: int = Query(1, ge=1),
     page_size: int = Query(15, ge=1, le=100),
     enrich_contacts: bool = Query(True, description="Deep-scrape missing emails/socials"),
     has_contact: bool = Query(False, description="Only return profiles that have contact info"),
+    company_id: Annotated[str | None, Depends(get_optional_company_id)] = None,
 ):
     """
     Search for professional profiles across multiple platforms.
@@ -508,7 +512,23 @@ async def search_profiles(
     # Surface candidates with a direct email first (stable: keeps relevance within groups).
     profiles.sort(key=lambda p: 0 if p.get("email") else 1)
 
-    return await enrich_profiles(profiles)
+    result = await enrich_profiles(profiles)
+    # Meter sourcing credits: one per profile sourced.
+    if company_id and result:
+        import uuid as _uuid
+
+        from app.services.enterprise import credit_service as _cs
+
+        with contextlib.suppress(Exception):
+            await _cs.record_usage(
+                _uuid.UUID(str(company_id)),
+                "sourcing",
+                "profile",
+                units=len(result),
+                description=f"Sourced {len(result)} profiles for '{q[:60]}'",
+                reference_type="sourcing_search",
+            )
+    return result
 
 
 @router.get("/chat_db")

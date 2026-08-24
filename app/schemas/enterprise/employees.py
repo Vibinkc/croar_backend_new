@@ -137,5 +137,10 @@ class EmployeeOut(EmployeeBase):
     created_at: datetime
     updated_at: datetime
 
+    # Output-only: never re-validate deliverability on data already stored in the
+    # DB (e.g. reserved-TLD ".test" demo addresses would otherwise 500 the list
+    # endpoint). Input schemas keep EmailStr so new records are still validated.
+    email: str
+
     class Config:
         from_attributes = True

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
@@ -15,11 +15,15 @@ from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.enterprise.communication import MailAutomation
 from app.models.enterprise.company import Company
 from app.models.enterprise.interview import InterviewAutomation
-from app.models.enterprise.job import JobPosting, JobRequirement
+from app.models.enterprise.job import JobActivity, JobCollaborator, JobPosting, JobRequirement
 from app.models.enterprise.onboarding import OnboardingAutomation
+from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.constants import ModuleScope, PermissionAction
+from app.router.enterprise.job_portals import active_portal_connection
 from app.schemas.enterprise.jobs import (
+    AssignJobRequest,
     JDGenerationRequest,
+    JobActivityOut,
     JobMetrics,
     JobRequirementCreate,
     JobRequirementResponse,
@@ -30,6 +34,7 @@ from app.schemas.enterprise.jobs import (
 )
 from app.services.enterprise.google_jobs import google_jobs_service
 from app.services.enterprise.hiring_agent import hiring_agent_service
+from app.services.enterprise.job_distribution import PublishContext, job_distribution_service
 
 router = APIRouter(prefix="/jobs", tags=["Enterprise Jobs"])
 
@@ -43,6 +48,46 @@ def normalize_workflow_stages(stages: list[dict[str, object]]) -> list[dict[str,
     for i, stage in enumerate(stages):
         stage["id"] = str(i + 1)
     return stages
+
+
+def _actor_name(user: object) -> str:
+    fn = f"{getattr(user, 'first_name', '') or ''} {getattr(user, 'last_name', '') or ''}".strip()
+    return fn or str(getattr(user, "email", "") or "Someone")
+
+
+async def _log_job_activity(
+    session: Any, job: JobRequirement, actor: object, action: str, detail: dict[str, Any] | None = None
+) -> None:
+    """Append an entry to a requisition's audit trail (best-effort — never blocks the action)."""
+    try:
+        session.add(
+            JobActivity(
+                job_requirement_id=job.id,
+                company_id=job.company_id,
+                actor_id=getattr(actor, "id", None),
+                actor_name=_actor_name(actor),
+                action=action,
+                detail=detail,
+            )
+        )
+    except Exception:
+        pass
+
+
+async def _company_member_ids(session: Any, company_id: object) -> set:
+    """User ids that belong to this company (to validate owner/collaborator assignments)."""
+    rows = (
+        (
+            await session.execute(
+                select(EnterpriseUser.id).where(
+                    EnterpriseUser.company_id == company_id, EnterpriseUser.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return set(rows)
 
 
 async def _get_scoped_job(session: Any, current_user: object, job_id: UUID) -> JobRequirement | None:
@@ -93,12 +138,18 @@ async def create_job(
         if not partner:
             raise HTTPException(status_code=403, detail="Target company is not a registered partner node.")
 
+    actor_id = getattr(current_user, "id", None)
     new_job = JobRequirement(
         **request.model_dump(exclude={"target_platforms", "workflow_stages", "company_id"}),
         workflow_stages=workflow_stages,
         company_id=target_company_id,
+        # The creator becomes the accountable owner by default (Team Management).
+        owner_id=actor_id,
+        created_by=actor_id,
     )
     session.add(new_job)
+    await session.flush()
+    await _log_job_activity(session, new_job, current_user, "created", {"title": new_job.title})
     await session.commit()
     await session.refresh(new_job)
 
@@ -117,8 +168,9 @@ async def list_jobs(
     session: DBSessionDep,
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
     company_id: UUID | None = None,
+    mine: bool = False,
 ) -> list[JobRequirement]:
-    """List all jobs (optionally filtered by partner company)."""
+    """List all jobs (optionally filtered by partner company, or to the caller's own via `mine`)."""
     from sqlalchemy import or_
 
     is_consultancy = getattr(getattr(current_user, "company", None), "is_consultancy", False)
@@ -157,6 +209,12 @@ async def list_jobs(
             )
         else:
             stmt = stmt.where(JobRequirement.company_id == getattr(current_user, "company_id", None))
+
+    # "My Jobs": requisitions the caller owns OR collaborates on.
+    if mine:
+        uid = getattr(current_user, "id", None)
+        collab_subq = select(JobCollaborator.job_requirement_id).where(JobCollaborator.user_id == uid)
+        stmt = stmt.where(or_(JobRequirement.owner_id == uid, JobRequirement.id.in_(collab_subq)))
 
     result = await session.execute(stmt.order_by(JobRequirement.created_at.desc()))
     jobs = result.scalars().all()
@@ -262,6 +320,27 @@ async def get_job(
         onboarded=status_counts.get(5, 0),
     )
 
+    # Access tracking: stamp last-viewed and log a throttled 'viewed' activity (once/hour/user).
+    uid = getattr(current_user, "id", None)
+    now = datetime.now()
+    last_view = (
+        await session.execute(
+            select(JobActivity.created_at)
+            .where(
+                JobActivity.job_requirement_id == job.id,
+                JobActivity.actor_id == uid,
+                JobActivity.action == "viewed",
+            )
+            .order_by(JobActivity.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    job.last_viewed_at = cast("Any", now)
+    job.last_viewed_by = cast("Any", uid)
+    if not last_view or (now - cast("Any", last_view)).total_seconds() > 3600:
+        await _log_job_activity(session, job, current_user, "viewed")
+    await session.commit()
+
     return response
 
 
@@ -286,6 +365,8 @@ async def update_job(
     for key, value in update_data.items():
         setattr(job, key, value)
 
+    changed = [k for k in update_data if k not in ("workflow_stages", "application_fields")]
+    await _log_job_activity(session, job, current_user, "updated", {"fields": changed} if changed else None)
     await session.commit()
     await session.refresh(job)
 
@@ -298,6 +379,96 @@ async def update_job(
     )
     result_reload = await session.execute(stmt_reload)
     return result_reload.scalar_one()
+
+
+@router.post("/{job_id}/assign", response_model=JobRequirementResponse)
+async def assign_job(
+    job_id: UUID,
+    request: AssignJobRequest,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.assign))],
+) -> JobRequirement:
+    """Set a requisition's owner and collaborators (Team Management)."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    valid_ids = await _company_member_ids(session, job.company_id)
+    prev_owner = job.owner_id
+
+    if request.owner_id is not None:
+        if request.owner_id not in valid_ids:
+            raise HTTPException(status_code=422, detail="Owner must be a member of this company.")
+        job.owner_id = cast("Any", request.owner_id)
+
+    # Replace the collaborator set (dedup, valid members only, never the owner).
+    desired = [
+        uid for uid in dict.fromkeys(request.collaborator_ids) if uid in valid_ids and uid != job.owner_id
+    ]
+    await session.execute(delete(JobCollaborator).where(JobCollaborator.job_requirement_id == job_id))
+    actor_id = getattr(current_user, "id", None)
+    for uid in desired:
+        session.add(JobCollaborator(job_requirement_id=job_id, user_id=uid, added_by=actor_id))
+
+    # Resolve names for a readable audit entry.
+    involved = set(desired)
+    if request.owner_id is not None:
+        involved.add(request.owner_id)
+    name_map: dict[Any, str] = {}
+    if involved:
+        rows = (
+            await session.execute(
+                select(
+                    EnterpriseUser.id,
+                    EnterpriseUser.first_name,
+                    EnterpriseUser.last_name,
+                    EnterpriseUser.email,
+                ).where(EnterpriseUser.id.in_(involved))
+            )
+        ).all()
+        for r in rows:
+            name_map[r[0]] = f"{r[1] or ''} {r[2] or ''}".strip() or r[3]
+
+    detail: dict[str, Any] = {"collaborators": [name_map.get(u) for u in desired]}
+    if request.owner_id is not None and request.owner_id != prev_owner:
+        detail["owner"] = name_map.get(request.owner_id)
+    await _log_job_activity(session, job, current_user, "assigned", detail)
+    await session.commit()
+
+    reload = (
+        await session.execute(
+            select(JobRequirement)
+            .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+            .where(JobRequirement.id == job_id)
+        )
+    ).scalar_one()
+    return reload
+
+
+@router.get("/{job_id}/activity", response_model=list[JobActivityOut])
+async def job_activity(
+    job_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.read))],
+    limit: int = 60,
+) -> list[JobActivity]:
+    """The audit trail for one requisition (most recent first)."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    rows = (
+        (
+            await session.execute(
+                select(JobActivity)
+                .where(JobActivity.job_requirement_id == job_id)
+                .order_by(JobActivity.created_at.desc())
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows)
 
 
 @router.delete("/{job_id}")
@@ -349,42 +520,72 @@ async def delete_job(
 async def publish_job(
     job_id: UUID,
     request: PublishJobRequest,
+    http_request: Request,
     session: DBSessionDep,
     current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.publish))],
-) -> dict[str, str]:
-    """Publish a job to specific platforms."""
+) -> dict[str, Any]:
+    """Distribute a job to the selected external portals via the job-distribution registry.
+
+    Real, standards-based providers (Google for Jobs, Indeed feed, JP aggregators) do live
+    work; credentialed portals (Wanted) queue via the company's stored connection; partner
+    portals are surfaced honestly as PARTNER_REQUIRED. Each portal's outcome is persisted on
+    a JobPosting row and returned per-platform.
+    """
     job = await _get_scoped_job(session, current_user, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    company = getattr(job, "company", None)
+    if company is None and job.company_id:
+        company = (
+            await session.execute(select(Company).where(Company.id == job.company_id))
+        ).scalar_one_or_none()
+
+    job_url = f"{settings.frontend_url}/jobs/{job_id}"
+    feed_base = str(http_request.base_url).rstrip("/")
+    company_id = str(job.company_id or "")
+
+    results: list[dict[str, Any]] = []
     for platform in request.platforms:
-        stmt_posting = select(JobPosting).where(
-            JobPosting.job_requirement_id == job_id, JobPosting.platform == platform
-        )
-        result_posting = await session.execute(stmt_posting)
-        existing_posting = result_posting.scalar_one_or_none()
+        meta = job_distribution_service.meta(platform)
+        creds: dict[str, Any] = {}
+        if meta and meta.requires_credentials and company_id:
+            conn = active_portal_connection(company_id, meta.key)
+            if conn:
+                creds = conn.get("credentials") or {}
 
-        if existing_posting:
-            existing_posting.status = "PUBLISHED"
-            existing_posting.posted_at = cast("Any", datetime.now())
-        else:
-            new_posting = JobPosting(
-                job_requirement_id=job_id,
-                platform=platform,
-                status="PUBLISHED",
-                posted_at=cast("Any", datetime.now()),
-                company_id=job.company_id,
+        ctx = PublishContext(job=job, company=company, job_url=job_url, feed_url_base=feed_base, creds=creds)
+        result = await job_distribution_service.publish(platform, ctx)
+        results.append(result.as_dict())
+
+        # Persist the outcome on a per-(job, portal) JobPosting row.
+        key = job_distribution_service.resolve_key(platform)
+        existing = (
+            await session.execute(
+                select(JobPosting).where(JobPosting.job_requirement_id == job_id, JobPosting.platform == key)
             )
-            session.add(new_posting)
+        ).scalar_one_or_none()
+        reference = result.external_id or result.url
+        if existing:
+            existing.status = result.status.value
+            existing.external_id = reference
+            existing.posted_at = cast("Any", datetime.now())
+        else:
+            session.add(
+                JobPosting(
+                    job_requirement_id=job_id,
+                    platform=key,
+                    status=result.status.value,
+                    external_id=reference,
+                    posted_at=cast("Any", datetime.now()),
+                )
+            )
 
+    await _log_job_activity(session, job, current_user, "published", {"platforms": list(request.platforms)})
     await session.commit()
 
-    # Notify Google Jobs if selected
-    if "Google Jobs" in request.platforms:
-        job_url = f"{settings.frontend_url}/jobs/{job_id}"
-        await google_jobs_service.notify_job_update(job_url, update_type="URL_UPDATED")
-
-    return {"message": f"Job published to {len(request.platforms)} platforms"}
+    live = sum(1 for r in results if r["ok"])
+    return {"message": f"Distributed to {live} of {len(results)} portals.", "results": results}
 
 
 @router.post("/generate-jd")
@@ -397,6 +598,7 @@ async def generate_jd_endpoint(
         title=request.title,
         existing_description=request.existing_description or "",
         location=request.location or "",
+        work_mode=request.work_mode or "",
         experience_min=request.experience_min or "",
         experience_max=request.experience_max or "",
         additional_instructions=request.additional_instructions or "",

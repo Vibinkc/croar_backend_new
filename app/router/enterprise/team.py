@@ -203,7 +203,10 @@ async def add_team_member(
     result = await session.execute(role_stmt)
     roles = result.scalars().all()
 
-    if not roles:
+    # Allow inviting a member with NO role yet (roles can be assigned later) — otherwise a
+    # fresh org with no custom roles can never add its first member. Only reject when role
+    # ids were actually provided but none are valid.
+    if role_ids and not roles:
         raise HTTPException(status_code=400, detail="Invalid roles provided.")
 
     # EnterpriseUser.email is globally unique. Pre-check for a friendly message

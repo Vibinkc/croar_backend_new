@@ -83,6 +83,13 @@ async def get_current_user(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Your organization has been deactivated."
             )
+        # Set the billing context so AI usage during this request is metered to this company.
+        try:
+            from app.services.enterprise.credit_service import set_billing_context
+
+            set_billing_context(getattr(user_eu, "company_id", None), getattr(user_eu, "id", None))
+        except Exception:
+            pass
         return user_eu
 
     # 2. Check for SuperAdmin

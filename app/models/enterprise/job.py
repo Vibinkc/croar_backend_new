@@ -1,6 +1,17 @@
 import uuid
 
-from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, Numeric, SmallInteger, String, Text, func
+from sqlalchemy import (
+    TIMESTAMP,
+    Boolean,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
@@ -52,6 +63,19 @@ class JobRequirement(EnterpriseBase):
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Ownership & assignment (Team Management): one accountable owner + collaborators.
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # Access tracking: who last opened this requisition, and when.
+    last_viewed_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    last_viewed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
     updated_at: Mapped[TIMESTAMP] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
@@ -60,6 +84,10 @@ class JobRequirement(EnterpriseBase):
 
     status = relationship("JobStatus")
     company = relationship("Company")
+    owner = relationship("EnterpriseUser", foreign_keys=[owner_id], lazy="selectin")
+    collaborators = relationship(
+        "JobCollaborator", back_populates="job", cascade="all, delete-orphan", lazy="selectin"
+    )
     postings = relationship("JobPosting", back_populates="job_requirement", cascade="all, delete-orphan")
     assessment_automations = relationship(
         "AssessmentAutomation", back_populates="job", cascade="all, delete-orphan"
@@ -68,6 +96,11 @@ class JobRequirement(EnterpriseBase):
     onboarding_automations = relationship(
         "OnboardingAutomation", back_populates="job", cascade="all, delete-orphan"
     )
+
+    @property
+    def collaborator_users(self) -> list:
+        """The EnterpriseUser objects collaborating on this job (for API serialization)."""
+        return [c.user for c in self.collaborators if c.user]
 
 
 class JobPosting(EnterpriseBase):
@@ -91,3 +124,46 @@ class JobPosting(EnterpriseBase):
     )
 
     job_requirement = relationship("JobRequirement", back_populates="postings")
+
+
+class JobCollaborator(EnterpriseBase):
+    """A team member who can collaborate on a requisition (alongside its owner)."""
+
+    __tablename__ = "job_collaborators"
+    __table_args__ = (UniqueConstraint("job_requirement_id", "user_id", name="uq_job_collaborator"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
+    )
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    added_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    added_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+
+    job = relationship("JobRequirement", back_populates="collaborators")
+    user = relationship("EnterpriseUser", foreign_keys=[user_id], lazy="selectin")
+
+
+class JobActivity(EnterpriseBase):
+    """Audit-trail entry for a requisition (created / assigned / updated / viewed / …)."""
+
+    __tablename__ = "job_activities"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
+    )
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    actor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[TIMESTAMP] = mapped_column(
+        TIMESTAMP, default=func.now(), server_default=func.now(), index=True
+    )

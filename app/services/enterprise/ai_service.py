@@ -11,9 +11,26 @@ logger = logging.getLogger(__name__)
 async def generate_assessment_questions(
     type: AssessmentType, topic: str, count: int = 10, language: str = "English"
 ) -> list[dict[str, object]]:
+    """Generate assessment questions using the LLM, retrying once if the first try is empty.
+
+    A single LLM call can occasionally come back unparseable or with every option-answer
+    dropped (more likely in non-English output), which would hand the caller an empty
+    assessment. One retry makes that self-heal instead of surfacing a blank test.
     """
-    Generates assessment questions using LLM.
-    """
+    for attempt in range(2):
+        result = await _generate_assessment_questions_once(type, topic, count, language)
+        if result:
+            return result
+        if attempt == 0:
+            logger.warning(
+                "Assessment generation returned 0 questions (%s, %s); retrying once", type, language
+            )
+    return []
+
+
+async def _generate_assessment_questions_once(
+    type: AssessmentType, topic: str, count: int = 10, language: str = "English"
+) -> list[dict[str, object]]:
     # Don't interpolate the user-supplied topic into logs (log-injection); count + type suffice.
     logger.info("Generating %s %s questions", count, type)
 
@@ -21,6 +38,20 @@ async def generate_assessment_questions(
     context = f"Topic: {topic}. Assessment for a professional role."
 
     try:
+        if type == AssessmentType.VIDEO:
+            # Open-ended prompts the candidate answers on camera (no options/correct answer);
+            # reuse the conversational interview-question generator.
+            raw_questions = await giq(topic, count, "Intermediate", context, language=language)
+            return [
+                {
+                    "id": str(i),
+                    "type": "VIDEO",
+                    "question": cast("str", q.get("question") or q.get("question_text") or ""),
+                    "expected_answer_points": q.get("expected_answer_points", []),
+                }
+                for i, q in enumerate(raw_questions, 1)
+                if (q.get("question") or q.get("question_text"))
+            ]
         if type == AssessmentType.APTITUDE:
             raw_questions = await generate_aptitude_questions(
                 topic, count, difficulty, context, language=language

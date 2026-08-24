@@ -338,9 +338,9 @@ async def start_session(
         employee = emp_res.scalar_one_or_none()
         if employee:
             session_user_id = employee.id
-        else:
-            # Fallback to User (Admin/Recruiter taking simulation for testing)
-            hiring_agent_id = cast("UUID | None", getattr(current_user, "id", None))
+        # else: an admin/recruiter is taking the simulation to try it out. We do NOT set
+        # hiring_agent_id here — that column is a FK to `hiring_agents`, not `users`, so storing
+        # the user's id violates the constraint. Attribution is via company_id; leave it null.
     elif not session_user_id and not current_user:
         raise HTTPException(status_code=401, detail="Authentication required to start session")
 

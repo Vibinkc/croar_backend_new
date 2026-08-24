@@ -10,9 +10,9 @@ from uuid import UUID
 import bleach
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.concurrency import run_in_threadpool
-from openai import AsyncOpenAI
 from sqlalchemy import func, select, update
 
+from app.core.anthropic_llm import AsyncClaudeOpenAI
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.core.settings import get_settings
 from app.models.enterprise.candidate import Candidate, CandidateApplication
@@ -170,17 +170,31 @@ def wrap_with_layout(body: str, company_name: str, logo_url: str | None = None) 
 
 
 def send_smtp_email(
-    to_email: str, subject: str, body: str, company_name: str | None = None, logo_url: str | None = None
+    to_email: str,
+    subject: str,
+    body: str,
+    company_name: str | None = None,
+    logo_url: str | None = None,
+    ics: str | None = None,
 ) -> tuple[bool, str]:
     try:
         actual_company = company_name or _settings.app_name
         actual_logo = logo_url or _settings.default_logo_url
         branded_body = wrap_with_layout(body, actual_company, actual_logo)
-        msg = MIMEMultipart()
+        msg = MIMEMultipart("mixed")
         msg["From"] = str(_settings.mailer_sender_email)
         msg["To"] = to_email
         msg["Subject"] = subject
         msg.attach(MIMEText(branded_body, "html"))
+        if ics:
+            # A calendar part with method=REQUEST renders as an Accept/Decline meeting invite in
+            # Outlook/Gmail; the .ics filename attachment covers clients that only read attachments.
+            cal = MIMEText(ics, "calendar", "utf-8")
+            cal.replace_header(
+                "Content-Type", 'text/calendar; charset="utf-8"; method=REQUEST; name="invite.ics"'
+            )
+            cal.add_header("Content-Disposition", 'attachment; filename="invite.ics"')
+            msg.attach(cal)
 
         with smtplib.SMTP(str(_settings.smtp_address), int(cast("Any", _settings.smtp_port))) as server:
             server.starttls()
@@ -190,6 +204,50 @@ def send_smtp_email(
         return True, ""
     except Exception as e:
         return False, str(e)
+
+
+async def send_company_email(
+    company_id: object,
+    to_email: str,
+    subject: str,
+    body: str,
+    company_name: str | None = None,
+    logo_url: str | None = None,
+) -> tuple[bool, str]:
+    """Send an email FROM the organization's own connected mailbox (integrated mail).
+
+    Prefers the company's connected mailbox (Gmail / Outlook / IMAP-SMTP) so mail goes out
+    from the org's real address and replies land in their inbox. Falls back to the platform
+    default (.env) SMTP only when the company has NOT connected a mailbox yet.
+    """
+    actual_company = company_name or _settings.app_name
+    actual_logo = logo_url or _settings.default_logo_url
+    branded_body = wrap_with_layout(body, actual_company, actual_logo)
+
+    conn = None
+    if company_id:
+        try:
+            # Local import: sourcing_chat imports communication (one-directional at module
+            # load), so importing it back here must stay function-local to avoid a cycle.
+            from .sourcing_chat import _active_connection
+
+            conn = await run_in_threadpool(_active_connection, str(company_id))
+        except Exception:
+            conn = None
+
+    if conn:
+        try:
+            from .sourcing_chat import _send_mail
+
+            ok, _err = await _send_mail(conn, to_email, subject, branded_body)
+            if ok:
+                return True, ""
+            # If the org mailbox send fails, fall through to the platform default below.
+        except Exception:
+            pass
+
+    # No connected mailbox (or it errored) → platform default (.env) SMTP.
+    return await run_in_threadpool(send_smtp_email, to_email, subject, body, company_name, logo_url)
 
 
 @router.post("/templates", response_model=EmailTemplateResponse)
@@ -320,13 +378,45 @@ async def get_email_logs(
 @router.post("/sync-imap")
 async def sync_emails_manually(
     session: DBSessionDep,
-    _current_user: Annotated[
+    current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.communications, PermissionAction.moderate))
     ],
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
-    """Trigger manual IMAP sync."""
-    result = await imap_service.fetch_and_sync_emails(session, background_tasks)
+    """Trigger manual IMAP sync — reads from the ORG's own connected mailbox when available,
+    falling back to the platform default (.env) only if no mailbox is connected."""
+    company_id = getattr(current_user, "company_id", None)
+    imap_override: dict[str, object] | None = None
+    if company_id:
+        try:
+            from .sourcing_chat import _active_connection
+
+            conn = await run_in_threadpool(_active_connection, str(company_id))
+        except Exception:
+            conn = None
+        if (
+            conn
+            and conn.get("auth_type") != "oauth"
+            and conn.get("imap_host")
+            and conn.get("email")
+            and conn.get("password")
+        ):
+            imap_override = {
+                "host": conn.get("imap_host"),
+                "port": conn.get("imap_port") or 993,
+                "user": conn.get("email"),
+                "password": conn.get("password"),
+            }
+        elif conn and conn.get("auth_type") == "oauth":
+            # OAuth Gmail inbox needs the Gmail API (not IMAP) — not wired yet.
+            return {
+                "status": "oauth_inbox_unsupported",
+                "detail": "Your Gmail is connected via OAuth — inbox sync over IMAP isn't "
+                "supported for it yet. Reconnect with an app password to sync replies.",
+            }
+    result = await imap_service.fetch_and_sync_emails(
+        session, background_tasks, imap_override=imap_override, company_id=company_id
+    )
     return result
 
 
@@ -522,6 +612,15 @@ async def send_emails(
     """Send emails."""
     template = None
     company_id = getattr(current_user, "company_id", None)
+
+    # Gate on a connected mailbox: the Mail module sends from the org's OWN mailbox, so a
+    # disconnected mailbox (in Integrations) blocks sending here too — no silent .env fallback.
+    if company_id:
+        from .sourcing_chat import _active_connection
+
+        conn = await run_in_threadpool(_active_connection, str(company_id))
+        if not conn:
+            raise HTTPException(status_code=409, detail="no_mailbox")
     if request.template_id:
         stmt = select(EmailTemplate).where(
             EmailTemplate.id == request.template_id, EmailTemplate.company_id == company_id
@@ -636,8 +735,10 @@ async def send_emails(
         session.add(log_entry)
         await session.flush()
 
-        success, error = await run_in_threadpool(
-            send_smtp_email, email_addr, final_subject, final_body, company_name, company_logo
+        # Integrated mail: send from the org's OWN connected mailbox (falls back to the
+        # platform default only if the company hasn't connected one yet).
+        success, error = await send_company_email(
+            company_id, email_addr, final_subject, final_body, company_name, company_logo
         )
 
         log_entry.status = "sent" if success else "failed"
@@ -664,7 +765,7 @@ async def draft_email(
         return {"subject": f"Regarding {request.purpose}", "body": "Draft content."}
 
     try:
-        client = AsyncOpenAI(api_key=str(_settings.openai_api_key))
+        client = AsyncClaudeOpenAI()
         prompt = f"Draft a {request.tone} email for {request.purpose}."
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}]
@@ -696,7 +797,7 @@ async def generate_template(
         }
 
     try:
-        client = AsyncOpenAI(api_key=str(_settings.openai_api_key))
+        client = AsyncClaudeOpenAI()
         system_prompt = (
             "You are an expert HR email writer. "
             "Generate a complete email template in JSON format with the following keys: "

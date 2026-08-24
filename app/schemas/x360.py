@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.enterprise.x360 import AssignmentStatus, CycleStatus, QuestionType, RelationType
 
@@ -37,8 +37,8 @@ class X360Question(X360QuestionBase):
 
 # AI Generation
 class X360AIGenerateRequest(BaseModel):
-    categories: list[str]
-    count: int = 5
+    categories: list[str] = Field(..., min_length=1)  # at least one category required
+    count: int = Field(5, ge=1, le=50)
     additional_context: str | None = None
     custom_category: str | None = None
 

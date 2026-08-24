@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import TIMESTAMP, Date, ForeignKey, Integer, String, Text, func
+from sqlalchemy import TIMESTAMP, Date, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
@@ -31,10 +31,20 @@ class Department(EnterpriseBase):
 class Employee(EnterpriseBase):
     __tablename__ = "employees"
 
+    # Employee code (EMP-1001) and email are numbered/scoped PER COMPANY, so uniqueness must be
+    # composite with company_id — a global unique constraint collides across tenants (every
+    # company's first hire is EMP-1001, and the same person can be an employee at two orgs).
+    __table_args__ = (
+        UniqueConstraint("company_id", "employee_id", name="uq_employees_company_employee_id"),
+        UniqueConstraint("company_id", "email", name="uq_employees_company_email"),
+    )
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
     )
-    employee_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)  # e.g., EMP-1001
+    employee_id: Mapped[str] = mapped_column(
+        String(50), nullable=False
+    )  # e.g., EMP-1001 (unique per company)
 
     # Names
     first_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -42,7 +52,7 @@ class Employee(EnterpriseBase):
     last_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
     # Contact
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)  # unique per company (see __table_args__)
     mobile: Mapped[str | None] = mapped_column(String(20), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(20), nullable=True)
 

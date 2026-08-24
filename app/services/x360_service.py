@@ -2,11 +2,11 @@ import json
 import uuid
 from typing import Any, cast
 
-from openai import AsyncOpenAI
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.anthropic_llm import AsyncClaudeOpenAI
 from app.core.settings import get_settings
 from app.models.enterprise.employee import Employee
 from app.models.enterprise.x360 import (
@@ -24,7 +24,7 @@ from app.models.enterprise.x360 import (
 from app.router.enterprise.communication import send_smtp_email
 
 _settings = get_settings()
-client = AsyncOpenAI(api_key=_settings.openai_api_key)
+client = AsyncClaudeOpenAI()
 
 
 class X360Service:

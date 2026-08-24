@@ -140,5 +140,19 @@ async def complete_interview(
             application.current_stage += 1
             await trigger_automations(application.id, application.current_stage, session, background_tasks)
 
+            # Meter one interview credit per completed AI interview session.
+            if getattr(application, "company_id", None):
+                from app.services.enterprise import credit_service as _cs
+
+                await _cs.record_usage(
+                    application.company_id,
+                    "interview",
+                    "session",
+                    reference_type="interview_attempt",
+                    reference_id=str(attempt_id),
+                    description="AI interview session completed",
+                    session=session,
+                )
+
     await session.commit()
     return {"status": "SUCCESS", "message": "Interview completed and application moved to next stage."}

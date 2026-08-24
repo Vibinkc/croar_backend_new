@@ -7,10 +7,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import TYPE_CHECKING, Any, cast
 
-from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.anthropic_llm import claude_complete, claude_json
 from app.core.settings import get_settings
 from app.models.enterprise.candidate import ApplicationStatus, Candidate, CandidateApplication
 from app.models.enterprise.job import JobRequirement
@@ -23,7 +23,8 @@ _settings = get_settings()
 
 class HiringAgentService:
     def __init__(self) -> None:
-        self.client = AsyncOpenAI(api_key=_settings.openai_api_key)
+        # LLM calls go through the shared Claude helpers (app.core.anthropic_llm).
+        pass
 
     async def generate_automated_workflow(self, job_title: str, job_description: str) -> list[dict[str, Any]]:
         """
@@ -66,20 +67,16 @@ class HiringAgentService:
         """
 
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a specialized AI Recruiting Architect. Output valid JSON only.",
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
+            content = await claude_json(
+                prompt,
+                system="You are a specialized AI Recruiting Architect. Output valid JSON only, "
+                'as an object shaped {"stages": [ ... ]}.',
             )
-            content = str(response.choices[0].message.content)
-            data: dict[str, list[dict[str, Any]]] = json.loads(content)
-            stages = data.get("stages", [])
+            data: Any = json.loads(content)
+            # Tolerate either {"stages": [...]} or a bare [...] array from the model.
+            stages = (
+                data.get("stages", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            )
             for i, stage in enumerate(stages):
                 stage["id"] = str(i + 1)
                 stage["order"] = i + 1
@@ -356,15 +353,7 @@ class HiringAgentService:
         - values_extracted: (e.g. {{"notice_period": 30, "salary": 1200000}}) if any.
         """
         try:
-            res = await self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are an HR analyst. Output JSON."},
-                    {"role": "user", "content": prompt},
-                ],
-                response_format={"type": "json_object"},
-            )
-            content = str(res.choices[0].message.content)
+            content = await claude_json(prompt, system="You are an HR analyst. Output JSON.")
             return cast("dict[str, Any]", json.loads(content))
         except Exception:
             return {"score": 50, "analysis": "Could not parse response with AI."}
@@ -379,10 +368,7 @@ class HiringAgentService:
             "Keep it constructive."
         )
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
-            )
-            return str(response.choices[0].message.content)
+            return (await claude_complete(prompt, max_tokens=300)).strip()
         except Exception:
             return (
                 "Thank you for your interest, but your profile does not meet our "
@@ -404,10 +390,7 @@ class HiringAgentService:
         Keep it concise and friendly.
         """
         try:
-            response = await self.client.chat.completions.create(
-                model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}]
-            )
-            return str(response.choices[0].message.content)
+            return (await claude_complete(prompt, max_tokens=400)).strip()
         except Exception:
             return (
                 f"Hi {candidate_name}, thank you for your message. We have received "

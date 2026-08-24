@@ -9,11 +9,12 @@ The candidate take page (frontend /assessment/take/[id]) drives this flow:
 frontend sends both as automation_id/template_id and we resolve whichever exists.
 """
 
+import os
 import uuid
 from datetime import datetime
 from typing import Any, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
@@ -268,19 +269,27 @@ async def submit_assessment(
     scores_to_average = [s for s in (apt_score, cod_score) if s is not None]
     overall_score = sum(scores_to_average) // len(scores_to_average) if scores_to_average else 0
 
+    # A VIDEO assessment can't be auto-graded — the candidate recorded answers a human reviews.
+    # Mark it pending review; scoring + stage-advance happen when HR scores it.
+    is_video = any(str(q.get("type") or "").upper() == "VIDEO" for q in questions)
+
     attempt.answers = answers
-    attempt.score = overall_score
-    attempt.aptitude_score = apt_score
-    attempt.coding_score = cod_score
-    attempt.status = "COMPLETED"
     attempt.completed_at = cast("Any", datetime.now())
+    if is_video:
+        attempt.score = None
+        attempt.status = "PENDING_REVIEW"
+    else:
+        attempt.score = overall_score
+        attempt.aptitude_score = apt_score
+        attempt.coding_score = cod_score
+        attempt.status = "COMPLETED"
 
     application = (
         await session.execute(
             select(CandidateApplication).where(CandidateApplication.id == attempt.application_id)
         )
     ).scalar_one_or_none()
-    if application:
+    if application and not is_video:
         application.ai_match_score = cast(
             "Any", (float(application.ai_match_score or 0) + float(overall_score)) / 2
         )
@@ -288,5 +297,54 @@ async def submit_assessment(
         if overall_score >= 60:
             await trigger_automations(application.id, application.current_stage, session)
 
+    # Meter one assessment credit per completed attempt (company derived from the application).
+    if application and getattr(application, "company_id", None):
+        from app.services.enterprise import credit_service as _cs
+
+        await _cs.record_usage(
+            application.company_id,
+            "assessment",
+            "attempt",
+            reference_type="assessment_attempt",
+            reference_id=str(attempt.id),
+            description="Assessment attempt completed",
+            session=session,
+        )
+
     await session.commit()
+    if is_video:
+        return {"status": "success", "score": None, "pending_review": True}
     return {"status": "success", "score": overall_score}
+
+
+@router.post("/{attempt_id}/video/{question_id}")
+async def upload_video_answer(
+    attempt_id: uuid.UUID, question_id: str, session: DBSessionDep, video: UploadFile = File(...)
+) -> dict[str, Any]:
+    """Store one recorded video answer for a question, keyed by question id in ``answers``.
+
+    The candidate uploads a clip per question during a VIDEO assessment, then calls submit to
+    finalise. Files are saved under uploads/assessment_videos and served from /uploads/…
+    """
+    attempt = (
+        await session.execute(select(AssessmentAttempt).where(AssessmentAttempt.id == attempt_id))
+    ).scalar_one_or_none()
+    if not attempt or attempt.status == "COMPLETED":
+        raise HTTPException(status_code=404, detail="Attempt not found or already completed.")
+
+    dest_dir = "uploads/assessment_videos"
+    os.makedirs(dest_dir, exist_ok=True)
+    ext = os.path.splitext(video.filename or "")[1].lower() or ".webm"
+    if ext not in (".webm", ".mp4", ".mov", ".ogg", ".m4v"):
+        raise HTTPException(status_code=422, detail="Unsupported video format.")
+    fname = f"{uuid.uuid4().hex}{ext}"
+    with open(os.path.join(dest_dir, fname), "wb") as f:
+        f.write(await video.read())
+    url = f"/uploads/assessment_videos/{fname}"
+
+    # Reassign a fresh dict so SQLAlchemy detects the JSONB change.
+    answers = dict(attempt.answers or {})
+    answers[str(question_id)] = url
+    attempt.answers = cast("Any", answers)
+    await session.commit()
+    return {"status": "success", "url": url}

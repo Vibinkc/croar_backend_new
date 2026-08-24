@@ -87,6 +87,26 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from app.agents.agent import get_agent_executor
 
 
+def _message_text(content: object) -> str:
+    """Flatten a LangChain message's content to plain text.
+
+    Claude (extended thinking) returns content as a LIST of blocks — thinking, text,
+    tool_use — instead of a plain string. The chat UI renders the response as markdown, so
+    we keep only the text blocks and drop thinking/tool blocks.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                parts.append(str(block["text"]))
+        return "".join(parts).strip() or "Done."
+    return str(content)
+
+
 @router.post("/chat")
 async def agent_chat(
     request: AgentChatRequest, current_user: AuthUser, session: AsyncSession = Depends(get_db)
@@ -138,12 +158,27 @@ async def agent_chat(
         # Execute the graph (it resumes from the last state in the thread). The executor uses a
         # persistent Postgres checkpointer when available, else an in-memory fallback.
         executor = await get_agent_executor()
-        result = await executor.ainvoke(inputs, config=config)
+        try:
+            result = await executor.ainvoke(inputs, config=config)
+        except Exception as turn_err:
+            # A corrupted/oversized conversation state (e.g. an invalid message in the replayed
+            # history) makes EVERY retry on the same thread fail the same way. Recover by replaying
+            # just this turn on a fresh thread so the user isn't trapped in a failure loop.
+            logger.warning(
+                f"Croar Pilot turn failed on thread '{thread_id}' ({turn_err!r}); retrying on a fresh thread."
+            )
+            fresh_thread = f"{company_id}:recovered-{uuid.uuid4().hex[:8]}"
+            fresh_config = {
+                "configurable": {"thread_id": fresh_thread, "session": session, "company_id": company_id}
+            }
+            result = await executor.ainvoke(inputs, config=fresh_config)
 
         # Get the last message from the agent (guard against an empty/odd result).
         messages = result.get("messages") if isinstance(result, dict) else None
         final_message = (
-            messages[-1].content if messages else "I couldn't generate a response. Please try again."
+            _message_text(messages[-1].content)
+            if messages
+            else "I couldn't generate a response. Please try again."
         )
 
         # Surface a UI action from a tool result — the candidate picker (source_candidates) or the
@@ -165,6 +200,33 @@ async def agent_chat(
                         break
         except Exception:
             pilot_action = None
+
+        # Meter the Pilot turn on real token burn (langchain, not claude_complete, so not
+        # auto-metered). Sum token usage across the agent's LLM calls this turn.
+        try:
+            import uuid as _uuid
+
+            from app.services.enterprise import credit_service as _cs
+
+            in_tok = out_tok = 0
+            for m in messages or []:
+                um = getattr(m, "usage_metadata", None) or {}
+                in_tok += int(um.get("input_tokens") or 0)
+                out_tok += int(um.get("output_tokens") or 0)
+            if in_tok == 0 and out_tok == 0:
+                # Fallback estimate (~4 chars/token) when usage metadata is absent.
+                out_tok = max(1, len(final_message) // 4)
+                in_tok = len(message) // 4
+            await _cs.record_ai_usage(
+                _uuid.UUID(company_id),
+                in_tok,
+                out_tok,
+                action="pilot_chat",
+                user_id=getattr(current_user, "id", None),
+                description="Croar Pilot chat",
+            )
+        except Exception:
+            pass
 
         return {
             "response": final_message,

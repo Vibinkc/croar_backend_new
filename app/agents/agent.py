@@ -2,8 +2,8 @@ import asyncio
 import logging
 from typing import Any
 
+from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import AIMessage, SystemMessage
-from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -48,8 +48,8 @@ tools = [
     setup_mail_automation,
     setup_onboarding_automation,
 ]
-_api_key = SecretStr(_settings.openai_api_key) if _settings.openai_api_key else None
-llm = ChatOpenAI(api_key=_api_key, model=_settings.openai_model)
+_api_key = SecretStr(_settings.anthropic_api_key) if _settings.anthropic_api_key else None
+llm = ChatAnthropic(api_key=_api_key, model=_settings.anthropic_model, max_tokens=8192)
 # parallel_tool_calls=False forces ONE tool per turn. Tools share a single async DB session,
 # which is NOT safe for concurrent use — parallel calls cause "commit() already in progress".
 llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=False)

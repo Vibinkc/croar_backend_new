@@ -37,11 +37,26 @@ class Settings(BaseSettings):
 
     # External APIs
     openai_api_key: str | None = Field(None, validation_alias="OPENAI_API_KEY")
+    anthropic_api_key: str | None = Field(None, validation_alias="ANTHROPIC_API_KEY")
+    sourcing_model: str = Field("claude-sonnet-5", validation_alias="SOURCING_MODEL")
+    # Model used by Croar Pilot (the agent) + the shared generation helpers.
+    anthropic_model: str = Field("claude-sonnet-5", validation_alias="ANTHROPIC_MODEL")
     openai_model: str = Field("gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    # Apollo.io — sole live sourcing provider (people search + email/phone enrichment).
+    apollo_api_key: str | None = Field(None, validation_alias="APOLLO_API_KEY")
 
     # Google SSO
     google_client_id: str | None = Field(None, validation_alias="GOOGLE_CLIENT_ID")
     google_client_secret: str | None = Field(None, validation_alias="GOOGLE_CLIENT_SECRET")
+    # Microsoft 365 mailbox OAuth (Azure AD app + Microsoft Graph).
+    microsoft_client_id: str | None = Field(None, validation_alias="MICROSOFT_CLIENT_ID")
+    microsoft_client_secret: str | None = Field(None, validation_alias="MICROSOFT_CLIENT_SECRET")
+    # "common" (any account) | "organizations" (work/school) | a specific tenant GUID.
+    microsoft_tenant: str = Field("common", validation_alias="MICROSOFT_TENANT")
+    # UPN (email) of the mailbox that hosts Teams interview meetings, created app-only via
+    # Microsoft Graph client-credentials. Requires OnlineMeetings.ReadWrite.All app permission +
+    # an application access policy granting this app rights to create meetings for this user.
+    ms_organizer_upn: str | None = Field(None, validation_alias="MS_ORGANIZER_UPN")
 
     # Google Indexing API (for Google Jobs)
     google_service_account_json: str | None = Field(None, validation_alias="GOOGLE_SERVICE_ACCOUNT_JSON")

@@ -1,32 +1,27 @@
 import json
+import logging
 from typing import cast
 
-from openai import AsyncOpenAI
+from app.core.anthropic_llm import AsyncClaudeOpenAI, claude_json
 
-from app.core.settings import get_settings
+logger = logging.getLogger(__name__)
 
-_settings = get_settings()
-client = AsyncOpenAI(api_key=_settings.openai_api_key)
+# Claude-backed, OpenAI-shaped chat client. Other modules (e.g. the sourcing calibrate/sequence
+# flows in sourcing_chat.py) do `from app.core.ai import client` and call
+# `client.chat.completions.create(...)` — this shim routes those to Claude.
+client = AsyncClaudeOpenAI()
 
 
 async def analyze_text_with_llm(prompt: str) -> str:
     """
-    Analyzes text using OpenAI.
+    Analyzes text using Claude (Anthropic).
     Returns the raw JSON string from the LLM.
     """
     try:
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that outputs JSON."},
-                {"role": "user", "content": prompt},
-            ],
-            response_format={"type": "json_object"},
-        )
-        content = response.choices[0].message.content or "{}"
-        return content
+        # 8k tokens so large payloads (coding questions with test cases) aren't truncated.
+        return await claude_json(prompt, max_tokens=8000)
     except Exception as e:
-        print(f"CRITICAL: OpenAI Call Error: {e}")
+        print(f"CRITICAL: Claude Call Error: {e}")
         return json.dumps(
             {
                 "issues": [
@@ -106,6 +101,50 @@ async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, object]
         }
 
 
+def _resolve_correct_answer(correct: object, options: list[object]) -> str | None:
+    """Map an LLM ``correct_answer`` to the exact option string it refers to.
+
+    The model often returns an answer that is semantically one of the options but not a
+    byte-exact copy — extra whitespace, trailing punctuation, an "Option B" / "B" prefix,
+    or (in non-English output) subtle formatting drift. A strict ``in`` check then drops
+    EVERY question and the whole assessment comes back empty (worst in KO/JA). This resolves
+    the intended option tolerantly and returns the canonical option text, or None if it
+    genuinely cannot be matched.
+    """
+    opts = [str(o) for o in options]
+    if not opts:
+        return None
+    ca = str(correct or "").strip()
+    if not ca:
+        return None
+
+    # 1) exact match
+    if ca in opts:
+        return ca
+
+    def norm(s: str) -> str:
+        return " ".join(s.strip().strip(".").casefold().split())
+
+    nmap = {norm(o): o for o in opts}
+    # 2) whitespace/case/punctuation-insensitive match
+    if norm(ca) in nmap:
+        return nmap[norm(ca)]
+    # 3) letter or "Option X" reference -> index into options
+    letter = ca.strip().lstrip("(").rstrip(").:").strip()
+    for prefix in ("option ", "옵션 ", "選択肢 "):
+        if letter.lower().startswith(prefix):
+            letter = letter[len(prefix) :].strip()
+    if len(letter) == 1 and letter.upper() in "ABCDEFGH":
+        idx = ord(letter.upper()) - ord("A")
+        if 0 <= idx < len(opts):
+            return opts[idx]
+    # 4) unique substring containment either direction
+    contains = [o for o in opts if norm(ca) and (norm(ca) in norm(o) or norm(o) in norm(ca))]
+    if len(contains) == 1:
+        return contains[0]
+    return None
+
+
 def _language_directive(language: str | None) -> str:
     """Instruction appended to generation prompts so the LLM writes output in the chosen language.
 
@@ -172,11 +211,23 @@ async def generate_aptitude_questions(
         questions = cast("list[dict[str, object]]", response_data.get("questions", []))
 
         valid_questions = []
+        dropped = 0
         for q in questions:
-            if all(k in q for k in ["question_text", "type", "options", "correct_answer", "explanation"]):
-                if q["correct_answer"] in cast("list[object]", q["options"]):
-                    valid_questions.append(q)
+            if not all(k in q for k in ["question_text", "type", "options", "correct_answer", "explanation"]):
+                dropped += 1
+                continue
+            resolved = _resolve_correct_answer(q["correct_answer"], cast("list[object]", q["options"]))
+            if resolved is None:
+                dropped += 1
+                continue
+            # Canonicalize to the exact option text so downstream grading matches.
+            q["correct_answer"] = resolved
+            valid_questions.append(q)
 
+        if dropped:
+            logger.warning(
+                "Dropped %d/%d aptitude question(s) with unresolvable answers", dropped, len(questions)
+            )
         return valid_questions[:count]
     except Exception:
         return []
@@ -257,6 +308,7 @@ async def generate_job_description_ai(
     experience_min: str = "",
     experience_max: str = "",
     additional_instructions: str = "",
+    work_mode: str = "",
 ) -> dict[str, object]:
     """
     Generate or enhance a job description based on title and existing content.
@@ -277,13 +329,27 @@ async def generate_job_description_ai(
     else:
         goal = "generate a professional, high-impact job description from scratch"
 
+    # Respect the work mode the user picked (On-Site / Remote / Hybrid). Never default to
+    # "Remote" — that used to contradict an On-Site/Hybrid selection in the generated JD.
+    mode = (work_mode or "").strip()
+    loc = (location or "").strip()
+    if loc and mode:
+        location_line = f"{loc} ({mode})"
+    elif loc:
+        location_line = loc
+    elif mode:
+        location_line = mode
+    else:
+        location_line = "Not specified"
+
     prompt = (
         "You are an expert technical recruiter and HR consultant.\n"
         f"Your goal is to {goal} for the role of '{title}'.\n\n"
         "Context:\n"
         f"- Title: {title}\n"
-        f"- Location: {location or 'Remote'}\n"
-        f"- Experience Range: {experience_min or '0'} to {experience_max or '5'} years\n"
+        f"- Location: {location_line}\n"
+        + (f"- Work Mode: {mode}\n" if mode else "")
+        + f"- Experience Range: {experience_min or '0'} to {experience_max or '5'} years\n"
         + (f"- Existing Draft: {existing_description}" if has_existing else "")
         + (
             "\n\nThe user wants to ADD the following extra requirements/details to the job "
@@ -300,7 +366,9 @@ async def generate_job_description_ai(
         + "\n\nRequirements:\n"
         "1. Provide a comprehensive JD in professional HTML format.\n"
         "2. Suggest a market-competitive salary range (Minimum and Maximum) in LPA.\n"
-        "3. Suggest a list of 5-8 top required skills.\n\n"
+        "3. Suggest a list of 5-8 top required skills.\n"
+        "4. Reflect the Location and Work Mode above EXACTLY as given (e.g. On-Site / Hybrid / "
+        "Remote). Do NOT assume or write 'Remote' unless that is the stated work mode.\n\n"
         "Return ONLY a JSON object:\n"
         "{\n"
         '  "description": "HTML formatted JD string",\n'

@@ -30,17 +30,30 @@ class ImapService:
         )
 
     async def fetch_and_sync_emails(
-        self, session: AsyncSession, background_tasks: object
+        self,
+        session: AsyncSession,
+        background_tasks: object,
+        imap_override: dict[str, object] | None = None,
+        company_id: object = None,
     ) -> dict[str, object]:
         """
         Connects to IMAP, fetches recent emails, and syncs them to local DB.
+
+        When `imap_override` (host/port/user/password) is given, reads from the ORG's own
+        connected mailbox and tags the synced emails with `company_id`; otherwise falls back
+        to the platform default (.env) mailbox.
         """
-        if not self.user or not self.password:
+        ov = imap_override or {}
+        host = str(ov.get("host") or self.host)
+        port = int(cast("Any", ov.get("port") or self.port))
+        user = str(ov.get("user") or self.user)
+        password = str(ov.get("password") or self.password)
+        if not user or not password:
             return {"status": "IMAP credentials not configured"}
 
         try:
-            mail = imaplib.IMAP4_SSL(self.host, self.port)
-            mail.login(self.user, self.password)
+            mail = imaplib.IMAP4_SSL(host, port)
+            mail.login(user, password)
             mail.select("inbox")
 
             status, response = mail.search(None, "ALL")
@@ -97,12 +110,13 @@ class ImapService:
                     new_email = EmailLog(
                         direction=EmailDirection.INBOUND,
                         sender_email=sender_email,
-                        recipient_email=self.user,
+                        recipient_email=user,
                         subject=subject,
                         body=body,
                         status="received",
                         is_read=False,
                         message_id=str(message_id) if message_id else None,
+                        company_id=company_id,
                     )
                     session.add(new_email)
                     await session.flush()

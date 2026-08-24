@@ -2,15 +2,47 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from .company import CompanyResponse
+
+
+class MemberBrief(BaseModel):
+    """Compact team-member reference used for job owner/collaborators."""
+
+    id: UUID
+    full_name: str
+    email: str
+    profile_image: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class JobActivityOut(BaseModel):
+    id: UUID
+    action: str
+    actor_id: UUID | None = None
+    actor_name: str | None = None
+    detail: dict[str, Any] | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssignJobRequest(BaseModel):
+    owner_id: UUID | None = None
+    collaborator_ids: list[UUID] = []
 
 
 class JobPostingBase(BaseModel):
     platform: str
     external_id: str | None = None
     status: str | None = "Pending"
+
+    class Config:
+        from_attributes = True
 
 
 class JobMetrics(BaseModel):
@@ -28,12 +60,14 @@ class JobStageResponse(BaseModel):
 
 
 class JobRequirementCreate(BaseModel):
-    title: str
-    description: str
+    # Length caps match the DB columns (title/location are VARCHAR(255)) so oversized input
+    # is rejected as 422 at the schema instead of blowing up as a 500 on insert.
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(..., min_length=1)
     required_skills: list[str] | None = []
     experience_min: int | None = None
     experience_max: int | None = None
-    location: str | None = None
+    location: str | None = Field(None, max_length=255)
     job_type: str | None = None
     work_mode: str | None = None
     department: str | None = None
@@ -69,8 +103,14 @@ class JobRequirementResponse(JobRequirementCreate):
     metrics: JobMetrics | None = None
     stages: list[JobStageResponse] = []
 
+    # Ownership / assignment (Team Management)
+    owner: MemberBrief | None = None
+    collaborators: list[MemberBrief] = Field(default=[], validation_alias="collaborator_users")
+    last_viewed_at: datetime | None = None
+
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 
 class PublishJobRequest(BaseModel):
@@ -103,6 +143,8 @@ class JDGenerationRequest(BaseModel):
     title: str
     existing_description: str | None = ""
     location: str | None = ""
+    # Work arrangement (On-Site / Remote / Hybrid) so the JD doesn't default to "Remote".
+    work_mode: str | None = ""
     experience_min: str | None = "0"
     experience_max: str | None = "5"
     # Free-text extra requirements the user wants the AI to fold into the existing description

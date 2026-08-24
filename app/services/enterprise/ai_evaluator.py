@@ -3,12 +3,16 @@ from typing import Any, cast
 
 from openai import AsyncOpenAI
 
+from app.core.anthropic_llm import AsyncClaudeOpenAI
 from app.core.settings import settings
 
 
 class AIEvaluatorService:
     def __init__(self) -> None:
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        # Text evaluation/generation runs on Claude; image generation (DALL·E) has no Claude
+        # equivalent, so it keeps a dedicated OpenAI client.
+        self.client = AsyncClaudeOpenAI()
+        self._openai = AsyncOpenAI(api_key=settings.openai_api_key)
 
     async def generate_question_details(self, topic: str, difficulty: str) -> dict[str, Any] | None:
         if not self.client.api_key:
@@ -201,10 +205,10 @@ class AIEvaluatorService:
             return None
 
     async def generate_image(self, prompt: str) -> str | None:
-        if not self.client.api_key:
+        if not self._openai.api_key:
             return None
         try:
-            response = await self.client.images.generate(
+            response = await self._openai.images.generate(
                 model="dall-e-3",
                 prompt=(
                     "A cinematic, high-fidelity holographic portrait of a "

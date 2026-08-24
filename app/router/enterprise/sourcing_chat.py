@@ -330,7 +330,7 @@ async def update_shortlist_status(
 ):
     """Update the outreach status of a shortlisted candidate (Not Contacted / Contacted / …)."""
     company_id = str(getattr(current_user, "company_id", ""))
-    allowed = {"Not Contacted", "Contacted", "Responded", "Interested", "Not a fit", "Hired"}
+    allowed = {"Not Contacted", "Contacted", "Responded", "Interested", "Not a fit", "Hired", "No Response"}
     status = body.status if body.status in allowed else "Not Contacted"
     res = _db()["project_shortlists"].update_one(
         {"shortlist_id": shortlist_id, "company_id": company_id}, {"$set": {"status": status}}
@@ -555,6 +555,10 @@ class AgentSettingsBody(BaseModel):
     ats_job_title: str | None = None
     outreach_sequence_id: str | None = None
     outreach_sequence_name: str | None = None
+    # Response SLA: days a contacted candidate has to reply before we re-source a
+    # replacement. 0 / None = disabled (never auto re-source).
+    response_window_days: int | None = None
+    auto_resource: bool | None = None  # when overdue, automatically source replacements
 
 
 def _project_public(doc: dict[str, Any]) -> dict[str, Any]:
@@ -671,6 +675,8 @@ async def update_project(
         "query",
         "outreach_sequence_id",
         "outreach_sequence_name",
+        "response_window_days",
+        "auto_resource",
     ):
         v = getattr(body, f)
         if v is not None:
@@ -727,7 +733,7 @@ async def contact_project_candidates(
     shortlist. While testing, mail is redirected to the test inbox (PILOT_TEST_MODE)."""
     from app.router.agents import PILOT_TEST_EMAIL, PILOT_TEST_MODE
 
-    from .communication import send_smtp_email
+    from .communication import send_company_email
 
     company_id = str(getattr(current_user, "company_id", ""))
     coll = _db()["project_shortlists"]
@@ -744,16 +750,135 @@ async def contact_project_candidates(
         recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else email
         subject = ("[TEST] " if PILOT_TEST_MODE else "") + subject_base
         try:
-            ok, _err = send_smtp_email(to_email=recipient, subject=subject, body=html)
+            ok, _err = await send_company_email(company_id, recipient, subject, html)
         except Exception:
             ok = False
         if ok:
+            # Stamp contacted_at + store the message we sent (for the conversation thread), and
+            # clear any stale response markers from a previous outreach round.
             coll.update_one(
                 {"project_id": project_id, "company_id": company_id, "profile.email": email},
-                {"$set": {"status": "Contacted"}},
+                {
+                    "$set": {
+                        "status": "Contacted",
+                        "contacted_at": datetime.now().isoformat(),
+                        "sent_subject": subject_base,
+                        "sent_body": html,
+                        "sent_at": datetime.now().isoformat(),
+                    },
+                    "$unset": {
+                        "responded_at": "",
+                        "no_response_at": "",
+                        "reply_subject": "",
+                        "reply_body": "",
+                        "reply_at": "",
+                        "reply_from": "",
+                    },
+                },
             )
             sent += 1
     return {"sent": sent, "test_mode": PILOT_TEST_MODE}
+
+
+@router.post("/projects/{project_id}/check-responses")
+async def check_responses(
+    project_id: str,
+    session: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+):
+    """Response-window SLA sweep for a project.
+
+    Any candidate still 'Contacted' who hasn't replied within the project's
+    `response_window_days` is flagged 'No Response', and we report how many replacements
+    should be sourced. Runs ON-DEMAND (called when the project opens / on refresh) because
+    there is no background scheduler yet — so the SLA is evaluated whenever someone looks.
+    """
+    from datetime import timedelta
+
+    from app.models.enterprise.communication import EmailLog
+
+    company_uuid = getattr(current_user, "company_id", None)
+    company_id = str(company_uuid or "")
+    proj = _projects().find_one({"project_id": project_id, "company_id": company_id}, {"_id": 0, "agent": 1})
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    agent = proj.get("agent", {}) or {}
+    window = int(agent.get("response_window_days") or 0)
+    cutoff = datetime.now() - timedelta(days=window) if window > 0 else None
+    coll = _db()["project_shortlists"]
+
+    contacted_docs = list(
+        coll.find({"project_id": project_id, "company_id": company_id, "status": "Contacted"})
+    )
+
+    # Index the latest INBOUND reply per sender for this company (from the synced inbox), so a
+    # candidate who replied is marked 'Responded' — and their reply is stored on the candidate
+    # for the admin to read — BEFORE the overdue sweep ever flags them 'No Response'.
+    replies: dict[str, Any] = {}
+    if contacted_docs and company_uuid is not None:
+        stmt = (
+            select(EmailLog)
+            .where(EmailLog.direction == "INBOUND", EmailLog.company_id == company_uuid)
+            .order_by(EmailLog.sent_at.desc())
+        )
+        for row in (await session.execute(stmt)).scalars().all():
+            key = (row.sender_email or "").strip().lower()
+            if key and key not in replies:
+                replies[key] = row
+
+    def _naive(dt: Any) -> Any:
+        return dt.replace(tzinfo=None) if getattr(dt, "tzinfo", None) else dt
+
+    responded = 0
+    overdue = 0
+    for doc in contacted_docs:
+        ca = doc.get("contacted_at")
+        try:
+            contacted = datetime.fromisoformat(str(ca)) if ca else None
+        except Exception:
+            contacted = None
+
+        email = ((doc.get("profile") or {}).get("email") or "").strip().lower()
+        reply = replies.get(email) if email else None
+        replied = bool(
+            reply is not None
+            and reply.sent_at is not None
+            and (contacted is None or _naive(reply.sent_at) >= contacted)
+        )
+
+        if replied and reply is not None:
+            coll.update_one(
+                {"_id": doc["_id"]},
+                {
+                    "$set": {
+                        "status": "Responded",
+                        "responded_at": datetime.now().isoformat(),
+                        "reply_subject": reply.subject,
+                        "reply_body": (reply.body or "")[:8000],
+                        "reply_from": reply.sender_email,
+                        "reply_at": reply.sent_at.isoformat() if reply.sent_at else None,
+                    }
+                },
+            )
+            responded += 1
+        elif cutoff is not None and contacted is not None and contacted <= cutoff:
+            coll.update_one(
+                {"_id": doc["_id"]},
+                {"$set": {"status": "No Response", "no_response_at": datetime.now().isoformat()}},
+            )
+            overdue += 1
+
+    return {
+        "enabled": window > 0,
+        "responded": responded,
+        "overdue": overdue,
+        "window_days": window,
+        "needs_resourcing": overdue,
+        "auto_resource": bool(agent.get("auto_resource")),
+    }
 
 
 class CalibrateBody(BaseModel):
@@ -1453,7 +1578,82 @@ async def delete_connection(
 async def _send_mail(conn: dict[str, Any], to_email: str, subject: str, html: str) -> tuple[bool, str]:
     if conn.get("auth_type") == "oauth" and conn.get("provider") == "gmail":
         return await _gmail_api_send(conn, to_email, subject, html)
+    if conn.get("auth_type") == "oauth" and conn.get("provider") == "microsoft":
+        return await _ms_graph_send(conn, to_email, subject, html)
     return _smtp_send_via(conn, to_email, subject, html)
+
+
+# ---------------------------------------------------------------------------
+# Microsoft 365 OAuth ("Sign in with Microsoft" — like Juicebox). Azure AD app +
+# Microsoft Graph: send via /me/sendMail, read via /me/messages. Needs
+# MICROSOFT_CLIENT_ID / MICROSOFT_CLIENT_SECRET (+ optional MICROSOFT_TENANT).
+# ---------------------------------------------------------------------------
+_MS_SCOPE = (
+    "openid email offline_access "
+    "https://graph.microsoft.com/Mail.Send "
+    "https://graph.microsoft.com/Mail.Read "
+    "https://graph.microsoft.com/User.Read"
+)
+_MS_CALLBACK_PATH = "/api/v1/enterprise/sourcing/chat/connections/microsoft/callback"
+
+
+def _ms_tenant() -> str:
+    from app.core.settings import get_settings
+
+    return get_settings().microsoft_tenant or "common"
+
+
+def _ms_token_url() -> str:
+    return f"https://login.microsoftonline.com/{_ms_tenant()}/oauth2/v2.0/token"
+
+
+async def _microsoft_access_token(refresh_token: str) -> str:
+    """Exchange a stored refresh token for a fresh Microsoft Graph access token."""
+    import httpx
+
+    from app.core.settings import get_settings
+
+    s = get_settings()
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(
+            _ms_token_url(),
+            data={
+                "client_id": s.microsoft_client_id,
+                "client_secret": s.microsoft_client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+                "scope": _MS_SCOPE,
+            },
+        )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+
+async def _ms_graph_send(conn: dict[str, Any], to_email: str, subject: str, html: str) -> tuple[bool, str]:
+    """Send one HTML email via the Microsoft Graph API using the org's OAuth refresh token."""
+    import httpx
+
+    try:
+        access = await _microsoft_access_token(str(conn.get("refresh_token") or ""))
+        payload = {
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": html},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+            },
+            "saveToSentItems": True,
+        }
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(
+                "https://graph.microsoft.com/v1.0/me/sendMail",
+                headers={"Authorization": f"Bearer {access}", "Content-Type": "application/json"},
+                json=payload,
+            )
+        if r.status_code >= 300:
+            return False, f"Graph API {r.status_code}: {r.text[:200]}"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 async def _google_access_token(refresh_token: str) -> str:
@@ -1622,6 +1822,123 @@ async def google_callback(
             "created_at": datetime.now().isoformat(),
         }
         _connections().delete_many({"company_id": st["company_id"], "email": email})
+        _connections().insert_one(conn)
+        return RedirectResponse(front + "?connected=1")
+    except Exception:
+        return RedirectResponse(front + "?connected=0&reason=error")
+
+
+@router.get("/connections/microsoft/authorize")
+async def microsoft_authorize(
+    request: Request,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+):
+    """Return the Microsoft consent URL the browser should redirect to."""
+    from urllib.parse import urlencode
+
+    from app.core.settings import get_settings
+
+    s = get_settings()
+    if not s.microsoft_client_id or not s.microsoft_client_secret:
+        raise HTTPException(status_code=400, detail="Microsoft OAuth is not configured on the server")
+    company_id = str(getattr(current_user, "company_id", ""))
+    owner = getattr(current_user, "first_name", None) or getattr(current_user, "email", None) or "—"
+    state = uuid.uuid4().hex
+    _oauth_states().insert_one(
+        {
+            "state": state,
+            "company_id": company_id,
+            "owner": owner,
+            "provider": "microsoft",
+            "created_at": datetime.now().isoformat(),
+        }
+    )
+    redirect_uri = str(request.base_url).rstrip("/") + _MS_CALLBACK_PATH
+    params = {
+        "client_id": s.microsoft_client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "response_mode": "query",
+        "scope": _MS_SCOPE,
+        "prompt": "select_account",
+        "state": state,
+    }
+    base = f"https://login.microsoftonline.com/{_ms_tenant()}/oauth2/v2.0/authorize?"
+    return {"authorize_url": base + urlencode(params)}
+
+
+@router.get("/connections/microsoft/callback")
+async def microsoft_callback(
+    request: Request, code: str | None = None, state: str | None = None, error: str | None = None
+):
+    """Microsoft redirects the browser here. Exchange the code for tokens, store the
+    mailbox connection, then bounce back to the Connections page."""
+    import httpx
+    from fastapi.responses import RedirectResponse
+
+    from app.core.settings import get_settings
+
+    s = get_settings()
+    front = s.frontend_url.rstrip("/") + "/enterprise/sourcing/connections"
+    if error or not code or not state:
+        return RedirectResponse(front + "?connected=0")
+    st = _oauth_states().find_one({"state": state})
+    if not st:
+        return RedirectResponse(front + "?connected=0&reason=state")
+    _oauth_states().delete_one({"state": state})
+    redirect_uri = str(request.base_url).rstrip("/") + _MS_CALLBACK_PATH
+    try:
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(
+                _ms_token_url(),
+                data={
+                    "code": code,
+                    "client_id": s.microsoft_client_id,
+                    "client_secret": s.microsoft_client_secret,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                    "scope": _MS_SCOPE,
+                },
+            )
+        tok = r.json()
+        if r.status_code >= 300 or not tok.get("refresh_token"):
+            return RedirectResponse(front + "?connected=0&reason=token")
+
+        # Resolve the mailbox address from Microsoft Graph /me.
+        email = ""
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                me = await c.get(
+                    "https://graph.microsoft.com/v1.0/me",
+                    headers={"Authorization": f"Bearer {tok.get('access_token')}"},
+                )
+            mj = me.json()
+            email = mj.get("mail") or mj.get("userPrincipalName") or ""
+        except Exception:
+            email = ""
+
+        conn = {
+            "connection_id": uuid.uuid4().hex,
+            "company_id": st["company_id"],
+            "provider": "microsoft",
+            "auth_type": "oauth",
+            "email": email,
+            "username": email,
+            "display_name": None,
+            "refresh_token": tok["refresh_token"],
+            "access_token": tok.get("access_token"),
+            "smtp_host": "smtp-mail.outlook.com",
+            "smtp_port": 587,
+            "imap_host": "outlook.office365.com",
+            "imap_port": 993,
+            "status": "connected",
+            "owner": st.get("owner"),
+            "created_at": datetime.now().isoformat(),
+        }
+        if email:
+            _connections().delete_many({"company_id": st["company_id"], "email": email})
         _connections().insert_one(conn)
         return RedirectResponse(front + "?connected=1")
     except Exception:

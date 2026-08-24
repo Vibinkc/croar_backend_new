@@ -14,6 +14,7 @@ class AssessmentType(enum.StrEnum):
     APTITUDE = "APTITUDE"
     CODING = "CODING"
     BOTH = "BOTH"
+    VIDEO = "VIDEO"  # candidate records a video answer per open-ended question; HR reviews & scores
 
 
 class AssessmentTemplate(Base):

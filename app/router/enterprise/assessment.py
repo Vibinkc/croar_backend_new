@@ -1,12 +1,19 @@
 from typing import Annotated, Any, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
-from app.models.enterprise.assessment import AssessmentAutomation, AssessmentType
+from app.models.enterprise.assessment import (
+    AssessmentAttempt,
+    AssessmentAutomation,
+    AssessmentTemplate,
+    AssessmentType,
+)
+from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.schemas.enterprise.assessment import (
     AssessmentAutomationCreate,
@@ -42,7 +49,7 @@ async def generate_preview_questions(
     ],
     type: AssessmentType,
     topic: str,
-    count: int = 10,
+    count: int = Query(10, ge=1, le=50),
     language: str = "English",
 ) -> list[dict[str, Any]]:
     """
@@ -186,3 +193,118 @@ async def delete_assessment_automation(
     await db.delete(db_auto)
     await db.commit()
     return
+
+
+# ---------------------------------------------------------------------------
+# Video-assessment review (HR watches recorded answers and scores them)
+# ---------------------------------------------------------------------------
+def _questions_for(auto: AssessmentAutomation | None, tpl: AssessmentTemplate | None) -> list[dict[str, Any]]:
+    src = (auto.generated_questions if auto else None) or (tpl.generated_questions if tpl else None) or []
+    return cast("list[dict[str, Any]]", src)
+
+
+@router.get("/attempts/pending-review")
+async def list_pending_video_reviews(
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.read))
+    ],
+) -> list[dict[str, Any]]:
+    """Video-assessment attempts awaiting an HR score, with the candidate + recorded answers."""
+    company_id = getattr(current_user, "company_id", None)
+    rows = (
+        (
+            await db.execute(
+                select(AssessmentAttempt).where(
+                    AssessmentAttempt.company_id == company_id, AssessmentAttempt.status == "PENDING_REVIEW"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[dict[str, Any]] = []
+    for a in rows:
+        cand = (
+            await db.execute(select(Candidate).where(Candidate.id == a.candidate_id))
+        ).scalar_one_or_none()
+        auto = (
+            (
+                await db.execute(
+                    select(AssessmentAutomation).where(AssessmentAutomation.id == a.automation_id)
+                )
+            ).scalar_one_or_none()
+            if a.automation_id
+            else None
+        )
+        tpl = (
+            (
+                await db.execute(select(AssessmentTemplate).where(AssessmentTemplate.id == a.template_id))
+            ).scalar_one_or_none()
+            if a.template_id
+            else None
+        )
+        questions = _questions_for(auto, tpl)
+        answers = cast("dict[str, Any]", a.answers or {})
+        out.append(
+            {
+                "attempt_id": str(a.id),
+                "application_id": str(a.application_id),
+                "candidate_name": (cand.full_name if cand else None),
+                "candidate_email": (cand.email if cand else None),
+                "topic": (auto.topic if auto else (tpl.topic if tpl else None)),
+                "submitted_at": a.completed_at.isoformat() if a.completed_at else None,
+                "answers": [
+                    {"question": q.get("question"), "video_url": answers.get(str(q.get("id")))}
+                    for q in questions
+                ],
+            }
+        )
+    return out
+
+
+class VideoReviewRequest(BaseModel):
+    score: int  # 0-100
+    feedback: str | None = None
+
+
+@router.post("/attempts/{attempt_id}/review")
+async def review_video_attempt(
+    attempt_id: UUID,
+    request: VideoReviewRequest,
+    db: DBSessionDep,
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.assessments, PermissionAction.moderate))
+    ],
+) -> dict[str, Any]:
+    """HR scores a video attempt; on a pass (>=60) the candidate advances like a graded test."""
+    company_id = getattr(current_user, "company_id", None)
+    attempt = (
+        await db.execute(
+            select(AssessmentAttempt).where(
+                AssessmentAttempt.id == attempt_id, AssessmentAttempt.company_id == company_id
+            )
+        )
+    ).scalar_one_or_none()
+    if not attempt:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+
+    score = max(0, min(100, int(request.score)))
+    attempt.score = score
+    attempt.status = "COMPLETED"
+
+    application = (
+        await db.execute(
+            select(CandidateApplication).where(CandidateApplication.id == attempt.application_id)
+        )
+    ).scalar_one_or_none()
+    if application:
+        application.ai_match_score = cast("Any", (float(application.ai_match_score or 0) + float(score)) / 2)
+        await db.flush()
+        if score >= 60:
+            from app.services.enterprise.automation_service import trigger_automations
+
+            await trigger_automations(application.id, application.current_stage, db)
+
+    await db.commit()
+    return {"status": "success", "score": score}

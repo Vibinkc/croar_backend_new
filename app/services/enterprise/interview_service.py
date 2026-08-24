@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, cast
 
 from fastapi.concurrency import run_in_threadpool
@@ -75,6 +75,150 @@ async def generate_google_meet_link(
         logger.error(f"Failed to generate Google Meet link: {e}")
 
     return None
+
+
+async def generate_teams_meeting_link(start_time: datetime, end_time: datetime, subject: str) -> str | None:
+    """Create a Microsoft Teams meeting via Graph (app-only) and return its join URL.
+
+    Uses the client-credentials flow with the configured Azure AD app + organizer mailbox
+    (``MS_CLIENT_ID`` / ``MS_CLIENT_SECRET`` / ``MS_TENANT_ID`` / ``MS_ORGANIZER_UPN``). Returns
+    None (caller falls back) if not configured or Graph rejects the request.
+    """
+    import httpx
+
+    cid = _settings.ms_client_id or _settings.microsoft_client_id
+    secret = _settings.ms_client_secret or _settings.microsoft_client_secret
+    organizer = _settings.ms_organizer_upn
+    # Client-credentials (app-only) needs a CONCRETE tenant — "common"/"organizations"/"consumers"
+    # are only valid for delegated sign-in. Pick the first real tenant id/domain we have.
+    tenant = next(
+        (
+            t
+            for t in (_settings.ms_tenant_id, _settings.microsoft_tenant)
+            if t and t.lower() not in ("common", "organizations", "consumers")
+        ),
+        None,
+    )
+    if not (cid and secret and organizer and tenant):
+        logger.warning(
+            "Microsoft Teams not configured (need MS_CLIENT_ID/SECRET, a concrete MS_TENANT_ID, "
+            "and MS_ORGANIZER_UPN) — skipping."
+        )
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            tok = await c.post(
+                f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+                data={
+                    "client_id": cid,
+                    "client_secret": secret,
+                    "grant_type": "client_credentials",
+                    "scope": "https://graph.microsoft.com/.default",
+                },
+            )
+            tok.raise_for_status()
+            access_token = tok.json()["access_token"]
+            auth = {"Authorization": f"Bearer {access_token}"}
+
+            # The app-only onlineMeetings API addresses the organizer by object id (GUID), not UPN.
+            # If MS_ORGANIZER_UPN is an email, resolve it to the id (needs User.Read.All); if it's
+            # already a GUID, use it directly. Either path avoids the "not a valid GUID" 400.
+            organizer_id = organizer
+            if "@" in organizer:
+                u = await c.get(
+                    f"https://graph.microsoft.com/v1.0/users/{organizer}?$select=id", headers=auth
+                )
+                if u.status_code == 200:
+                    organizer_id = u.json().get("id") or organizer
+                else:
+                    logger.error(
+                        "Could not resolve MS_ORGANIZER_UPN to an object id [%s] — grant the app "
+                        "User.Read.All, or set MS_ORGANIZER_UPN to the user's Object ID (GUID). %s",
+                        u.status_code,
+                        u.text[:200],
+                    )
+                    return None
+
+            resp = await c.post(
+                f"https://graph.microsoft.com/v1.0/users/{organizer_id}/onlineMeetings",
+                headers={**auth, "Content-Type": "application/json"},
+                json={
+                    "subject": subject,
+                    "startDateTime": start_time.astimezone().isoformat(),
+                    "endDateTime": end_time.astimezone().isoformat(),
+                },
+            )
+        if resp.status_code in (200, 201):
+            return cast("str | None", resp.json().get("joinUrl"))
+        logger.error(f"Teams meeting creation failed [{resp.status_code}]: {resp.text[:300]}")
+    except Exception as e:
+        logger.error(f"Failed to generate Teams meeting link: {e}")
+    return None
+
+
+def _ics_escape(text: str) -> str:
+    return (text or "").replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
+
+
+def _sender_email() -> str:
+    """Bare email from mailer_sender_email (which may be 'Name <a@b.com>')."""
+    raw = str(_settings.mailer_sender_email or _settings.smtp_username or "")
+    m = re.search(r"[\w.+-]+@[\w.-]+", raw)
+    return m.group(0) if m else raw
+
+
+def build_interview_ics(
+    *,
+    uid: str,
+    summary: str,
+    description: str,
+    location: str,
+    start: datetime,
+    end: datetime,
+    organizer_email: str,
+    attendees: list[tuple[str, str]],
+) -> str:
+    """Build a METHOD:REQUEST iCalendar invite (with a 30-min reminder) as a string.
+
+    Naive datetimes are treated as server-local and converted to UTC (…Z) so the invite lands
+    at the right wall-clock time regardless of the recipient's client.
+    """
+
+    def fmt(dt: datetime) -> str:
+        return dt.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Croar//Interview//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:REQUEST",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{fmt(datetime.now(UTC))}",
+        f"DTSTART:{fmt(start)}",
+        f"DTEND:{fmt(end)}",
+        f"SUMMARY:{_ics_escape(summary)}",
+        f"DESCRIPTION:{_ics_escape(description)}",
+        f"LOCATION:{_ics_escape(location)}",
+        f"ORGANIZER;CN=Hiring Team:mailto:{organizer_email}",
+        *[
+            f"ATTENDEE;CN={_ics_escape(name)};ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:{email}"
+            for name, email in attendees
+            if email
+        ],
+        "SEQUENCE:0",
+        "STATUS:CONFIRMED",
+        "TRANSP:OPAQUE",
+        "BEGIN:VALARM",
+        "TRIGGER:-PT30M",
+        "ACTION:DISPLAY",
+        "DESCRIPTION:Interview reminder",
+        "END:VALARM",
+        "END:VEVENT",
+        "END:VCALENDAR",
+    ]
+    return "\r\n".join(lines) + "\r\n"
 
 
 def parse_time(time_str: str) -> time:
@@ -245,6 +389,10 @@ async def schedule_candidate_interview(
         meet_link: str | None = f"{base_url}/interview/ai/{application.id}"
     elif automation.google_meet_link:
         meet_link = automation.google_meet_link
+    elif automation.interview_type == "TEAMS":
+        meet_link = await generate_teams_meeting_link(
+            start_time=next_slot, end_time=end_slot, subject=f"Interview: {job.title}"
+        )
     else:
         meet_link = await generate_google_meet_link(
             start_time=next_slot,
@@ -400,13 +548,33 @@ async def send_interview_invite(
 
     await db.commit()
 
+    # For Teams and AI interviews, attach a real calendar invite (.ics) so it lands in both
+    # people's calendars with Accept/Decline + a reminder — not just a link in the email body.
+    ics: str | None = None
+    if automation.interview_type in ("TEAMS", "AI") and schedule.scheduled_time and schedule.meeting_link:
+        end_dt = schedule.scheduled_time + timedelta(minutes=max(1, automation.duration or 30))
+        ics = build_interview_ics(
+            uid=f"interview-{schedule.id}@croar",
+            summary=f"Interview: {job.title}",
+            description=f"Your interview for {job.title}.\\n\\nJoin the meeting: {schedule.meeting_link}",
+            location=str(schedule.meeting_link),
+            start=schedule.scheduled_time,
+            end=end_dt,
+            organizer_email=_sender_email(),
+            attendees=[
+                (candidate.full_name or "Candidate", str(candidate.email)),
+                ("Interviewer", recruiter_email),
+            ],
+        )
+
     def do_send_emails() -> None:
         try:
-            send_smtp_email(str(candidate.email), subject, body)
+            send_smtp_email(str(candidate.email), subject, body, ics=ics)
             send_smtp_email(
                 recruiter_email,
                 f"[Interviewer] {subject}",
                 f"You have an upcoming interview with {candidate.full_name} ({candidate.email}).\n\n{body}",
+                ics=ics,
             )
         except Exception:
             pass

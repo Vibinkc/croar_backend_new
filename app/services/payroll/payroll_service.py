@@ -22,7 +22,7 @@ from app.payroll.constants import (
     TaxRegime,
 )
 from app.schemas.enterprise.payroll.settings import StatutoryConfig
-from app.services.payroll import calendar_service, tax_engine, timesheet_service
+from app.services.payroll import calendar_service, statutory_intl, tax_engine, timesheet_service
 from app.services.payroll import statutory as statutory_rules
 
 
@@ -65,6 +65,7 @@ def compute_payslip(
     tds_enabled: bool = False,
     tax_profile: dict[str, Any] | None = None,
     statutory: StatutoryConfig | None = None,
+    country: str = "India",
 ) -> dict[str, Any]:
     """Pure payslip calculation (spec §5).
 
@@ -159,7 +160,18 @@ def compute_payslip(
     employer_contributions: list[dict[str, Any]] = []
     statutory_snapshot: dict[str, Any] = {"version": statutory_rules.RULESET_VERSION}
 
-    if structure.pf_enabled:
+    # Country dispatch: KR / JP / US compute their own statutory + income tax on the actual
+    # monthly gross; India (default) falls through to the PF/ESI/PT/TDS blocks below.
+    intl = statutory_intl.compute(country, gross)
+    if intl:
+        statutory_snapshot["version"] = statutory_intl.RULESET_VERSION
+        statutory_snapshot["intl"] = intl["snapshot"]
+        for d in intl["employee"]:
+            deductions.append({"code": d["code"], "label": d["label"], "amount": d["amount"]})
+            total_deductions = _q(total_deductions + Decimal(str(d["amount"])))
+        employer_contributions.extend(intl["employer"])
+
+    if not intl and structure.pf_enabled:
         codes = structure.pf_wage_codes or ["BASIC"]
         pf_wage = sum((by_code.get(c, Decimal("0")) for c in codes), Decimal("0.00"))
         if pf_wage <= 0:  # fall back to gross if the named codes aren't present
@@ -186,7 +198,7 @@ def compute_payslip(
         )
         statutory_snapshot["pf"] = {k: float(v) for k, v in pf.items()}
 
-    if structure.esi_enabled:
+    if not intl and structure.esi_enabled:
         esi = statutory_rules.compute_esi(
             gross,
             wage_limit=_dec(cfg.esi_wage_limit),
@@ -205,7 +217,7 @@ def compute_payslip(
                 {"code": "ESI_ER", "label": "ESI (Employer)", "amount": float(esi["employer"])}
             )
 
-    if structure.pt_enabled:
+    if not intl and structure.pt_enabled:
         pt = statutory_rules.compute_pt(pt_state, gross)
         statutory_snapshot["pt"] = {"amount": float(pt["amount"]), "state": pt["state"], "note": pt["note"]}
         if pt["amount"] > 0:
@@ -216,7 +228,7 @@ def compute_payslip(
     # Annual projection uses the stable monthly gross (raw_gross, pre-LOP) x 12
     # so monthly TDS doesn't swing with LOP. Driven by the employee's IT
     # declaration; result is snapshotted and added as a deduction line.
-    if tds_enabled:
+    if not intl and tds_enabled:
         profile = tax_profile or {}
         tds = tax_engine.compute_tds(
             annual_gross=_q(raw_gross * Decimal("12")),
@@ -276,6 +288,7 @@ def compute_hourly_payslip(
     tds_enabled: bool = False,
     tax_profile: dict[str, Any] | None = None,
     statutory: StatutoryConfig | None = None,
+    country: str = "India",
 ) -> dict[str, Any]:
     """Payslip for an hourly-paid employee: gross = total_hours * hourly_rate.
 
@@ -309,6 +322,7 @@ def compute_hourly_payslip(
         tds_enabled=tds_enabled,
         tax_profile=tax_profile,
         statutory=statutory,
+        country=country,
     )
 
 
@@ -606,7 +620,10 @@ async def dashboard_summary(db: AsyncSession, company_id: uuid.UUID) -> dict[str
         },
         "current_cycle": _cycle_brief(current) if current else None,
         "recent_cycles": [_cycle_brief(c) for c in cycles[:5]],
-        "currency": "INR",
+        "currency": (
+            await db.execute(select(Company.currency).where(Company.id == company_id))
+        ).scalar_one_or_none()
+        or "INR",
     }
 
 
@@ -690,6 +707,10 @@ async def run_payroll(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
 
     # Company statutory overrides (rates/thresholds) — loaded once for the run.
     statutory_config = await _load_statutory_config(db, company_id)
+    # Company country drives which statutory engine runs (India PF/ESI/TDS vs KR/JP/US).
+    company_country = (
+        await db.execute(select(Company.country).where(Company.id == company_id))
+    ).scalar_one_or_none() or "India"
 
     created_count = 0
     updated_count = 0
@@ -740,6 +761,7 @@ async def run_payroll(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
                     tds_enabled=bool(struct.tds_enabled),
                     tax_profile=tax_profile_by_employee.get(employee.id),
                     statutory=statutory_config,
+                    country=company_country,
                 )
             else:
                 lop_days = (
@@ -756,6 +778,7 @@ async def run_payroll(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
                     tds_enabled=bool(struct.tds_enabled),
                     tax_profile=tax_profile_by_employee.get(employee.id),
                     statutory=statutory_config,
+                    country=company_country,
                 )
         except ValueError as exc:
             skipped.append({"employee_id": employee.id, "reason": str(exc)})
