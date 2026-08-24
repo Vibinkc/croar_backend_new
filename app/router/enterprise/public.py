@@ -4,6 +4,7 @@ import traceback
 from typing import Annotated, Any, cast
 from uuid import UUID
 
+import aiofiles
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -158,8 +159,8 @@ async def apply_to_job(
                 safe_name = os.path.basename((final_resume.filename or "resume").replace("\\", "/"))
                 safe_name = _re.sub(r"[^A-Za-z0-9._-]", "_", safe_name).lstrip(".") or "resume.pdf"
                 path = os.path.join(upload_dir, f"{uuid4().hex[:8]}_{safe_name}")
-                with open(path, "wb") as fh:
-                    fh.write(content)
+                async with aiofiles.open(path, "wb") as fh:
+                    await fh.write(content)
                 resume_saved_path = path.replace("\\", "/")
             except Exception:
                 traceback.print_exc()

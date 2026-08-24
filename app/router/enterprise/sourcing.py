@@ -287,7 +287,12 @@ def parse_search_constraints(q: str) -> dict[str, Any]:
 CONTACT_SCRAPE_TIMEOUT = float(os.getenv("SOURCING_CONTACT_TIMEOUT", "15"))
 CONTACT_ENRICH_LIMIT = int(os.getenv("SOURCING_CONTACT_ENRICH_LIMIT", "8"))
 
-_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+# The domain is spelled as repeated "label." groups instead of one dot-containing class:
+# the old [a-zA-Z0-9.\-]+\.  let the class and the literal dot compete for the same
+# characters, which backtracked super-linearly on long non-matching text. Every valid
+# address still matches identically; only malformed domains (leading or doubled dots,
+# e.g. "a@b..com") are now declined instead of matched.
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]++@(?:[a-zA-Z0-9\-]++\.)+[a-zA-Z]{2,}")
 # Substrings that mark a regex hit as noise rather than a real contact email.
 _EMAIL_BLOCKLIST = (
     "noreply",

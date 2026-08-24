@@ -16,12 +16,23 @@ Both are derived purely from the job's own data — no external calls.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # `escape` only entity-encodes our OWN output (&, <, >) when building the Indeed XML feed —
 # it does not parse untrusted XML, so the XXE class of attack B406 warns about does not apply.
 from xml.sax.saxutils import escape  # nosec B406
+
+
+def _utcnow() -> datetime:
+    """The naive UTC timestamp datetime.utcnow() used to return, without the deprecated call.
+
+    Naive on purpose: these values sit alongside job.created_at (a naive DateTime column) and
+    are rendered with .isoformat(). An aware datetime would append a '+00:00' offset for the
+    fallback path only, making the emitted feed inconsistent with the created_at path.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
 
 # job_type free-text -> schema.org employmentType enum
 _EMPLOYMENT_TYPE = {
@@ -56,13 +67,13 @@ def _date_posted(job: Any) -> str:
     dt = getattr(job, "created_at", None)
     if isinstance(dt, datetime):
         return dt.date().isoformat()
-    return datetime.utcnow().date().isoformat()
+    return _utcnow().date().isoformat()
 
 
 def _valid_through(job: Any) -> str:
     """Google requires an expiry to keep jobs fresh; default 60 days from posting."""
     dt = getattr(job, "created_at", None)
-    base = dt if isinstance(dt, datetime) else datetime.utcnow()
+    base = dt if isinstance(dt, datetime) else _utcnow()
     return (base + timedelta(days=60)).replace(microsecond=0).isoformat()
 
 
@@ -207,7 +218,7 @@ def build_indeed_feed_xml(jobs: list[tuple[Any, Any, str]], publisher: str, appl
         "<source>"
         f"{_el('publisher', publisher)}"
         f"{_el('publisherurl', '')}"
-        f"{_el('lastBuildDate', datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'))}"
+        f"{_el('lastBuildDate', _utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT'))}"
         f"{nodes}"
         "</source>"
     )

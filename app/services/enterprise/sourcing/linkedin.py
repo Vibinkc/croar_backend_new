@@ -86,7 +86,7 @@ class LinkedInProvider(BaseScraperProvider):
                                         if parts:
                                             name = parts[-1].replace("-", " ").title()
 
-                                email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", snippet)
+                                email_match = re.search(r"[\w.-]++@(?:[\w-]++\.)+\w++", snippet)
                                 email = email_match.group(0) if email_match else None
 
                                 profiles.append(
@@ -155,7 +155,7 @@ class LinkedInProvider(BaseScraperProvider):
                             snippet = item.get("snippet", "")
 
                             # Email Regex
-                            email_match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", snippet)
+                            email_match = re.search(r"[\w.-]++@(?:[\w-]++\.)+\w++", snippet)
                             if email_match:
                                 profile["email"] = email_match.group(0)
                                 profile["raw_data"]["contact_source"] = "oxylabs_enrichment"

@@ -55,7 +55,7 @@ def _actor_name(user: object) -> str:
     return fn or str(getattr(user, "email", "") or "Someone")
 
 
-async def _log_job_activity(
+def _log_job_activity(
     session: Any, job: JobRequirement, actor: object, action: str, detail: dict[str, Any] | None = None
 ) -> None:
     """Append an entry to a requisition's audit trail (best-effort — never blocks the action)."""
@@ -149,7 +149,7 @@ async def create_job(
     )
     session.add(new_job)
     await session.flush()
-    await _log_job_activity(session, new_job, current_user, "created", {"title": new_job.title})
+    _log_job_activity(session, new_job, current_user, "created", {"title": new_job.title})
     await session.commit()
     await session.refresh(new_job)
 
@@ -338,7 +338,7 @@ async def get_job(
     job.last_viewed_at = cast("Any", now)
     job.last_viewed_by = cast("Any", uid)
     if not last_view or (now - cast("Any", last_view)).total_seconds() > 3600:
-        await _log_job_activity(session, job, current_user, "viewed")
+        _log_job_activity(session, job, current_user, "viewed")
     await session.commit()
 
     return response
@@ -366,7 +366,7 @@ async def update_job(
         setattr(job, key, value)
 
     changed = [k for k in update_data if k not in ("workflow_stages", "application_fields")]
-    await _log_job_activity(session, job, current_user, "updated", {"fields": changed} if changed else None)
+    _log_job_activity(session, job, current_user, "updated", {"fields": changed} if changed else None)
     await session.commit()
     await session.refresh(job)
 
@@ -432,7 +432,7 @@ async def assign_job(
     detail: dict[str, Any] = {"collaborators": [name_map.get(u) for u in desired]}
     if request.owner_id is not None and request.owner_id != prev_owner:
         detail["owner"] = name_map.get(request.owner_id)
-    await _log_job_activity(session, job, current_user, "assigned", detail)
+    _log_job_activity(session, job, current_user, "assigned", detail)
     await session.commit()
 
     reload = (
@@ -581,7 +581,7 @@ async def publish_job(
                 )
             )
 
-    await _log_job_activity(session, job, current_user, "published", {"platforms": list(request.platforms)})
+    _log_job_activity(session, job, current_user, "published", {"platforms": list(request.platforms)})
     await session.commit()
 
     live = sum(1 for r in results if r["ok"])

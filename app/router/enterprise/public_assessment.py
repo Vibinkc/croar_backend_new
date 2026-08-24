@@ -11,9 +11,10 @@ frontend sends both as automation_id/template_id and we resolve whichever exists
 
 import os
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
+import aiofiles
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -26,6 +27,15 @@ from app.services.enterprise.ai_evaluator import ai_evaluator_service
 from app.services.enterprise.automation_service import trigger_automations
 
 router = APIRouter(prefix="/public/assessment", tags=["Public Assessment"])
+
+
+def _utcnow() -> datetime:
+    """The naive UTC timestamp datetime.utcnow() used to return, without the deprecated call.
+
+    AssessmentAttempt.started_at is a plain DateTime column, so the value must stay naive -
+    handing SQLAlchemy an aware datetime here would change what gets stored.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class VerifyRequest(BaseModel):
@@ -121,7 +131,7 @@ async def verify_assessment(request: VerifyRequest, session: DBSessionDep) -> di
             application_id=application.id,
             company_id=company_id,
             status="STARTED",
-            started_at=datetime.utcnow(),
+            started_at=_utcnow(),
         )
         session.add(attempt)
         await session.commit()
@@ -338,8 +348,8 @@ async def upload_video_answer(
     if ext not in (".webm", ".mp4", ".mov", ".ogg", ".m4v"):
         raise HTTPException(status_code=422, detail="Unsupported video format.")
     fname = f"{uuid.uuid4().hex}{ext}"
-    with open(os.path.join(dest_dir, fname), "wb") as f:
-        f.write(await video.read())
+    async with aiofiles.open(os.path.join(dest_dir, fname), "wb") as f:
+        await f.write(await video.read())
     url = f"/uploads/assessment_videos/{fname}"
 
     # Reassign a fresh dict so SQLAlchemy detects the JSONB change.

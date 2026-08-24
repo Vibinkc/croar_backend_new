@@ -163,7 +163,9 @@ def _ics_escape(text: str) -> str:
 def _sender_email() -> str:
     """Bare email from mailer_sender_email (which may be 'Name <a@b.com>')."""
     raw = str(_settings.mailer_sender_email or _settings.smtp_username or "")
-    m = re.search(r"[\w.+-]+@[\w.-]+", raw)
+    # Possessive: '@' is not in the first class and nothing follows the second, so
+    # backtracking can never rescue a match - it only rescanned long non-matching input.
+    m = re.search(r"[\w.+-]++@[\w.-]++", raw)
     return m.group(0) if m else raw
 
 

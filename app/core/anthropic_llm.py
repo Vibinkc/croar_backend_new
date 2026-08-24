@@ -32,7 +32,10 @@ _JSON_SYSTEM = "You output ONLY valid JSON — no prose, no explanations, no mar
 def _extract_json(text: str) -> str:
     """Return just the JSON object/array from a model reply."""
     t = (text or "").strip()
-    fence = re.search(r"```(?:json)?\s*(.*?)```", t, re.DOTALL)
+    # \s*+ is possessive: with re.DOTALL the following (.*?) can match whitespace too, so a
+    # plain \s* left the two overlapping and a reply with an unclosed fence backtracked
+    # quadratically. Nothing can be gained by giving those characters back, so don't allow it.
+    fence = re.search(r"```(?:json)?\s*+(.*?)```", t, re.DOTALL)
     if fence:
         t = fence.group(1).strip()
     # Outermost {...} or [...] — whichever appears and is well-formed at the ends.

@@ -324,7 +324,12 @@ class TwitterProvider(BaseScraperProvider):
 
                 def meta(prop: str, attr: str = "property") -> str:
                     tag = soup.find("meta", {attr: prop})
-                    return (tag.get("content") or "").strip() if tag else ""
+                    # `is not None`, not a truth test: a <meta> has no children, so any bs4
+                    # version that derives truthiness from len() would treat a tag that was
+                    # found as absent and silently drop the value.
+                    if tag is None:
+                        return ""
+                    return (tag.get("content") or "").strip()
 
                 og_title = meta("og:title") or meta("twitter:title", "name")
                 og_desc = meta("og:description") or meta("twitter:description", "name")
@@ -334,13 +339,16 @@ class TwitterProvider(BaseScraperProvider):
                 name = None
                 if og_title:
                     name = og_title.split("(")[0].strip()
-                    name = re.sub(r"\s*/\s*X$", "", name).strip()
-                    name = re.sub(r"\s+on Twitter$", "", name).strip()
+                    # Possessive runs: the character after each \s group is never whitespace,
+                    # so handing characters back can never complete the match - it only made
+                    # a long non-matching title retry from every offset.
+                    name = re.sub(r"\s*+/\s*+X$", "", name).strip()
+                    name = re.sub(r"\s++on Twitter$", "", name).strip()
 
                 bio = og_desc.strip() if og_desc else None
                 # Strip Twitter's generic suffix from bio
                 if bio:
-                    bio = re.sub(r"\s*\.\s*See their Twitter profile\.*$", "", bio).strip()
+                    bio = re.sub(r"\s*+\.\s*+See their Twitter profile\.*+$", "", bio).strip()
 
                 if name or bio or og_image:
                     print(f"DEBUG: [Twitter-BS4] Meta enriched @{username}: '{name}'")

@@ -141,6 +141,11 @@ class JobDistributionProvider(ABC):
         partner-gated) — return a DistributionResult with the right status instead."""
         raise NotImplementedError
 
-    async def unpublish(self, ctx: PublishContext) -> DistributionResult:
-        """Best-effort removal. Default: nothing to actively remove (crawl-based)."""
+    async def unpublish(self, ctx: PublishContext) -> DistributionResult:  # NOSONAR
+        """Best-effort removal. Default: nothing to actively remove (crawl-based).
+
+        The default body has nothing to await, but `async` is part of the interface, not an
+        oversight: GoogleJobsProvider.unpublish awaits a live deindex ping, and every caller
+        awaits this method. Dropping `async` here would break those overrides.
+        """
         return DistributionResult(platform=self.key, status=DistributionStatus.LISTED, message="Removed")
