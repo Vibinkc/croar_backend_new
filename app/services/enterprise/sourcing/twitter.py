@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from app.core.settings import settings
 
@@ -324,12 +324,17 @@ class TwitterProvider(BaseScraperProvider):
 
                 def meta(prop: str, attr: str = "property") -> str:
                     tag = soup.find("meta", {attr: prop})
-                    # `is not None`, not a truth test: a <meta> has no children, so any bs4
+                    # isinstance, not a truth test: a <meta> has no children, so any bs4
                     # version that derives truthiness from len() would treat a tag that was
-                    # found as absent and silently drop the value.
-                    if tag is None:
+                    # found as absent. find() can also hand back a NavigableString, which
+                    # has no .get at all - this rules out both.
+                    if not isinstance(tag, Tag):
                         return ""
-                    return (tag.get("content") or "").strip()
+                    # bs4 hands back a list for multi-valued attributes (class, rel, ...).
+                    # "content" is never one of those, so anything but a str is not a value
+                    # we can use - and calling .strip() on a list is what used to break here.
+                    content = tag.get("content")
+                    return content.strip() if isinstance(content, str) else ""
 
                 og_title = meta("og:title") or meta("twitter:title", "name")
                 og_desc = meta("og:description") or meta("twitter:description", "name")
@@ -419,7 +424,7 @@ class TwitterProvider(BaseScraperProvider):
             if segments[0].lower() in self.EXCLUDE_SEGMENTS:
                 return False
             # Twitter usernames are alphanumeric + underscore, 1-15 chars
-            return re.match(r"^[A-Za-z0-9_]{1,50}$", segments[0])
+            return re.match(r"^[A-Za-z0-9_]{1,50}$", segments[0]) is not None
         except Exception:
             return False
 

@@ -149,7 +149,11 @@ def build_job_posting_jsonld(job: Any, company: Any | None, job_url: str) -> dic
             value["minValue"] = float(smin)
             value["maxValue"] = float(smax)
         else:
-            value["value"] = float(smin or smax)
+            # Exactly one of the two is set (the enclosing `if smin or smax` guarantees it);
+            # bind it first so the not-None narrowing is visible to type checkers too.
+            single = smin or smax
+            if single is not None:
+                value["value"] = float(single)
         data["baseSalary"] = {
             "@type": "MonetaryAmount",
             "currency": getattr(job, "salary_currency", None) or "USD",
