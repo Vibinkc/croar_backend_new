@@ -6,6 +6,17 @@ import requests
 from .base import SourcingProvider
 
 
+def _text(parent: ET.Element, path: str, ns: dict[str, str]) -> str:
+    """Text of a child element, or "" when the tag is missing or empty.
+
+    ElementTree.find() returns None for a missing tag and .text is None for an empty one,
+    so reaching straight through either raised AttributeError. That was caught by the broad
+    except below and turned one malformed entry into "no results at all" for the whole feed.
+    """
+    node = parent.find(path, ns)
+    return (node.text or "").strip() if node is not None else ""
+
+
 class ArXivProvider(SourcingProvider):
     @property
     def platform_name(self) -> str:
@@ -31,14 +42,16 @@ class ArXivProvider(SourcingProvider):
 
             profiles = []
             for entry in root.findall("atom:entry", ns):
-                title = entry.find("atom:title", ns).text.strip()
-                summary = entry.find("atom:summary", ns).text.strip()
-                link = entry.find("atom:id", ns).text.strip()
+                title = _text(entry, "atom:title", ns)
+                summary = _text(entry, "atom:summary", ns)
+                link = _text(entry, "atom:id", ns)
 
                 # ArXiv entries are papers, so we extract authors as "profiles"
                 authors = entry.findall("atom:author", ns)
                 for author in authors:
-                    author_name = author.find("atom:name", ns).text.strip()
+                    author_name = _text(author, "atom:name", ns)
+                    if not author_name:
+                        continue
 
                     if not any(p["full_name"] == author_name for p in profiles):
                         profiles.append(
@@ -53,7 +66,7 @@ class ArXivProvider(SourcingProvider):
                                 "social_links": [],
                                 "raw_data": {
                                     "last_paper": title,
-                                    "summary": summary[:200] + "...",
+                                    "summary": (summary[:200] + "...") if len(summary) > 200 else summary,
                                     "arxiv_id": link,
                                 },
                             }
