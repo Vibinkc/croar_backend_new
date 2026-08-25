@@ -52,6 +52,40 @@ def _pilot_coll():
     return _mongo_client[_MONGO_DB_NAME]["pilot_chat_history"]
 
 
+def _pilot_job_ctx_coll():
+    return _mongo_client[_MONGO_DB_NAME]["pilot_thread_job"]
+
+
+def _remember_thread_job(thread_id: str, job_id: str, title: str, intent: str) -> None:
+    """Pin a thread to the job it is about, so later turns don't depend on the client.
+
+    The job used to live only in a browser ref that the client had to resend on EVERY turn.
+    Anything that dropped it — reopening a chat from history, a new tab, a reload — made the
+    agent ask "which job?" in the middle of a conversation that was only ever about one job.
+    """
+    try:
+        _pilot_job_ctx_coll().update_one(
+            {"_id": thread_id},
+            {"$set": {"job_id": job_id, "title": title, "intent": intent, "at": datetime.now()}},
+            upsert=True,
+        )
+    except Exception as e:  # a lost pin must never break the chat
+        logger.warning(f"Could not pin job to thread: {e}")
+
+
+def _recall_thread_job(thread_id: str) -> dict[str, str]:
+    """The job this thread is about, or {} — used when the client didn't send it."""
+    try:
+        doc = _pilot_job_ctx_coll().find_one({"_id": thread_id}) or {}
+        return {
+            "job_id": str(doc.get("job_id") or ""),
+            "title": str(doc.get("title") or ""),
+            "intent": str(doc.get("intent") or "general"),
+        }
+    except Exception:
+        return {}
+
+
 class AgentChatRequest(BaseModel):
     message: str
     thread_id: str = "default_thread"
@@ -157,6 +191,20 @@ async def agent_chat(
         # sourcing candidates" unconditionally, which hijacked the rounds hand-off — after the
         # user confirmed a change to the rounds, the agent answered by offering to source.
         intent = _prompt_safe(meta.get("intent"), 24) or "general"
+
+        # The client sends the job on the turn it hands off; pin it to the thread so every
+        # later turn has it even if the client stops sending it (session reopened from
+        # history, new tab, reload). Without this the agent asked "which job?" halfway
+        # through a conversation that was only ever about one job.
+        if source_job_id:
+            _remember_thread_job(thread_id, source_job_id, source_job_title, intent)
+        else:
+            pinned = _recall_thread_job(thread_id)
+            if pinned.get("job_id"):
+                source_job_id = pinned["job_id"]
+                source_job_title = pinned.get("title") or ""
+                intent = pinned.get("intent") or "general"
+
         if source_job_id:
             job_ref = f"job_id='{source_job_id}'" + (
                 f", title='{source_job_title}'" if source_job_title else ""
@@ -180,10 +228,15 @@ async def agent_chat(
             turn_messages.append(
                 SystemMessage(
                     content=(
-                        f"CONTEXT: The user is working on an EXISTING job in their company — {job_ref}."
+                        f"CONTEXT: This ENTIRE conversation is about ONE existing job in the user's "
+                        f"company — {job_ref}."
                         + task
-                        + " Do NOT ask which job it is and do NOT call list_jobs to disambiguate — "
-                        "you already have the job_id."
+                        + " Every request in this chat refers to THAT job unless the user names a "
+                        "different one explicitly. Resolve vague follow-ups ('add it back', 'remove "
+                        "that one', 'do it again') against this job and what was just discussed. "
+                        "NEVER ask which job it is and NEVER call list_jobs to disambiguate — you "
+                        "already have the job_id. If you are unsure what changed, call "
+                        "get_job_rounds to see the job's current state rather than asking."
                     )
                 )
             )
