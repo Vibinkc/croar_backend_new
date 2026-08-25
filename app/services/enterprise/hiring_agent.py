@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.anthropic_llm import claude_complete, claude_json
+from app.core.anthropic_llm import AIUnavailableError, claude_complete, claude_json
 from app.core.settings import get_settings
 from app.models.enterprise.candidate import ApplicationStatus, Candidate, CandidateApplication
 from app.models.enterprise.job import JobRequirement
@@ -81,6 +81,8 @@ class HiringAgentService:
                 stage["id"] = str(i + 1)
                 stage["order"] = i + 1
             return stages
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error generating AI workflow: {e}")
             return []
@@ -185,6 +187,8 @@ class HiringAgentService:
                     server.login(str(_settings.smtp_username), str(_settings.smtp_password))
                 server.send_message(msg)
             return True, ""
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             return False, str(e)
 
@@ -355,6 +359,8 @@ class HiringAgentService:
         try:
             content = await claude_json(prompt, system="You are an HR analyst. Output JSON.")
             return cast("dict[str, Any]", json.loads(content))
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception:
             return {"score": 50, "analysis": "Could not parse response with AI."}
 
@@ -369,6 +375,8 @@ class HiringAgentService:
         )
         try:
             return (await claude_complete(prompt, max_tokens=300)).strip()
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception:
             return (
                 "Thank you for your interest, but your profile does not meet our "
@@ -391,6 +399,8 @@ class HiringAgentService:
         """
         try:
             return (await claude_complete(prompt, max_tokens=400)).strip()
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception:
             return (
                 f"Hi {candidate_name}, thank you for your message. We have received "

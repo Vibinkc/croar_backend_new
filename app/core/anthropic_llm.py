@@ -29,6 +29,35 @@ _sync_client: Anthropic | None = (
 _JSON_SYSTEM = "You output ONLY valid JSON — no prose, no explanations, no markdown code fences."
 
 
+class AIUnavailableError(RuntimeError):
+    """The AI provider could not be reached or refused the call.
+
+    Distinct from "the model replied with something we couldn't parse": this means no
+    generation happened at all (no credit, bad key, rate limited, overloaded, network).
+    Callers should surface it rather than fall back to placeholder content — a silent
+    fallback is what made an exhausted credit balance look like a bad generation.
+    """
+
+
+def is_provider_unavailable(exc: BaseException) -> bool:
+    """True when an exception means the provider refused/could not serve the request."""
+    msg = str(exc).lower()
+    markers = (
+        "credit balance is too low",
+        "authentication_error",
+        "invalid x-api-key",
+        "permission_error",
+        "rate_limit",
+        "overloaded",
+        "api key is not configured",
+        "anthropic_api_key",
+    )
+    if any(m in msg for m in markers):
+        return True
+    status = getattr(exc, "status_code", None)
+    return status in (401, 403, 429, 500, 502, 503, 529)
+
+
 def _extract_json(text: str) -> str:
     """Return just the JSON object/array from a model reply.
 

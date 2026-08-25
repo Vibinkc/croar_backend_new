@@ -2,7 +2,7 @@ import json
 import logging
 from typing import cast
 
-from app.core.anthropic_llm import AsyncClaudeOpenAI, claude_json
+from app.core.anthropic_llm import AIUnavailableError, AsyncClaudeOpenAI, claude_json, is_provider_unavailable
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +20,17 @@ async def analyze_text_with_llm(prompt: str) -> str:
     try:
         # 8k tokens so large payloads (coding questions with test cases) aren't truncated.
         return await claude_json(prompt, max_tokens=8000)
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception as e:
-        print(f"CRITICAL: Claude Call Error: {e}")
-        return json.dumps(
-            {
-                "issues": [
-                    {
-                        "quote": "System Error",
-                        "issue": "AI Analysis Failed",
-                        "improvement": f"An error occurred during AI analysis: {e!s}",
-                        "severity": "high",
-                    }
-                ]
-            }
-        )
+        # Raise, don't fabricate. This used to return a stand-in JSON document
+        # ("System Error" / "AI Analysis Failed") which every caller then happily parsed,
+        # so a provider outage or an exhausted credit balance produced empty assessments
+        # and one-line job descriptions at HTTP 200 — invisible to the user and to us.
+        logger.error("Claude call failed: %s", e)
+        if is_provider_unavailable(e):
+            raise AIUnavailableError(str(e)) from e
+        raise
 
 
 async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, object]:
@@ -94,6 +91,8 @@ async def analyze_resume_or_jd(text: str, source_type: str) -> dict[str, object]
             "domains": domains,
             "modules": ["APTITUDE", "CODING"] if response_data.get("coding_needed", False) else ["APTITUDE"],
         }
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception as e:
         print(f"Error in analyze_resume_or_jd: {e}")
         return {
@@ -229,6 +228,8 @@ async def generate_aptitude_questions(
                 "Dropped %d/%d aptitude question(s) with unresolvable answers", dropped, len(questions)
             )
         return valid_questions[:count]
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception:
         return []
 
@@ -296,6 +297,8 @@ async def generate_coding_questions(
         response_data = json.loads(response_str)
         questions = cast("list[dict[str, object]]", response_data.get("questions", []))
         return questions[:count]
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception as e:
         print(f"Error in generate_coding_questions: {e}")
         return []
@@ -382,6 +385,8 @@ async def generate_job_description_ai(
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
         return cast("dict[str, object]", response_data)
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception as e:
         # Raise, don't fabricate. This used to swallow the error and hand back a stub
         # ("<title> Role", salary 10-20 LPA, no skills) with HTTP 200, so a failed
@@ -430,6 +435,8 @@ async def generate_interview_questions(
         response_str = await analyze_text_with_llm(prompt)
         response_data = json.loads(response_str)
         return cast("list[dict[str, object]]", response_data.get("questions", []))[:count]
+    except AIUnavailableError:
+        raise  # provider outage: surface it, don't return placeholder content
     except Exception as e:
         print(f"Error in generate_interview_questions: {e}")
         return []

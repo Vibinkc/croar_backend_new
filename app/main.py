@@ -8,8 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.anthropic_llm import AIUnavailableError
 from app.core.database import db_manager
 from app.core.exception_handlers import (
+    ai_unavailable_handler,
     app_exception_handler,
     database_exception_handler,
     generic_exception_handler,
@@ -63,6 +65,9 @@ app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)
 
 # Exception Handlers
+# Registered BEFORE the generic handler so an AI provider outage returns a 503 the UI can
+# act on, instead of a 500 or (worse) a silently fabricated result.
+app.add_exception_handler(AIUnavailableError, ai_unavailable_handler)  # type: ignore
 app.add_exception_handler(AppException, app_exception_handler)  # type: ignore
 app.add_exception_handler(RequestValidationError, validation_exception_handler)  # type: ignore
 app.add_exception_handler(SQLAlchemyError, database_exception_handler)  # type: ignore

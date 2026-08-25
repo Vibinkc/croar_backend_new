@@ -3,7 +3,7 @@ from typing import Any, cast
 
 from openai import AsyncOpenAI
 
-from app.core.anthropic_llm import AsyncClaudeOpenAI
+from app.core.anthropic_llm import AIUnavailableError, AsyncClaudeOpenAI
 from app.core.settings import settings
 
 
@@ -44,6 +44,8 @@ class AIEvaluatorService:
             )
             content = str(response.choices[0].message.content or "{}")
             return cast("dict[str, Any]", json.loads(content))
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error generating question: {e}")
             return None
@@ -83,6 +85,8 @@ class AIEvaluatorService:
             )
             content = str(response.choices[0].message.content or "{}")
             return cast("dict[str, Any]", json.loads(content))
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error evaluating response: {e}")
             return None
@@ -130,6 +134,8 @@ class AIEvaluatorService:
             )
             content = str(response.choices[0].message.content or "{}")
             return cast("dict[str, Any]", json.loads(content))
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error evaluating code: {e}")
             return {"score": 0, "feedback": "Evaluation failed."}
@@ -175,6 +181,8 @@ class AIEvaluatorService:
             )
             content = str(response.choices[0].message.content or "{}")
             return cast("dict[str, Any]", json.loads(content))
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error generating job simulation: {e}")
             return None
@@ -200,6 +208,8 @@ class AIEvaluatorService:
             content = str(response.choices[0].message.content or "{}")
             data: dict[str, list[dict[str, Any]]] = json.loads(content)
             return data.get("levels", [])
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error generating labyrinth levels: {e}")
             return None
@@ -220,6 +230,8 @@ class AIEvaluatorService:
             if response.data and len(response.data) > 0:
                 return response.data[0].url
             return None
+        except AIUnavailableError:
+            raise  # provider outage: surface it, don't return placeholder content
         except Exception as e:
             print(f"Error generating image: {e}")
             return None
