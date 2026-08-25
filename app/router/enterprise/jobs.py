@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from typing import Annotated, Any, cast
 from uuid import UUID
@@ -37,6 +38,8 @@ from app.services.enterprise.hiring_agent import hiring_agent_service
 from app.services.enterprise.job_distribution import PublishContext, job_distribution_service
 
 router = APIRouter(prefix="/jobs", tags=["Enterprise Jobs"])
+
+logger = logging.getLogger(__name__)
 
 # Removed get_enterprise_agent helper as it's redundant with PermissionChecker
 
@@ -594,15 +597,26 @@ async def generate_jd_endpoint(
     _current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
 ) -> dict[str, object]:
     """Generate or enhance a job description and optionally a workflow using AI."""
-    jd_result = await generate_job_description_ai(
-        title=request.title,
-        existing_description=request.existing_description or "",
-        location=request.location or "",
-        work_mode=request.work_mode or "",
-        experience_min=request.experience_min or "",
-        experience_max=request.experience_max or "",
-        additional_instructions=request.additional_instructions or "",
-    )
+    try:
+        jd_result = await generate_job_description_ai(
+            title=request.title,
+            existing_description=request.existing_description or "",
+            location=request.location or "",
+            work_mode=request.work_mode or "",
+            experience_min=request.experience_min or "",
+            experience_max=request.experience_max or "",
+            additional_instructions=request.additional_instructions or "",
+        )
+    except Exception as e:
+        # Fail loudly. This endpoint used to return 200 with a fabricated stub, so an
+        # exhausted AI credit balance looked to the user like "the AI just wrote one bad
+        # line" instead of "the call failed". 503 lets the UI show its existing
+        # "AI generation failed" message and keeps whatever the user had typed.
+        detail = "AI generation is unavailable right now. Please try again."
+        if "credit balance is too low" in str(e):
+            detail = "The AI provider account is out of credit. Top it up and try again."
+        logger.error("generate-jd failed for %r: %s", request.title, e)
+        raise HTTPException(status_code=503, detail=detail) from e
 
     workflow: list[dict[str, object]] = []
     if request.generate_workflow:

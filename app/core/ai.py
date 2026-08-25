@@ -383,14 +383,13 @@ async def generate_job_description_ai(
         response_data = json.loads(response_str)
         return cast("dict[str, object]", response_data)
     except Exception as e:
-        print(f"Error in generate_job_description_ai: {e}")
-        return {
-            "description": f"<p><strong>{title} Role</strong></p>",
-            "salary_min": 10,
-            "salary_max": 20,
-            "currency": "INR",
-            "skills": [],
-        }
+        # Raise, don't fabricate. This used to swallow the error and hand back a stub
+        # ("<title> Role", salary 10-20 LPA, no skills) with HTTP 200, so a failed
+        # generation was indistinguishable from a real one — and in edit mode the stub
+        # OVERWROTE the salary the user had already entered. The caller turns this into
+        # a 503 so the UI's existing "AI generation failed" message actually fires.
+        logger.error("generate_job_description_ai failed for %r: %s", title, e)
+        raise
 
 
 async def generate_interview_questions(
