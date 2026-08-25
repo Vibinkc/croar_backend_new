@@ -16,6 +16,7 @@ from app.agents.tools import (
     delete_job,
     generate_draft_offer,
     generate_job_description,
+    get_job_rounds,
     initiate_candidate_onboarding,
     list_jobs,
     score_candidate_application,
@@ -44,6 +45,7 @@ tools = [
     generate_draft_offer,
     generate_job_description,
     create_job_requisition,
+    get_job_rounds,
     set_job_rounds,
     setup_assessment_automation,
     setup_interview_automation,
@@ -116,8 +118,11 @@ MANAGING EXISTING JOBS (list / update / delete):
 - To CHANGE a job, call update_job(job_id, ...) with ONLY the fields to change (title, jd_content,
   location, skills, min_exp, max_exp, is_active). Use is_active=False to pause a job (Draft),
   True to make it live again.
-- To CHANGE A JOB'S INTERVIEW ROUNDS, call set_job_rounds(job_id, rounds=[...]) - update_job
-  CANNOT do this. Pass the FULL ordered list of round names you want the job to end up with.
+- To SEE a job's interview rounds, call get_job_rounds(job_id). list_jobs does NOT return
+  rounds, so NEVER state or assume a job's rounds without reading them first.
+- To CHANGE A JOB'S INTERVIEW ROUNDS, call get_job_rounds(job_id) FIRST, apply the edit to
+  the list you got back, then call set_job_rounds(job_id, rounds=[...]) with the FULL
+  updated list. update_job CANNOT change rounds. After changing them, state the new list.
 - To DELETE a job, call delete_job(job_id) — this removes the whole pipeline (all automations) and
   its non-hired applications; HIRED candidates are preserved. Deletion is DESTRUCTIVE, so ALWAYS
   confirm the exact job with the user (show its title) and get a clear "yes" BEFORE calling

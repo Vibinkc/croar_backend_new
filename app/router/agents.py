@@ -152,16 +152,38 @@ async def agent_chat(
         meta = request.metadata or {}
         source_job_id = _prompt_safe(meta.get("source_job_id"), 64)
         source_job_title = _prompt_safe(meta.get("source_job_title"), 120)
+        # What the user came here to do. The context below is injected on EVERY turn, so it
+        # must not assert an intent the conversation doesn't have: it used to say "the user is
+        # sourcing candidates" unconditionally, which hijacked the rounds hand-off — after the
+        # user confirmed a change to the rounds, the agent answered by offering to source.
+        intent = _prompt_safe(meta.get("intent"), 24) or "general"
         if source_job_id:
+            job_ref = f"job_id='{source_job_id}'" + (
+                f", title='{source_job_title}'" if source_job_title else ""
+            )
+            if intent == "rounds":
+                task = (
+                    " The user came here to work on this job's INTERVIEW ROUNDS. Read them with "
+                    "get_job_rounds before describing or changing them, and write changes with "
+                    "set_job_rounds. Do NOT offer to source candidates unless the user asks."
+                )
+            elif intent == "sourcing":
+                task = (
+                    " The user came here to SOURCE CANDIDATES for this job. When they give a "
+                    "candidate count, call source_candidates with EXACTLY this job_id, and do NOT "
+                    "build a new pipeline for it."
+                )
+            else:
+                task = (
+                    " Act on THIS job for the rest of the conversation unless the user names a different one."
+                )
             turn_messages.append(
                 SystemMessage(
                     content=(
-                        f"CONTEXT: The user is sourcing candidates for an EXISTING job in their company — "
-                        f"job_id='{source_job_id}'"
-                        + (f", title='{source_job_title}'" if source_job_title else "")
-                        + ". When they give a candidate count, call source_candidates with EXACTLY this "
-                        "job_id. Do NOT ask which job it is, do NOT call list_jobs to disambiguate, and "
-                        "do NOT build a new pipeline for it."
+                        f"CONTEXT: The user is working on an EXISTING job in their company — {job_ref}."
+                        + task
+                        + " Do NOT ask which job it is and do NOT call list_jobs to disambiguate — "
+                        "you already have the job_id."
                     )
                 )
             )

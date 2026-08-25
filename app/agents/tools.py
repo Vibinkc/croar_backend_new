@@ -492,6 +492,39 @@ def _infer_stage_type(name: str, given: str | None = None) -> str:
 
 
 @tool
+async def get_job_rounds(job_id: str, config: RunnableConfig) -> dict[str, Any]:
+    """Read a job's CURRENT interview rounds (its hiring workflow stages), in order.
+
+    Call this before answering any question about a job's rounds and before changing them —
+    list_jobs does NOT return rounds, so without this you would be guessing. To edit rounds
+    (add / remove / reorder / rename), read them with this tool first, apply the change to
+    the list you get back, then write the FULL updated list with set_job_rounds.
+    """
+    session: AsyncSession = config["configurable"]["session"]
+    try:
+        cid = _company_id(config)
+        job = await _get_company_job(session, cid, job_id)
+        if not job:
+            return {"status": "error", "message": "Job not found (or already deleted)."}
+        stages = job.workflow_stages or []
+        rounds = [
+            {"position": i + 1, "name": str(s.get("name", "")), "type": str(s.get("type", ""))}
+            for i, s in enumerate(stages)
+            if isinstance(s, dict)
+        ]
+        return {
+            "status": "success",
+            "job_id": str(job.id),
+            "title": job.title,
+            "count": len(rounds),
+            "rounds": rounds,
+        }
+    except Exception as e:
+        logger.error(f"Error reading job rounds: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@tool
 async def set_job_rounds(
     job_id: str, rounds: list[str], config: RunnableConfig, round_types: list[str] | None = None
 ) -> dict[str, Any]:
