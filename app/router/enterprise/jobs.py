@@ -609,6 +609,9 @@ async def generate_jd_endpoint(
         if row:
             currency = row[0] or currency
             country = row[1] or country
+    # A single job may pay in a different currency from the organisation, so the request wins.
+    if request.currency:
+        currency = request.currency.strip().upper()[:8] or currency
 
     try:
         jd_result = await generate_job_description_ai(

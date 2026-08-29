@@ -23,6 +23,11 @@ class CompanyUpdate(BaseModel):
     name: str | None = None
     industry: str | None = None
     location: str | None = None
+    # Editable so an organisation can actually BE Malaysian/Singaporean/etc. The column
+    # existed and defaulted to INR, but nothing could ever change it, so every company was
+    # permanently Indian as far as salary and payroll were concerned.
+    currency: str | None = None
+    country: str | None = None
     logo_url: str | None = None
     config: dict[str, Any] | None = None
     is_consultancy: bool | None = None

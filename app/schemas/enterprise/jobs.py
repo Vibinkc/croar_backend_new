@@ -150,6 +150,10 @@ class JDGenerationRequest(BaseModel):
     # Free-text extra requirements the user wants the AI to fold into the existing description
     # (e.g. "add a section on on-call rotation and mention we use Kubernetes").
     additional_instructions: str | None = ""
+    # The currency this particular job pays in. Defaults to the organisation's currency when
+    # omitted, but a single role can differ — an India-based company hiring one position in
+    # Kuala Lumpur needs MYR for that job without changing the whole organisation.
+    currency: str | None = None
     generate_workflow: bool = False
 
 
