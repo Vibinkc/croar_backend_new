@@ -312,6 +312,8 @@ async def generate_job_description_ai(
     experience_max: str = "",
     additional_instructions: str = "",
     work_mode: str = "",
+    currency: str = "INR",
+    country: str = "India",
 ) -> dict[str, object]:
     """
     Generate or enhance a job description based on title and existing content.
@@ -319,9 +321,17 @@ async def generate_job_description_ai(
     `additional_instructions` is free-text the user wants folded INTO the existing description —
     the AI must integrate those points into the appropriate sections while preserving the rest of
     the current draft, rather than rewriting it from scratch.
+
+    `currency` / `country` come from the hiring organisation. They matter: this used to hardcode
+    "salary in LPA" and `"currency": "INR"`, so a Malaysian company got a range in lakhs of
+    rupees — a unit that does not exist there — stamped INR. The salary is now asked for as an
+    ABSOLUTE ANNUAL amount in the org's own currency, which is also what schema.org/Google for
+    Jobs expects; "12" meaning 12 lakhs was being published as ₹12 per year.
     """
     has_existing = len(existing_description.strip()) > 10
     has_additional = len(additional_instructions.strip()) > 0
+    cur = (currency or "INR").strip().upper()[:8] or "INR"
+    country = (country or "").strip() or "the organisation's country"
 
     if has_additional and has_existing:
         goal = (
@@ -366,18 +376,27 @@ async def generate_job_description_ai(
             if has_additional
             else ""
         )
+        + f"- Hiring organisation is based in: {country}\n"
+        + f"- Organisation's currency: {cur}\n"
         + "\n\nRequirements:\n"
         "1. Provide a comprehensive JD in professional HTML format.\n"
-        "2. Suggest a market-competitive salary range (Minimum and Maximum) in LPA.\n"
+        f"2. Suggest a market-competitive salary range for {country}, as the TOTAL ANNUAL "
+        f"amount in {cur}.\n"
+        f"   - Give plain whole numbers with NO thousands separators, no symbols and no words: "
+        f'write 1200000, never "12,00,000", "12 LPA", "1.2M" or "RM 60k".\n'
+        f"   - It must be the full yearly figure in {cur}, NOT a monthly amount and NOT a "
+        f"shorthand unit such as lakhs.\n"
         "3. Suggest a list of 5-8 top required skills.\n"
         "4. Reflect the Location and Work Mode above EXACTLY as given (e.g. On-Site / Hybrid / "
-        "Remote). Do NOT assume or write 'Remote' unless that is the stated work mode.\n\n"
+        "Remote). Do NOT assume or write 'Remote' unless that is the stated work mode.\n"
+        f"5. Any salary you mention inside the HTML description must match those numbers and be "
+        f"written in {cur}.\n\n"
         "Return ONLY a JSON object:\n"
         "{\n"
         '  "description": "HTML formatted JD string",\n'
-        '  "salary_min": number_in_LPA,\n'
-        '  "salary_max": number_in_LPA,\n'
-        '  "currency": "INR",\n'
+        '  "salary_min": total_annual_amount_as_plain_number,\n'
+        '  "salary_max": total_annual_amount_as_plain_number,\n'
+        f'  "currency": "{cur}",\n'
         '  "skills": ["Skill1", "Skill2", ...]\n'
         "}\n"
     )

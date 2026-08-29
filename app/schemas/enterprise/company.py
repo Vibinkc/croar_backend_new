@@ -36,6 +36,10 @@ class CompanyResponse(CompanyBase):
     is_consultancy: bool
     is_active: bool = True
     parent_id: UUID | None
+    # Exposed so the UI can label money in the organisation's own currency instead of
+    # assuming INR — the job form used to hardcode "INR" for every company.
+    currency: str = "INR"
+    country: str | None = None
     created_at: datetime
     updated_at: datetime
 

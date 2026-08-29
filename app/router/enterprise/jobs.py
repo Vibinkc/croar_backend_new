@@ -594,9 +594,22 @@ async def publish_job(
 @router.post("/generate-jd")
 async def generate_jd_endpoint(
     request: JDGenerationRequest,
-    _current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.generate))],
 ) -> dict[str, object]:
     """Generate or enhance a job description and optionally a workflow using AI."""
+    # Salary advice has to be in the hiring organisation's own money. This used to be hardcoded
+    # to "LPA" and INR, so a Malaysia-based company was handed a range in lakhs of rupees.
+    currency, country = "INR", "India"
+    company_id = getattr(current_user, "company_id", None)
+    if company_id is not None:
+        row = (
+            await session.execute(select(Company.currency, Company.country).where(Company.id == company_id))
+        ).first()
+        if row:
+            currency = row[0] or currency
+            country = row[1] or country
+
     try:
         jd_result = await generate_job_description_ai(
             title=request.title,
@@ -606,6 +619,8 @@ async def generate_jd_endpoint(
             experience_min=request.experience_min or "",
             experience_max=request.experience_max or "",
             additional_instructions=request.additional_instructions or "",
+            currency=currency,
+            country=country,
         )
     except Exception as e:
         # Fail loudly. This endpoint used to return 200 with a fabricated stub, so an
