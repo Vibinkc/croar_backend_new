@@ -76,6 +76,7 @@ class JobRequirementCreate(BaseModel):
     salary_max: float | None = None
     salary_currency: str | None = "INR"
     salary_frequency: str | None = "Yearly"
+    headcount: int | None = 1
     notice_period_max: int | None = None
     application_fields: list[dict[str, Any]] | None = []
     workflow_stages: list[dict[str, Any]] | None = []
@@ -97,6 +98,7 @@ class JobRequirementResponse(JobRequirementCreate):
     id: UUID
     company_id: UUID | None = None
     company: CompanyResponse | None = None
+    headcount: int | None = 1
 
     created_at: datetime
     postings: list[JobPostingBase] = []
@@ -132,6 +134,7 @@ class JobRequirementUpdate(BaseModel):
     salary_max: float | None = None
     salary_currency: str | None = None
     salary_frequency: str | None = None
+    headcount: int | None = None
     notice_period_max: int | None = None
     application_fields: list[dict[str, Any]] | None = None
     workflow_stages: list[dict[str, Any]] | None = None

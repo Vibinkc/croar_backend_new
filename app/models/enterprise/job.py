@@ -46,6 +46,10 @@ class JobRequirement(EnterpriseBase):
     job_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     work_mode: Mapped[str | None] = mapped_column(String(100), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # How many people this requisition hires. Manatal and Oorwin both carry it; without it a
+    # requisition for 5 openings is indistinguishable from one, and 'positions filled'
+    # cannot be reported.
+    headcount: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     auto_fit_analysis: Mapped[bool] = mapped_column(Boolean, default=False)
 
     salary_min: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
