@@ -314,6 +314,7 @@ async def generate_job_description_ai(
     work_mode: str = "",
     currency: str = "INR",
     country: str = "India",
+    frequency: str = "Yearly",
 ) -> dict[str, object]:
     """
     Generate or enhance a job description based on title and existing content.
@@ -331,6 +332,17 @@ async def generate_job_description_ai(
     has_existing = len(existing_description.strip()) > 10
     has_additional = len(additional_instructions.strip()) > 0
     cur = (currency or "INR").strip().upper()[:8] or "INR"
+    # Quote the salary for the period the employer actually pays on. This used to always demand
+    # an ANNUAL figure, so a job set to Daily or Hourly got a yearly number stored behind a
+    # per-day label — the same unit mismatch as the old "LPA" bug, one level down.
+    periods = {
+        "YEARLY": ("total annual", "per year"),
+        "MONTHLY": ("monthly", "per month"),
+        "WEEKLY": ("weekly", "per week"),
+        "DAILY": ("daily", "per day"),
+        "HOURLY": ("hourly", "per hour"),
+    }
+    period_word, period_phrase = periods.get((frequency or "Yearly").strip().upper(), periods["YEARLY"])
     country = (country or "").strip() or "the organisation's country"
 
     if has_additional and has_existing:
@@ -380,12 +392,12 @@ async def generate_job_description_ai(
         + f"- Organisation's currency: {cur}\n"
         + "\n\nRequirements:\n"
         "1. Provide a comprehensive JD in professional HTML format.\n"
-        f"2. Suggest a market-competitive salary range for {country}, as the TOTAL ANNUAL "
-        f"amount in {cur}.\n"
+        f"2. Suggest a market-competitive salary range for {country}, as the {period_word.upper()} "
+        f"amount in {cur} ({period_phrase}).\n"
         f"   - Give plain whole numbers with NO thousands separators, no symbols and no words: "
         f'write 1200000, never "12,00,000", "12 LPA", "1.2M" or "RM 60k".\n'
-        f"   - It must be the full yearly figure in {cur}, NOT a monthly amount and NOT a "
-        f"shorthand unit such as lakhs.\n"
+        f"   - It must be the {period_word} figure in {cur} ({period_phrase}), NOT any other pay "
+        f"period, and NOT a shorthand unit such as lakhs.\n"
         "3. Suggest a list of 5-8 top required skills.\n"
         "4. Reflect the Location and Work Mode above EXACTLY as given (e.g. On-Site / Hybrid / "
         "Remote). Do NOT assume or write 'Remote' unless that is the stated work mode.\n"
@@ -394,8 +406,8 @@ async def generate_job_description_ai(
         "Return ONLY a JSON object:\n"
         "{\n"
         '  "description": "HTML formatted JD string",\n'
-        '  "salary_min": total_annual_amount_as_plain_number,\n'
-        '  "salary_max": total_annual_amount_as_plain_number,\n'
+        f'  "salary_min": {period_word.replace(" ", "_")}_amount_as_plain_number,\n'
+        f'  "salary_max": {period_word.replace(" ", "_")}_amount_as_plain_number,\n'
         f'  "currency": "{cur}",\n'
         '  "skills": ["Skill1", "Skill2", ...]\n'
         "}\n"

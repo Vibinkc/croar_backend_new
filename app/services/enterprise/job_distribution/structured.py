@@ -143,7 +143,9 @@ def build_job_posting_jsonld(job: Any, company: Any | None, job_url: str) -> dic
     smax = getattr(job, "salary_max", None)
     if smin or smax:
         unit = (getattr(job, "salary_frequency", None) or "YEAR").upper()
-        unit = {"YEARLY": "YEAR", "MONTHLY": "MONTH", "HOURLY": "HOUR", "WEEKLY": "WEEK"}.get(unit, unit)
+        unit = {"YEARLY": "YEAR", "MONTHLY": "MONTH", "HOURLY": "HOUR", "WEEKLY": "WEEK", "DAILY": "DAY"}.get(
+            unit, unit
+        )
         value: dict[str, Any] = {"@type": "QuantitativeValue", "unitText": unit}
         if smin and smax:
             value["minValue"] = float(smin)

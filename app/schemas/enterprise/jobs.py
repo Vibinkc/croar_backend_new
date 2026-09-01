@@ -157,6 +157,8 @@ class JDGenerationRequest(BaseModel):
     # omitted, but a single role can differ — an India-based company hiring one position in
     # Kuala Lumpur needs MYR for that job without changing the whole organisation.
     currency: str | None = None
+    # Pay period for the suggested range — a Daily job needs a day rate, not an annual one.
+    frequency: str | None = None
     generate_workflow: bool = False
 
 

@@ -612,6 +612,7 @@ async def generate_jd_endpoint(
     # A single job may pay in a different currency from the organisation, so the request wins.
     if request.currency:
         currency = request.currency.strip().upper()[:8] or currency
+    frequency = (request.frequency or "Yearly").strip() or "Yearly"
 
     try:
         jd_result = await generate_job_description_ai(
@@ -624,6 +625,7 @@ async def generate_jd_endpoint(
             additional_instructions=request.additional_instructions or "",
             currency=currency,
             country=country,
+            frequency=frequency,
         )
     except Exception as e:
         # Fail loudly. This endpoint used to return 200 with a fabricated stub, so an
