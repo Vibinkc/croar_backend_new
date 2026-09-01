@@ -171,3 +171,58 @@ class JobActivity(EnterpriseBase):
     created_at: Mapped[TIMESTAMP] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), index=True
     )
+
+
+class JobNote(EnterpriseBase):
+    """A free-text note a recruiter leaves on a requisition.
+
+    Separate from JobActivity: activities are system-written audit entries, notes are
+    human-written and editable. Pinned notes float to the top of the list.
+    """
+
+    __tablename__ = "job_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
+    )
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    author_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    author_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    created_at: Mapped[TIMESTAMP] = mapped_column(
+        TIMESTAMP, default=func.now(), server_default=func.now(), index=True
+    )
+    updated_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True, onupdate=func.now())
+
+
+class JobAttachment(EnterpriseBase):
+    """A file attached to a requisition — a signed requisition form, a brief, a scorecard.
+
+    The bytes live under uploads/job_attachments and are served statically from /uploads/…;
+    this row is the metadata plus who uploaded it.
+    """
+
+    __tablename__ = "job_attachments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
+    )
+    job_requirement_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("job_requirements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    company_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    uploader_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    uploader_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[TIMESTAMP] = mapped_column(
+        TIMESTAMP, default=func.now(), server_default=func.now(), index=True
+    )

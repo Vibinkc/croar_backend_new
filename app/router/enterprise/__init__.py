@@ -17,6 +17,7 @@ from .hiring_agent import router as hiring_agent_router
 from .interview_automation import router as interview_automation_router
 from .interview_templates import router as interview_templates_router
 from .job_portals import router as job_portals_router
+from .job_workspace import router as job_workspace_router
 from .jobs import router as jobs_router
 from .onboarding import router as onboarding_router
 from .onboarding_automation import router as onboarding_automation_router
@@ -41,6 +42,7 @@ router.include_router(communication_router)
 router.include_router(applications_router)
 router.include_router(dashboard_router)
 router.include_router(jobs_router)
+router.include_router(job_workspace_router)
 router.include_router(job_portals_router)
 router.include_router(company_router)
 router.include_router(hiring_agent_router)

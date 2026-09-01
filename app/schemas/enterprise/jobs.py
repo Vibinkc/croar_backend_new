@@ -31,6 +31,45 @@ class JobActivityOut(BaseModel):
         from_attributes = True
 
 
+class JobNoteOut(BaseModel):
+    id: UUID
+    body: str
+    is_pinned: bool = False
+    author_id: UUID | None = None
+    author_name: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class JobNoteIn(BaseModel):
+    body: str = Field(min_length=1, max_length=8000)
+    is_pinned: bool = False
+
+
+class JobNotePatch(BaseModel):
+    """Partial update — omitted fields are left as they are."""
+
+    body: str | None = Field(default=None, min_length=1, max_length=8000)
+    is_pinned: bool | None = None
+
+
+class JobAttachmentOut(BaseModel):
+    id: UUID
+    filename: str
+    url: str
+    content_type: str | None = None
+    size_bytes: int | None = None
+    uploader_id: UUID | None = None
+    uploader_name: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class AssignJobRequest(BaseModel):
     owner_id: UUID | None = None
     collaborator_ids: list[UUID] = []
