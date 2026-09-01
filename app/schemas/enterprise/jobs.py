@@ -134,6 +134,14 @@ class JobRequirementCreate(BaseModel):
 
 
 class JobRequirementResponse(JobRequirementCreate):
+    # Reading a job back must never be gated by the rules for CREATING one. Inheriting
+    # JobRequirementCreate also inherited its min_length=1 on title/description, so a single
+    # stored row with an empty description (a draft saved before its JD was written, say) made
+    # the WHOLE list endpoint fail with a 500 ResponseValidationError. Overridden as plain
+    # strings: the response model reports what is in the database, it does not police it.
+    title: str = ""
+    description: str = ""
+
     id: UUID
     company_id: UUID | None = None
     company: CompanyResponse | None = None
