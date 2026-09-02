@@ -578,8 +578,19 @@ async def set_job_rounds(
         return {
             "status": "success",
             "job_id": str(job.id),
-            "rounds": [{"name": s["name"], "type": s["type"]} for s in stages],
+            "rounds": [
+                {"stage_index": i + 1, "name": s["name"], "type": s["type"]} for i, s in enumerate(stages)
+            ],
             "message": f"'{job.title}' now has {len(stages)} rounds: {', '.join(names)}.",
+            # The rounds are named but inert. Said here as well as in the system prompt because a
+            # tool result steers the next turn far more reliably than a distant instruction, and
+            # stopping at the list is exactly the failure this tool invites.
+            "next_step": (
+                "These rounds are named but do nothing yet. Now go through them IN ORDER and ask "
+                "the user what each round should DO — one round per message, proposing a concrete "
+                "default — then arm it with setup_assessment_automation, setup_interview_automation, "
+                "setup_mail_automation or setup_onboarding_automation using its stage_index above."
+            ),
         }
     except Exception as e:
         logger.error(f"Error setting job rounds: {e}")

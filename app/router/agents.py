@@ -213,7 +213,12 @@ async def agent_chat(
                 task = (
                     " The user came here to work on this job's INTERVIEW ROUNDS. Read them with "
                     "get_job_rounds before describing or changing them, and write changes with "
-                    "set_job_rounds. Do NOT offer to source candidates unless the user asks."
+                    "set_job_rounds. Naming the rounds is only half the job: once they are saved, "
+                    "go through them IN ORDER and ask the user what each round should DO — what a "
+                    "test should cover, how an interview should run, whether an email goes out — "
+                    "then arm it with the matching setup_*_automation tool. Ask about one round "
+                    "per message and propose a concrete default so the user can simply agree. "
+                    "Do NOT offer to source candidates unless the user asks."
                 )
             elif intent == "sourcing":
                 task = (
