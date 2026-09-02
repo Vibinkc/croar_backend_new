@@ -30,6 +30,7 @@ from app.schemas.enterprise.jobs import (
     JobNoteIn,
     JobNoteOut,
     JobNotePatch,
+    SendApplicationFormIn,
 )
 
 router = APIRouter(prefix="/jobs", tags=["Enterprise Jobs"])
@@ -560,4 +561,95 @@ async def create_candidate_from_resume(
         "match_score": analysis.get("score"),
         "created_candidate": created_candidate,
         "already_on_job": already,
+    }
+
+
+# ── Sending the job's application form to someone ─────────────────────────────────────────────
+# /jobs/{id}/invite-candidate can only mail a Candidate already in the pool, because it takes a
+# candidate_id. A recruiter with nothing but an email address had no way to ask that person to
+# apply. This sends the same apply link to ANY address, so the person fills in the job's own
+# application form themselves and arrives in the pipeline as a normal applicant.
+
+
+@router.post("/{job_id}/send-form")
+async def send_application_form(
+    job_id: UUID,
+    payload: SendApplicationFormIn,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+) -> dict[str, Any]:
+    """Email the job's application form (as an apply link) to an arbitrary address."""
+    from fastapi.concurrency import run_in_threadpool
+
+    from app.core.settings import settings
+    from app.router.agents import PILOT_TEST_EMAIL, PILOT_TEST_MODE
+    from app.router.enterprise.communication import send_smtp_email
+    from app.services.enterprise.sourcing import job_sourcing
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    email = (payload.email or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="An email address is required")
+
+    name = (payload.name or "").strip() or "there"
+    apply_url = f"{settings.frontend_url}/jobs/{job.id}"
+    recipient = PILOT_TEST_EMAIL if PILOT_TEST_MODE else email
+    subject = ("[TEST] " if PILOT_TEST_MODE else "") + f"Apply for {job.title}"
+    location_bit = f" in {job.location}" if job.location else ""
+    test_banner = (
+        "<div style='background:#fff3cd;border:1px solid #ffe69c;padding:10px;border-radius:8px;"
+        f"margin-bottom:14px;font-size:13px'>&#129514; <b>TEST EMAIL</b> &mdash; in production this "
+        f"would go to <b>{name}</b> &lt;{email}&gt;.</div>"
+        if PILOT_TEST_MODE
+        else ""
+    )
+    body = (
+        f"{test_banner}<p>Hi {name},</p>"
+        f"<p>We would like you to apply for our <strong>{job.title}</strong> role{location_bit}. "
+        "The link below opens the application form &mdash; it only takes a few minutes.</p>"
+        f'<p><a href="{apply_url}" style="display:inline-block;padding:12px 24px;background:#4f46e5;'
+        'color:#fff;text-decoration:none;border-radius:8px;font-weight:bold">Open the application form</a></p>'
+        f'<p style="font-size:12px;color:#6b7280">Or paste this into your browser: {apply_url}</p>'
+        "<p>Best regards,<br/>Hiring Team</p>"
+    )
+
+    try:
+        ok, _ = await run_in_threadpool(send_smtp_email, recipient, subject, body, None, None)
+    except Exception:
+        ok = False
+
+    # Record it in the job's sourcing funnel, exactly as invite-candidate does, so outreach sent
+    # this way still shows up on the Profile Sourcing tab instead of vanishing.
+    try:
+        await run_in_threadpool(
+            job_sourcing.record_invites,
+            str(job.id),
+            str(job.company_id),
+            [
+                {
+                    "full_name": payload.name or email,
+                    "email": email,
+                    "platform": "Application form",
+                    "profile_url": None,
+                    "headline": None,
+                    "location": None,
+                    "invite_status": "sent" if ok else "failed",
+                }
+            ],
+        )
+    except Exception:
+        pass
+
+    _log_job_activity(session, job, current_user, "form_sent", {"email": email})
+    await session.commit()
+
+    return {
+        "status": "success" if ok else "failed",
+        "sent": bool(ok),
+        "apply_url": apply_url,
+        "test_mode": PILOT_TEST_MODE,
+        "test_email": PILOT_TEST_EMAIL if PILOT_TEST_MODE else None,
     }

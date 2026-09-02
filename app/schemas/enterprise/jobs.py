@@ -70,6 +70,13 @@ class AddCandidateToJobOut(BaseModel):
     already_on_job: bool = False
 
 
+class SendApplicationFormIn(BaseModel):
+    """Email this job's application form to someone, whether or not they are in the pool."""
+
+    email: str = Field(min_length=3, max_length=255)
+    name: str | None = Field(default=None, max_length=200)
+
+
 class JobAttachmentOut(BaseModel):
     id: UUID
     filename: str
