@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -75,6 +75,14 @@ class AssessmentAutomation(Base):
     company_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="SET NULL"), nullable=True
     )
+
+    # Who runs the test. "CROAR" uses the built-in assessment (AI questions, hosted take page);
+    # "EXTERNAL" sends the candidate to a provider such as Codility or HackerRank instead.
+    provider: Mapped[str] = mapped_column(String(20), default="CROAR", server_default="CROAR", nullable=False)
+    # The provider's invite/test link, used verbatim when provider == "EXTERNAL".
+    external_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Shown to the recruiter so a round says which tool it uses (e.g. "Codility").
+    external_provider_name: Mapped[str | None] = mapped_column(String(60), nullable=True)
 
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_immediate: Mapped[bool] = mapped_column(Boolean, default=True)

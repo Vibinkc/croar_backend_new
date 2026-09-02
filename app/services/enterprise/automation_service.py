@@ -279,7 +279,13 @@ async def send_assessment_invitation(
     # Assessment-specific: add magic link. The candidate take page lives at
     # /assessment/take/{id} and verifies by email; the id is the automation
     # (or template) id, NOT the application id.
-    assessment_link = f"{_settings.frontend_url}/assessment/take/{automation.id}"
+    # An EXTERNAL round hands the candidate the provider's own link; everything else about the
+    # invitation — template, criteria, timing, auto-move — is identical, so a third-party test
+    # travels through the same pipeline as a Croar one.
+    if (automation.provider or "CROAR").upper() == "EXTERNAL" and (automation.external_url or "").strip():
+        assessment_link = automation.external_url.strip()
+    else:
+        assessment_link = f"{_settings.frontend_url}/assessment/take/{automation.id}"
 
     variables: dict[str, object] = {
         **build_candidate_variables(candidate.full_name),

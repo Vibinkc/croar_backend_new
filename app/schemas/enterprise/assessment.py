@@ -23,6 +23,9 @@ class AssessmentAutomationBase(BaseModel):
     topic: str
     question_count: int = 10
     test_duration: int = 30
+    provider: str = "CROAR"
+    external_url: str | None = None
+    external_provider_name: str | None = None
     is_enabled: bool = True
     is_immediate: bool = True
     auto_move: bool = False
@@ -45,6 +48,9 @@ class AssessmentAutomationUpdate(BaseModel):
     question_count: int | None = None
     generated_questions: list[dict[str, Any]] | None = None
     test_duration: int | None = None
+    provider: str | None = None
+    external_url: str | None = None
+    external_provider_name: str | None = None
     is_enabled: bool | None = None
     is_immediate: bool | None = None
     auto_move: bool | None = None
