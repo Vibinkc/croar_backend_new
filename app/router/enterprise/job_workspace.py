@@ -360,3 +360,204 @@ async def add_candidate_to_job(
     await session.commit()
     await session.refresh(application)
     return AddCandidateToJobOut(application_id=application.id, candidate_id=candidate.id)
+
+
+# ── Creating a candidate from a CV ────────────────────────────────────────────────────────────
+
+RESUME_DIR = "uploads/resumes"
+MAX_RESUME_BYTES = 20 * 1024 * 1024
+ALLOWED_RESUME_EXTS = {".pdf", ".doc", ".docx", ".rtf", ".txt"}
+
+
+def _resume_text(content: bytes) -> str:
+    """Pull text out of an uploaded CV, falling back to a raw decode for non-PDFs."""
+    import contextlib
+
+    import pypdfium2 as pdfium
+
+    try:
+        pdf = pdfium.PdfDocument(content)
+        parts = []
+        for i in range(len(pdf)):
+            parts.append(pdf.get_page(i).get_textpage().get_text_range())
+        text = "\n".join(parts).strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    with contextlib.suppress(Exception):
+        return content.decode("utf-8", errors="ignore")
+    return ""
+
+
+@router.post("/{job_id}/candidates/upload", status_code=201)
+async def create_candidate_from_resume(
+    job_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+    file: UploadFile = File(...),
+) -> dict[str, Any]:
+    """Create a candidate by parsing an uploaded CV, then put them on this job.
+
+    Mirrors the public apply path: the same extraction, the same AI shape, the CV saved under
+    uploads/resumes so the profile can show it. The difference is only who triggered it — a
+    recruiter with a CV in hand, rather than the candidate applying.
+    """
+    import json
+    import os
+    import uuid as _uuid
+
+    from app.core.ai import analyze_text_with_llm
+
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    original = _safe_attachment_name(file.filename or "resume.pdf")
+    ext = os.path.splitext(original)[1].lower()
+    if ext and ext not in ALLOWED_RESUME_EXTS:
+        raise HTTPException(status_code=400, detail=f"{ext} is not a supported CV format")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="File is empty")
+    if len(data) > MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail="CV is larger than 20 MB")
+
+    text = _resume_text(data)
+    if not text.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="No text could be read from that CV. A scanned image needs OCR before upload.",
+        )
+
+    prompt = f"""
+    You are an expert recruiter and ATS system.
+
+    Extract the candidate's details from the RESUME TEXT and score them against the JOB.
+
+    JOB TITLE: {job.title}
+    JOB DESCRIPTION: {(job.description or "")[:4000]}
+    REQUIRED SKILLS: {", ".join(job.required_skills or [])}
+
+    RESUME TEXT:
+    {text[:12000]}
+
+    OUTPUT JSON FORMAT:
+    {{
+        "candidate_details": {{
+            "full_name": "...",
+            "email": "...",
+            "phone": "...",
+            "location": "...",
+            "total_experience": 0,
+            "skills": ["..."]
+        }},
+        "analysis": {{ "score": 85, "fit_reason": "...", "not_fit_reason": "...", "highlights": ["..."] }}
+    }}
+    """
+    try:
+        parsed = json.loads(await analyze_text_with_llm(prompt))
+    except Exception as e:
+        # The AI is the whole point here; a stub candidate called "Candidate" with no email is
+        # worse than telling the recruiter it failed.
+        raise HTTPException(status_code=502, detail=f"Could not read that CV with AI: {e!s}") from e
+
+    details = parsed.get("candidate_details") or {}
+    analysis = parsed.get("analysis") or {}
+    email = (details.get("email") or "").strip().lower()
+    full_name = (details.get("full_name") or "").strip() or "Candidate"
+
+    # Keep the CV so the profile can open it later. Best-effort: losing the file must not lose
+    # the candidate.
+    resume_path = None
+    try:
+        os.makedirs(RESUME_DIR, exist_ok=True)
+        stored = f"{_uuid.uuid4().hex[:8]}_{original}"
+        with open(os.path.join(RESUME_DIR, stored), "wb") as fh:
+            fh.write(data)
+        resume_path = f"{RESUME_DIR}/{stored}"
+    except OSError:
+        pass
+
+    # Re-use an existing person rather than creating a duplicate — matching on email within the
+    # company. This is the same "one person, one record" rule the search-first UI is built on.
+    candidate = None
+    if email:
+        candidate = (
+            await session.execute(
+                select(Candidate).where(
+                    Candidate.email == email,
+                    Candidate.company_id == job.company_id,
+                    Candidate.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+
+    created_candidate = False
+    if candidate:
+        # Fill gaps on the existing record; never overwrite what a human may have corrected.
+        if resume_path and not candidate.resume_file_path:
+            candidate.resume_file_path = resume_path
+        if not candidate.skills and details.get("skills"):
+            candidate.skills = [str(s) for s in details["skills"]][:40]
+    else:
+        candidate = Candidate(
+            full_name=full_name,
+            email=email or None,
+            phone=(details.get("phone") or None),
+            skills=[str(s) for s in (details.get("skills") or [])][:40],
+            resume_file_path=resume_path,
+            company_id=job.company_id,
+            source_platform="CV Upload",
+        )
+        session.add(candidate)
+        await session.flush()
+        created_candidate = True
+
+    existing = (
+        await session.execute(
+            select(CandidateApplication).where(
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.job_requirement_id == job.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+
+    if existing:
+        application_id = existing.id
+        already = True
+    else:
+        try:
+            score = float(analysis.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        application = CandidateApplication(
+            candidate_id=candidate.id,
+            job_requirement_id=job.id,
+            status_id=1,
+            current_stage=1,
+            source="CV Upload",
+            ai_match_score=score,
+            ai_feedback=analysis,
+            company_id=job.company_id,
+            applied_at=cast("Any", func.now()),
+        )
+        session.add(application)
+        await session.flush()
+        application_id = application.id
+        already = False
+
+    _log_job_activity(session, job, current_user, "candidate_added", {"candidate": full_name})
+    await session.commit()
+
+    return {
+        "application_id": str(application_id),
+        "candidate_id": str(candidate.id),
+        "full_name": full_name,
+        "email": email,
+        "match_score": analysis.get("score"),
+        "created_candidate": created_candidate,
+        "already_on_job": already,
+    }
