@@ -36,7 +36,9 @@ class IntegrationType(StrEnum):
 class DistributionStatus(StrEnum):
     PUBLISHED = "PUBLISHED"  # live push / indexing ping succeeded
     LISTED = "LISTED"  # structured-data / feed: discoverable, board crawls on its own
-    QUEUED = "QUEUED"  # connected via credentials; sync pending
+    # Connected, but Croar has no implemented push for this board. NOT a promise of a future
+    # sync: nothing consumes this status, so it must not be worded as though something will.
+    CONNECTED_NO_PUSH = "CONNECTED_NO_PUSH"
     PARTNER_REQUIRED = "PARTNER_REQUIRED"  # needs a partnership/console — cannot self-serve
     NOT_CONNECTED = "NOT_CONNECTED"  # portal needs a connection the company hasn't made
     ERROR = "ERROR"

@@ -24,7 +24,12 @@ from app.services.enterprise.job_distribution import build_indeed_feed_xml, buil
 router = APIRouter(prefix="/jobs", tags=["Public Job Feeds"])
 
 # JobPosting.status values that mean "actively distributed" (see job_distribution.DistributionStatus).
-_LIVE_STATUSES = ("PUBLISHED", "LISTED", "QUEUED")
+# A job is in Croar's own feed once any channel accepted it. CONNECTED_NO_PUSH counts: the
+# board itself was not pushed to, but the job is genuinely live on the career page the feed
+# points at.
+# "QUEUED" is the old name for CONNECTED_NO_PUSH and is kept so rows written before the rename
+# stay in the feed — dropping it would quietly remove already-published jobs from Indeed.
+_LIVE_STATUSES = ("PUBLISHED", "LISTED", "CONNECTED_NO_PUSH", "QUEUED")
 
 
 def _job_url(job_id: object) -> str:
