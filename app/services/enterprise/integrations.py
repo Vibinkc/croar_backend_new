@@ -46,8 +46,9 @@ class IntegrationMeta:
     summary: str
     fields: tuple[IntegrationField, ...] = ()
     docs_url: str | None = None
-    # The provider's own favicon. Public, cheap, and recognisable; the UI falls back to a
-    # branded monogram when it fails to load, so a blocked or moved icon never leaves a gap.
+    # The provider's real brand mark — an SVG where one is published, otherwise the best icon
+    # the site actually serves. Every URL here was checked rather than assumed. The UI falls
+    # back to a branded monogram when a mark fails to load, so nothing is ever left blank.
     icon_url: str | None = None
     # Brand colour for that fallback monogram.
     brand_color: str = "#5B53E0"
@@ -102,7 +103,7 @@ _ASSESSMENT_CAPS = (
 INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     IntegrationMeta(
         key="codility",
-        icon_url="https://codility.com/favicon.ico",
+        icon_url="https://www.codility.com/wp-content/uploads/2026/05/favicon.svg",
         brand_color="#00B2A9",
         name="Codility",
         category=IntegrationCategory.ASSESSMENT,
@@ -117,7 +118,7 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="hackerrank",
-        icon_url="https://www.hackerrank.com/favicon.ico",
+        icon_url="https://cdn.jsdelivr.net/npm/simple-icons@13/icons/hackerrank.svg",
         brand_color="#00EA64",
         name="HackerRank",
         category=IntegrationCategory.ASSESSMENT,
