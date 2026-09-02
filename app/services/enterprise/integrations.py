@@ -46,6 +46,11 @@ class IntegrationMeta:
     summary: str
     fields: tuple[IntegrationField, ...] = ()
     docs_url: str | None = None
+    # The provider's own favicon. Public, cheap, and recognisable; the UI falls back to a
+    # branded monogram when it fails to load, so a blocked or moved icon never leaves a gap.
+    icon_url: str | None = None
+    # Brand colour for that fallback monogram.
+    brand_color: str = "#5B53E0"
     # What connecting this actually does today. Plain sentences, shown verbatim in the UI.
     capabilities: tuple[str, ...] = ()
     # What it does NOT do yet — stated so nobody assumes a two-way sync that is not there.
@@ -58,6 +63,8 @@ class IntegrationMeta:
             "category": self.category.value,
             "summary": self.summary,
             "docs_url": self.docs_url,
+            "icon_url": self.icon_url,
+            "brand_color": self.brand_color,
             "capabilities": list(self.capabilities),
             "limitations": list(self.limitations),
             "fields": [
@@ -95,6 +102,8 @@ _ASSESSMENT_CAPS = (
 INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     IntegrationMeta(
         key="codility",
+        icon_url="https://codility.com/favicon.ico",
+        brand_color="#00B2A9",
         name="Codility",
         category=IntegrationCategory.ASSESSMENT,
         summary="Coding assessments and technical screening.",
@@ -108,6 +117,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="hackerrank",
+        icon_url="https://www.hackerrank.com/favicon.ico",
+        brand_color="#00EA64",
         name="HackerRank",
         category=IntegrationCategory.ASSESSMENT,
         summary="Coding tests and technical interviews.",
@@ -121,6 +132,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testgorilla",
+        icon_url="https://www.testgorilla.com/favicon.png",
+        brand_color="#12B981",
         name="TestGorilla",
         category=IntegrationCategory.ASSESSMENT,
         summary="Skills and personality tests across roles.",
@@ -134,6 +147,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testlify",
+        icon_url="https://testlify.com/favicon.ico",
+        brand_color="#6D28D9",
         name="Testlify",
         category=IntegrationCategory.ASSESSMENT,
         summary="Skills assessments with a large test library.",
