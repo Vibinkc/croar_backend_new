@@ -18,14 +18,21 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.dependencies import PermissionChecker
+from app.core.settings import settings
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.router.enterprise.sourcing_chat import _db
 from app.services.enterprise.job_distribution import job_distribution_service
+
+# Hosts a job board's crawler can never resolve. These are compared against a CONFIGURED public
+# URL — nothing here binds a socket.
+UNREACHABLE_HOSTS = ("localhost", "127.", "0.0.0.0", "::1")  # nosec B104
+
 
 router = APIRouter(prefix="/job-portals", tags=["Job Portals"])
 
@@ -68,7 +75,20 @@ async def portal_catalog(
         d["connected"] = bool(conn)
         d["connection"] = _conn_public(conn) if conn else None
         out.append(d)
-    return {"portals": out}
+
+    # Every board reaches a job through this base URL — it is what the JSON-LD `url` and every
+    # apply link in the Indeed feed are built from. If it is localhost or plain http, nothing
+    # can crawl the job however successfully it "published", so the UI needs to be able to say
+    # so rather than reporting LISTED into the void.
+    base = (settings.frontend_url or "").rstrip("/")
+    host = urlparse(base).hostname or ""
+    reachable = bool(base) and not host.startswith(UNREACHABLE_HOSTS)
+    return {
+        "portals": out,
+        "public_base_url": base,
+        "public_url_reachable": reachable,
+        "public_url_secure": base.startswith("https://"),
+    }
 
 
 @router.get("/connections")
