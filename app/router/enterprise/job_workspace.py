@@ -12,17 +12,25 @@ pinned and deleted.
 import os
 import re
 import uuid as uuid_lib
-from typing import Annotated
+from typing import Annotated, Any, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
+from app.models.enterprise.candidate import Candidate, CandidateApplication
 from app.models.enterprise.job import JobAttachment, JobNote
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.router.enterprise.jobs import _actor_name, _get_scoped_job, _log_job_activity
-from app.schemas.enterprise.jobs import JobAttachmentOut, JobNoteIn, JobNoteOut, JobNotePatch
+from app.schemas.enterprise.jobs import (
+    AddCandidateToJobIn,
+    AddCandidateToJobOut,
+    JobAttachmentOut,
+    JobNoteIn,
+    JobNoteOut,
+    JobNotePatch,
+)
 
 router = APIRouter(prefix="/jobs", tags=["Enterprise Jobs"])
 
@@ -286,3 +294,69 @@ async def delete_job_attachment(
     except OSError:
         pass
     return {"status": "deleted"}
+
+
+# ── Putting a candidate on a job ──────────────────────────────────────────────────────────────
+# Until now the ONLY way an application came into being was someone applying through the public
+# form. A recruiter who already had the person in the pool had no way to put them on a job.
+
+
+@router.post("/{job_id}/candidates", response_model=AddCandidateToJobOut, status_code=201)
+async def add_candidate_to_job(
+    job_id: UUID,
+    payload: AddCandidateToJobIn,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+) -> AddCandidateToJobOut:
+    """Add an existing candidate to this job's pipeline, at the first stage."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # The candidate must belong to the same company as the job. Without this check any candidate
+    # id would attach across tenants.
+    candidate = (
+        await session.execute(
+            select(Candidate).where(
+                Candidate.id == payload.candidate_id,
+                Candidate.company_id == job.company_id,
+                Candidate.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    # Adding the same person twice is a no-op, not an error — the recruiter's intent ("this
+    # person should be on this job") is already satisfied, and a 409 here just makes the UI
+    # explain a failure that isn't one.
+    existing = (
+        await session.execute(
+            select(CandidateApplication).where(
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.job_requirement_id == job.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return AddCandidateToJobOut(
+            application_id=existing.id, candidate_id=candidate.id, already_on_job=True
+        )
+
+    application = CandidateApplication(
+        candidate_id=candidate.id,
+        job_requirement_id=job.id,
+        status_id=1,  # "Applied" — the seeded first status, same as the public apply path
+        current_stage=1,
+        source=(payload.source or "Added manually")[:50],
+        company_id=job.company_id,
+        applied_at=cast("Any", func.now()),
+    )
+    session.add(application)
+    _log_job_activity(
+        session, job, current_user, "candidate_added", {"candidate": candidate.full_name or str(candidate.id)}
+    )
+    await session.commit()
+    await session.refresh(application)
+    return AddCandidateToJobOut(application_id=application.id, candidate_id=candidate.id)

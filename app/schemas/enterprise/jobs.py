@@ -56,6 +56,20 @@ class JobNotePatch(BaseModel):
     is_pinned: bool | None = None
 
 
+class AddCandidateToJobIn(BaseModel):
+    """Put an existing candidate from the pool onto this job."""
+
+    candidate_id: UUID
+    # Where the addition came from, for the pipeline's own reporting. Defaults to a manual add.
+    source: str | None = Field(default="Added manually", max_length=50)
+
+
+class AddCandidateToJobOut(BaseModel):
+    application_id: UUID
+    candidate_id: UUID
+    already_on_job: bool = False
+
+
 class JobAttachmentOut(BaseModel):
     id: UUID
     filename: str
