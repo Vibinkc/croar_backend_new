@@ -201,3 +201,20 @@ alembic/versions/*
 # ----- Custom Ignores:END -----
 # generated test reports
 tests/*report*.html
+
+# Secrets — never commit. The bare ".env" rule above did NOT match these, which is
+# how -vibin.env, .env.production and google_credentials.json ended up in history.
+.env.*
+!.env.sample
+!.env.example
+*.env
+google_credentials.json
+*credentials*.json
+*service-account*.json
+*.pem
+*.key
+
+# Runtime uploads — candidate CVs, onboarding identity documents, branding assets.
+# These were tracked, which put real Aadhaar/PAN/bank documents AND a Google
+# service-account key (uploaded through the onboarding form) into git history.
+uploads/
