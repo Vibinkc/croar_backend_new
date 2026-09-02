@@ -52,6 +52,10 @@ class IntegrationMeta:
     icon_url: str | None = None
     # Brand colour for that fallback monogram.
     brand_color: str = "#5B53E0"
+    # "free"   — the provider's API is usable at no cost, and Croar verifies the key on connect.
+    # "paid"   — an API exists but is gated behind a paid/enterprise plan.
+    # "link"   — no usable API for us; the integration is the invite link only.
+    api_tier: str = "link"
     # What connecting this actually does today. Plain sentences, shown verbatim in the UI.
     capabilities: tuple[str, ...] = ()
     # What it does NOT do yet — stated so nobody assumes a two-way sync that is not there.
@@ -66,6 +70,7 @@ class IntegrationMeta:
             "docs_url": self.docs_url,
             "icon_url": self.icon_url,
             "brand_color": self.brand_color,
+            "api_tier": self.api_tier,
             "capabilities": list(self.capabilities),
             "limitations": list(self.limitations),
             "fields": [
@@ -100,9 +105,68 @@ _ASSESSMENT_CAPS = (
     "The round still respects its trigger criteria, schedule and auto-move.",
 )
 
+FREE_CAPS = (
+    "Croar checks the key with the provider when you connect, so a wrong key is caught here.",
+    "Candidates reaching a round that uses this tool are emailed its link.",
+    "The round still respects its trigger criteria, schedule and auto-move.",
+)
+
+FREE_LIMITS = ("Croar does not pull scores back automatically yet — results stay in the tool.",)
+
 INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     IntegrationMeta(
+        key="jotform",
+        name="Jotform",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Build a quiz or screening form. Free plan includes API access.",
+        docs_url="https://api.jotform.com/docs/",
+        icon_url="https://cdn.jotfor.ms/assets/img/favicons/apple-touch-icon-180x180.png",
+        brand_color="#FF6100",
+        api_tier="free",
+        fields=(
+            IntegrationField(
+                name="api_key",
+                label="API key",
+                help="Jotform → Settings → API → Create New Key. Works on the free Starter plan.",
+            ),
+            IntegrationField(
+                name="invite_url",
+                label="Form link",
+                type="url",
+                required=False,
+                help="The form candidates should fill in. Leave blank to add it per round.",
+            ),
+        ),
+        capabilities=FREE_CAPS,
+        limitations=FREE_LIMITS,
+    ),
+    IntegrationMeta(
+        key="google_forms",
+        name="Google Forms",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Use a Google Forms quiz as the test. The API is free to use.",
+        docs_url="https://developers.google.com/workspace/forms/api/limits",
+        icon_url="https://cdn.jsdelivr.net/npm/simple-icons@13/icons/googleforms.svg",
+        brand_color="#7248B9",
+        api_tier="free",
+        fields=(
+            IntegrationField(
+                name="invite_url",
+                label="Form link",
+                type="url",
+                help="The published form URL. Its quiz scoring stays in Google Forms.",
+            ),
+        ),
+        capabilities=(
+            "Candidates reaching a round that uses this tool are emailed the form link.",
+            "The round still respects its trigger criteria, schedule and auto-move.",
+            "Google Forms' own quiz scoring is free and unlimited.",
+        ),
+        limitations=("Reading responses back needs Google credentials on the server; not wired up yet.",),
+    ),
+    IntegrationMeta(
         key="codility",
+        api_tier="paid",
         icon_url="https://www.codility.com/wp-content/uploads/2026/05/favicon.svg",
         brand_color="#00B2A9",
         name="Codility",
@@ -118,6 +182,7 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="hackerrank",
+        api_tier="paid",
         icon_url="https://cdn.jsdelivr.net/npm/simple-icons@13/icons/hackerrank.svg",
         brand_color="#00EA64",
         name="HackerRank",
@@ -133,6 +198,7 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testgorilla",
+        api_tier="paid",
         icon_url="https://www.testgorilla.com/favicon.png",
         brand_color="#12B981",
         name="TestGorilla",
@@ -148,6 +214,7 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testlify",
+        api_tier="paid",
         icon_url="https://testlify.com/favicon.ico",
         brand_color="#6D28D9",
         name="Testlify",
