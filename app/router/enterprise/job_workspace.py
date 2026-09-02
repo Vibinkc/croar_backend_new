@@ -653,3 +653,90 @@ async def send_application_form(
         "test_mode": PILOT_TEST_MODE,
         "test_email": PILOT_TEST_EMAIL if PILOT_TEST_MODE else None,
     }
+
+
+# ── Taking a candidate out of a job ───────────────────────────────────────────────────────────
+# Two different things, and conflating them loses information:
+#
+#   Drop   — they are out of the running, but the fact they were considered (and how far they
+#            got) is part of the job's history. Sets the seeded "Rejected" status.
+#   Remove — they should not be on this job at all: added by mistake, wrong role. Soft-deletes
+#            the application so the pipeline forgets it, while the person stays in the pool.
+#
+# Neither touches the Candidate record itself.
+
+STATUS_APPLIED = 1
+STATUS_REJECTED = 6
+
+
+async def _scoped_application(session: Any, job: Any, application_id: UUID) -> CandidateApplication:
+    row = (
+        await session.execute(
+            select(CandidateApplication).where(
+                CandidateApplication.id == application_id,
+                CandidateApplication.job_requirement_id == job.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Candidate is not on this job")
+    return row
+
+
+@router.post("/{job_id}/applications/{application_id}/drop")
+async def drop_candidate(
+    job_id: UUID,
+    application_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+) -> dict[str, Any]:
+    """Mark a candidate as out of the running for this job, keeping them on the board."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    application = await _scoped_application(session, job, application_id)
+    application.status_id = STATUS_REJECTED
+    _log_job_activity(session, job, current_user, "candidate_dropped", {"application": str(application_id)})
+    await session.commit()
+    return {"status": "dropped", "application_id": str(application_id), "status_id": STATUS_REJECTED}
+
+
+@router.post("/{job_id}/applications/{application_id}/restore")
+async def restore_candidate(
+    job_id: UUID,
+    application_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+) -> dict[str, Any]:
+    """Undo a drop. Their stage is untouched, so they return where they left off."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    application = await _scoped_application(session, job, application_id)
+    application.status_id = STATUS_APPLIED
+    _log_job_activity(session, job, current_user, "candidate_restored", {"application": str(application_id)})
+    await session.commit()
+    return {"status": "restored", "application_id": str(application_id), "status_id": STATUS_APPLIED}
+
+
+@router.delete("/{job_id}/applications/{application_id}")
+async def remove_candidate_from_job(
+    job_id: UUID,
+    application_id: UUID,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.update))],
+) -> dict[str, Any]:
+    """Take a candidate off this job entirely. The person stays in the talent pool."""
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    application = await _scoped_application(session, job, application_id)
+
+    # Soft delete, matching how bulk application deletion already works: a hard DELETE would hit
+    # FK violations from assessment attempts, interviews and onboarding rows that reference this
+    # application. Every pipeline query already filters deleted_at IS NULL.
+    application.deleted_at = cast("Any", func.now())
+    _log_job_activity(session, job, current_user, "candidate_removed", {"application": str(application_id)})
+    await session.commit()
+    return {"status": "removed", "application_id": str(application_id)}
