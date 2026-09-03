@@ -59,6 +59,12 @@ class IntegrationMeta:
     # Whether the connect form requires agreeing to the provider's terms. True for anything
     # where credentials or candidate data reach a third party.
     requires_consent: bool = True
+    # Whether the provider can post results back to Croar. Where it can, the connect page shows
+    # this company's webhook URL, because the credential is not the thing that makes it work.
+    supports_webhook: bool = False
+    # Numbered steps for connecting, in the provider's own vocabulary. Generic advice sends
+    # people hunting through a settings tree they have never seen.
+    setup_steps: tuple[str, ...] = ()
     # "free"   — the provider's API is usable at no cost, and Croar verifies the key on connect.
     # "paid"   — an API exists but is gated behind a paid/enterprise plan.
     # "link"   — no usable API for us; the integration is the invite link only.
@@ -79,6 +85,8 @@ class IntegrationMeta:
             "brand_color": self.brand_color,
             "what_it_does": self.what_it_does,
             "requires_consent": self.requires_consent,
+            "supports_webhook": self.supports_webhook,
+            "setup_steps": list(self.setup_steps),
             "api_tier": self.api_tier,
             "capabilities": list(self.capabilities),
             "limitations": list(self.limitations),
@@ -243,17 +251,61 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         brand_color="#6D28D9",
         name="Testlify",
         category=IntegrationCategory.ASSESSMENT,
-        summary="Skills assessments with a large test library.",
+        summary="Skills assessments with a large test library. Sends results back to Croar.",
         docs_url="https://testlify.com/",
+        supports_webhook=True,
+        setup_steps=(
+            "In Testlify open your assessment and go to Invite -> Manage Public Link -> Settings "
+            "-> Access -> Public Links -> Add. Paste the link it generates below. A public link, "
+            "not an email invitation: everyone reaching this round is sent the same URL and "
+            "identifies themselves when they open it.",
+            "Copy the webhook URL shown below into Testlify at Settings -> Developers -> "
+            "Webhooks. This is what returns the score. Without it a candidate can sit the test "
+            "and nothing reaches Croar.",
+            "Set the round's pass mark in its trigger criteria, written with a number, such as "
+            "'60% to pass'. Criteria with no number in it falls back to 60.",
+        ),
         what_it_does=(
-            "Testlify is an AI-assisted assessment platform with a large test library. Connected here it becomes a choice on any assessment round."
+            "Testlify runs skills assessments from a large library. Connected here it becomes a "
+            "choice on any assessment round: candidates reaching that round are emailed its "
+            "public link, and when they finish, Testlify posts the score back. The score lands "
+            "on the application and the candidate moves on if it clears the round's pass mark. "
+            "The full report stays in Testlify and Croar links to it."
         ),
         fields=(
-            _INVITE_FIELD,
-            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+            IntegrationField(
+                name="invite_url",
+                label="Public link",
+                type="url",
+                required=True,
+                help=(
+                    "From Invite -> Manage Public Link -> Settings -> Access -> Add. Everyone "
+                    "reaching this round is sent the same URL; Testlify collects each "
+                    "candidate's own name and email when they open it."
+                ),
+            ),
+            IntegrationField(
+                name="api_key",
+                label="Access token",
+                required=False,
+                help=(
+                    "Optional. Settings -> Developers -> Access token. Results come back by "
+                    "webhook, so this is not needed for the round to work — it is stored for "
+                    "features that call Testlify's API directly."
+                ),
+            ),
         ),
-        capabilities=_ASSESSMENT_CAPS,
-        limitations=_ASSESSMENT_LIMITS,
+        capabilities=(
+            "Candidates reaching a round that uses Testlify are emailed its public link.",
+            "The score comes back on its own when they finish, and lands on the application.",
+            "A candidate clearing the round's pass mark moves to the next round unattended.",
+            "Croar links to Testlify's full report rather than keeping a stale copy of it.",
+        ),
+        limitations=(
+            "The webhook must be set up in Testlify, and Croar's backend needs a public URL for it to reach.",
+            "The candidate's email in Testlify has to match theirs in Croar — that is what ties "
+            "a result to a person.",
+        ),
     ),
     # ── Assessment & testing ─────────────────────────────────────────────────────────────────
     IntegrationMeta(

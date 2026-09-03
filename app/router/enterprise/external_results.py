@@ -27,6 +27,56 @@ from app.services.enterprise import external_results as svc
 router = APIRouter(tags=["Assessment results"])
 
 
+def _dig(payload: dict[str, Any], *path: str) -> Any:
+    """Follow a dotted path through nested dicts, returning None rather than raising."""
+    node: Any = payload
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _first(payload: dict[str, Any], paths: list[tuple[str, ...]]) -> Any:
+    """The first path that yields something. Order is preference, most specific first."""
+    for path in paths:
+        value = _dig(payload, *path)
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+# Where each provider puts the things this endpoint needs. Testlify nests under an event
+# envelope; a simpler tool posts flat. Both are read by the same code.
+EMAIL_PATHS = [("data", "candidate", "email"), ("candidate", "email"), ("candidate_email",), ("email",)]
+
+# Percentage first. Testlify's totalScore is the paper's maximum, not what the candidate got —
+# reading it as the score would pass everyone who sat a long test.
+SCORE_PATHS = [
+    ("data", "scores", "avgScorePercentage"),
+    ("scores", "avgScorePercentage"),
+    ("percentage",),
+    ("score",),
+    ("total_score",),
+]
+
+STATUS_PATHS = [("data", "status", "candidateStatus"), ("status", "candidateStatus"), ("status",)]
+
+# The provider's own report. Croar stores a score; the detail — per-question answers, timings,
+# anti-cheating signals — lives with the provider, and a link is more honest than a copy.
+REPORT_PATHS = [
+    ("data", "links", "resultLink"),
+    ("data", "links", "candidateDetailLink"),
+    ("links", "resultLink"),
+    ("report_url",),
+]
+
+PROVIDER_PATHS = [("provider",), ("data", "assessment", "workspaceUrl"), ("source",)]
+
+# The assessment's own name, so the pipeline can say which test was taken.
+TEST_NAME_PATHS = [("data", "assessment", "name"), ("assessment", "name"), ("test_name",)]
+
+
 class WebhookResult(BaseModel):
     """What a provider posts when a candidate finishes.
 
@@ -71,22 +121,35 @@ async def receive_result(
     if not company:
         raise HTTPException(status_code=404, detail="Unknown webhook token.")
 
-    email = body.resolved_email()
+    raw = await request.json()
+    if not isinstance(raw, dict):
+        return {"status": "ignored", "reason": "Body was not a JSON object."}
+
+    email = str(_first(raw, EMAIL_PATHS) or "").strip().lower()
     if not email:
-        return {"status": "ignored", "reason": "No candidate email in the payload."}
+        return {"status": "ignored", "reason": "No candidate email anywhere in the payload."}
+
+    score = _first(raw, SCORE_PATHS)
+    status = str(_first(raw, STATUS_PATHS) or "COMPLETED")
+
+    # Providers fire on several events. Only a finished test is a result — a score_updated for
+    # an invitation that has not been sat would overwrite a real mark with a zero.
+    if score is None and "COMPLET" not in status.upper():
+        return {"status": "ignored", "reason": f"No score, and status is {status!r}."}
 
     application = await svc.find_application(session, company.id, email, body.job_id)
     if not application:
         return {"status": "ignored", "reason": f"No candidate on this account with the email {email}."}
 
-    raw = await request.json()
     result = await svc.record_result(
         session,
         application,
-        body.resolved_score(),
-        provider=str(raw.get("provider") or "External"),
-        status=body.status or "COMPLETED",
-        raw=raw if isinstance(raw, dict) else {},
+        score,
+        provider=str(_first(raw, PROVIDER_PATHS) or "External"),
+        status="COMPLETED" if "COMPLET" in status.upper() else status,
+        raw=raw,
+        report_url=str(_first(raw, REPORT_PATHS) or "") or None,
+        test_name=str(_first(raw, TEST_NAME_PATHS) or "") or None,
         background_tasks=background_tasks,
     )
     return {"status": "recorded", **result}

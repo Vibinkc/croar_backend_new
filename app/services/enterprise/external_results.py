@@ -134,6 +134,8 @@ async def record_result(
     provider: str = "External",
     status: str = "COMPLETED",
     raw: dict[str, Any] | None = None,
+    report_url: str | None = None,
+    test_name: str | None = None,
     background_tasks: BackgroundTasks | None = None,
 ) -> dict[str, Any]:
     """Store an external result and act on it: score the application, move if it passed."""
@@ -190,7 +192,14 @@ async def record_result(
     attempt.completed_at = cast("Any", datetime.utcnow())
     # The provider's payload verbatim. When a score looks wrong, the only way to tell a bad
     # mapping from a bad test is to have kept what they actually sent.
-    attempt.answers = {"provider": provider, "raw": raw or {}}
+    attempt.answers = {
+        "provider": provider,
+        # A link to the provider's own report rather than a copy of it. The per-question
+        # detail, timings and anti-cheating signals live there and change there.
+        "report_url": report_url,
+        "test_name": test_name,
+        "raw": raw or {},
+    }
     await session.flush()
 
     moved = False
@@ -230,4 +239,6 @@ async def record_result(
         "passed": passed,
         "moved_to_stage": application.current_stage if moved else None,
         "provider": provider,
+        "report_url": report_url,
+        "test_name": test_name,
     }
