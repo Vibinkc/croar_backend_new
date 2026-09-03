@@ -166,6 +166,12 @@ async def initiate_onboarding(
     if not onboarding:
         raise HTTPException(status_code=400, detail="Onboarding already initiated for this candidate")
 
+    # The service flushes but never commits, and the session dependency only commits on the
+    # caller's behalf when a route asks it to — so without this the row lived just long enough
+    # for the reload below to find it, and was discarded when the session closed. Every other
+    # route in this file commits; this was the one that creates the record.
+    await session.commit()
+
     stmt_onb = (
         select(Onboarding)
         .options(

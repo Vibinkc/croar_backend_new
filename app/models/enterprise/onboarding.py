@@ -171,6 +171,10 @@ class OnboardingTask(EnterpriseBase):
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The column has always existed in the table and in OnboardingTaskCreate; only the model
+    # was missing it, so the route's **request.model_dump() raised TypeError and every attempt
+    # to add a task returned 500 — the schema default of "Medium" meant no input could avoid it.
+    priority: Mapped[str] = mapped_column(String(50), default="Medium")
     status: Mapped[str] = mapped_column(String(50), default="Pending")
     due_date: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
