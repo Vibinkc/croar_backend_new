@@ -22,6 +22,7 @@ from enum import StrEnum
 
 class IntegrationCategory(StrEnum):
     ASSESSMENT = "assessment"
+    INTERVIEW = "interview"
     JOB_BOARD = "job_board"
     MEETING = "meeting"
     EMAIL = "email"
@@ -52,6 +53,12 @@ class IntegrationMeta:
     icon_url: str | None = None
     # Brand colour for that fallback monogram.
     brand_color: str = "#5B53E0"
+    # A paragraph on what connecting actually does, shown on the integration's own page. Longer
+    # and more specific than `summary`, which is the one-liner on the card.
+    what_it_does: str = ""
+    # Whether the connect form requires agreeing to the provider's terms. True for anything
+    # where credentials or candidate data reach a third party.
+    requires_consent: bool = True
     # "free"   — the provider's API is usable at no cost, and Croar verifies the key on connect.
     # "paid"   — an API exists but is gated behind a paid/enterprise plan.
     # "link"   — no usable API for us; the integration is the invite link only.
@@ -70,6 +77,8 @@ class IntegrationMeta:
             "docs_url": self.docs_url,
             "icon_url": self.icon_url,
             "brand_color": self.brand_color,
+            "what_it_does": self.what_it_does,
+            "requires_consent": self.requires_consent,
             "api_tier": self.api_tier,
             "capabilities": list(self.capabilities),
             "limitations": list(self.limitations),
@@ -123,6 +132,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         icon_url="https://cdn.jotfor.ms/assets/img/favicons/apple-touch-icon-180x180.png",
         brand_color="#FF6100",
         api_tier="free",
+        what_it_does=(
+            "Jotform builds quizzes and screening forms with no coding. Croar verifies your API key with Jotform when you connect, so a wrong key is caught here rather than when a candidate never receives their test. Candidates reaching a round set to use Jotform are emailed the form link."
+        ),
         fields=(
             IntegrationField(
                 name="api_key",
@@ -149,6 +161,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         icon_url="https://cdn.jsdelivr.net/npm/simple-icons@13/icons/googleforms.svg",
         brand_color="#7248B9",
         api_tier="free",
+        what_it_does=(
+            "A Google Forms quiz can serve as the test. Its own scoring is free and unlimited, and candidates reaching a round set to use it are emailed the form link. Reading responses back into Croar needs Google credentials on the server and is not wired up yet."
+        ),
         fields=(
             IntegrationField(
                 name="invite_url",
@@ -173,6 +188,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         category=IntegrationCategory.ASSESSMENT,
         summary="Coding assessments and technical screening.",
         docs_url="https://codility.com/",
+        what_it_does=(
+            "Codility tests coding skill with real programming tasks. Connect it once and any round set to use Codility emails the candidate its invite link, instead of pasting a URL on every round. Requires an active Codility subscription."
+        ),
         fields=(
             _INVITE_FIELD,
             IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
@@ -189,6 +207,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         category=IntegrationCategory.ASSESSMENT,
         summary="Coding tests and technical interviews.",
         docs_url="https://www.hackerrank.com/work/",
+        what_it_does=(
+            "HackerRank runs coding tests and technical interviews. Connected here it becomes selectable on an assessment round, and candidates reaching that round are emailed the test link."
+        ),
         fields=(
             _INVITE_FIELD,
             IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
@@ -205,6 +226,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         category=IntegrationCategory.ASSESSMENT,
         summary="Skills and personality tests across roles.",
         docs_url="https://www.testgorilla.com/",
+        what_it_does=(
+            "TestGorilla covers skills, cognitive ability and personality across roles. Connect it to offer it as the tool behind an assessment round."
+        ),
         fields=(
             _INVITE_FIELD,
             IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
@@ -221,6 +245,174 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         category=IntegrationCategory.ASSESSMENT,
         summary="Skills assessments with a large test library.",
         docs_url="https://testlify.com/",
+        what_it_does=(
+            "Testlify is an AI-assisted assessment platform with a large test library. Connected here it becomes a choice on any assessment round."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    # ── Assessment & testing ─────────────────────────────────────────────────────────────────
+    IntegrationMeta(
+        key="shl",
+        name="SHL TalentCentral",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Enterprise assessment platform for cognitive and behavioural testing.",
+        docs_url="https://www.shl.com/",
+        icon_url="https://www.shl.com/favicon.ico",
+        brand_color="#00A0DF",
+        api_tier="paid",
+        what_it_does=(
+            "SHL TalentCentral administers cognitive, personality and skills assessments. Connect "
+            "it once and any hiring round set to use SHL emails the candidate its invite link "
+            "instead of asking you to paste a URL per round. Requires an SHL subscription."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="xobin",
+        name="Xobin",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Skills-based, role-specific assessments with a validated question bank.",
+        docs_url="https://xobin.com/",
+        icon_url="https://xobin.com/favicon.ico",
+        brand_color="#1A73E8",
+        api_tier="paid",
+        what_it_does=(
+            "Xobin runs validated, role-based skill tests with proctoring. Connecting it makes "
+            "Xobin selectable on a hiring round, and candidates reaching that round are emailed "
+            "the test link."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="testtrick",
+        name="TestTrick",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Pre-employment testing across technical and non-technical roles.",
+        docs_url="https://testtrick.com/",
+        icon_url="https://testtrick.com/favicon.ico",
+        brand_color="#6D28D9",
+        api_tier="paid",
+        what_it_does=(
+            "TestTrick evaluates candidates before an interview with role-specific tests. "
+            "Connected here, it becomes a choice on any assessment round."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="invirtus",
+        name="Invirtus",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="AI deep-vetting for technical and communication skills.",
+        docs_url="https://invirtus.ai/",
+        icon_url="https://invirtus.ai/favicon.ico",
+        brand_color="#0F766E",
+        api_tier="paid",
+        what_it_does=(
+            "Invirtus vets candidates on both technical depth and communication. Connect it to "
+            "offer it as the tool behind an assessment round."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    # ── Video & live interviewing ────────────────────────────────────────────────────────────
+    IntegrationMeta(
+        key="hireflix",
+        name="Hireflix",
+        category=IntegrationCategory.INTERVIEW,
+        summary="One-way video interviews candidates record in their own time.",
+        docs_url="https://hireflix.com/",
+        icon_url="https://hireflix.com/favicon.ico",
+        brand_color="#4F46E5",
+        api_tier="paid",
+        what_it_does=(
+            "Hireflix collects recorded video answers so a first screen does not need a call. "
+            "Connected here it becomes the tool behind an interview round, and candidates "
+            "reaching that round are emailed the recording link."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="jobma",
+        name="Jobma",
+        category=IntegrationCategory.INTERVIEW,
+        summary="Video interviewing with scheduling and scoring.",
+        docs_url="https://www.jobma.com/",
+        icon_url="https://www.jobma.com/favicon.ico",
+        brand_color="#F97316",
+        api_tier="paid",
+        what_it_does=(
+            "Jobma runs one-way and live video interviews. Connect it to use Jobma for an "
+            "interview round instead of Croar's own interview flow."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="hirevire",
+        name="Hirevire",
+        category=IntegrationCategory.INTERVIEW,
+        summary="Collects video, audio and file answers for screening.",
+        docs_url="https://hirevire.com/",
+        icon_url="https://hirevire.com/favicon.ico",
+        brand_color="#E11D48",
+        api_tier="paid",
+        what_it_does=(
+            "Hirevire asks candidates for short video, audio or file responses. Connected here "
+            "it can stand in for a screening round."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="screenify",
+        name="Screenify",
+        category=IntegrationCategory.INTERVIEW,
+        summary="Automated AI interviews that screen applicants at volume.",
+        docs_url="https://screenify.ai/",
+        icon_url="https://screenify.ai/favicon.ico",
+        brand_color="#7C3AED",
+        api_tier="paid",
+        what_it_does=(
+            "Screenify runs AI-led interviews so a large applicant pool can be screened without "
+            "a recruiter on each call. Connect it to use it for an interview round."
+        ),
         fields=(
             _INVITE_FIELD,
             IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
@@ -233,6 +425,9 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         name="Other assessment tool",
         category=IntegrationCategory.ASSESSMENT,
         summary="Any provider that gives you a candidate invite link.",
+        what_it_does=(
+            "Any provider that gives you a candidate invite link. Give it a name and paste the link, and it behaves like the built-in tools on a round."
+        ),
         fields=(
             IntegrationField(
                 name="display_name", label="Tool name", type="text", help="Shown on rounds using it."

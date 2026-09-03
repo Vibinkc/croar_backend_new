@@ -68,6 +68,9 @@ def _public(doc: dict[str, Any]) -> dict[str, Any]:
         "has_credentials": bool(creds),
         # True only when the provider itself confirmed the key.
         "verified": bool(doc.get("verified")),
+        # Who accepted the provider's terms, and when.
+        "agreed_at": doc.get("agreed_at"),
+        "agreed_by": doc.get("agreed_by"),
     }
 
 
@@ -75,6 +78,10 @@ class ConnectBody(BaseModel):
     integration: str
     credentials: dict[str, str] = {}
     display_name: str | None = None
+    # Agreement to the provider's own terms and privacy policy. Credentials and candidate data
+    # leave Croar for a third party, so the answer is stored with a timestamp rather than only
+    # gating a button — a consent you cannot produce later is not a consent.
+    agreed_to_terms: bool = False
 
 
 @router.get("/catalog")
@@ -132,6 +139,11 @@ async def connect_integration(
     if missing:
         raise HTTPException(status_code=422, detail=f"Missing required field(s): {', '.join(missing)}")
 
+    if meta.requires_consent and not body.agreed_to_terms:
+        raise HTTPException(
+            status_code=422, detail=f"You must agree to {meta.name}'s terms and privacy policy to connect it."
+        )
+
     verified = False
     if meta.api_tier == "free":
         ok, why = await _verify_credentials(meta.key, body.credentials)
@@ -147,6 +159,9 @@ async def connect_integration(
         "credentials": {k: v for k, v in body.credentials.items() if v},
         "status": "connected",
         "created_at": datetime.now(UTC),
+        "agreed_to_terms": bool(body.agreed_to_terms),
+        "agreed_at": datetime.now(UTC) if body.agreed_to_terms else None,
+        "agreed_by": str(getattr(current_user, "email", "") or getattr(current_user, "id", "")),
     }
     _connections().update_one({"company_id": company_id, "integration": meta.key}, {"$set": doc}, upsert=True)
     return {"status": "connected", "connection": _public(doc)}
