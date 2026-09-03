@@ -35,6 +35,49 @@ def is_accepting_applications(job: JobRequirement) -> bool:
 _is_accepting_applications = is_accepting_applications
 
 
+@router.get("/career-page")
+async def public_career_page(session: DBSessionDep, company_slug: str) -> dict[str, Any]:
+    """Branding for a company's public jobs page.
+
+    Named fields rather than the whole config blob: this is served to anonymous visitors, and
+    a field added to Company.config later for some internal purpose must not be published just
+    because it shares a dict with these.
+    """
+    from app.models.enterprise.company import Company
+    from app.router.enterprise.career_page import CONFIG_KEY, CareerPageSettings
+
+    company = (
+        await session.execute(select(Company).where(Company.slug == company_slug))
+    ).scalar_one_or_none()
+    if not company:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    stored = (company.config or {}).get(CONFIG_KEY) or {}
+    settings = CareerPageSettings(**{k: v for k, v in stored.items() if k in CareerPageSettings.model_fields})
+    return {
+        "company_name": company.name,
+        "company_logo": settings.logo_url or company.logo_url or "",
+        "headline": settings.headline,
+        "intro": settings.intro,
+        "brand_color": settings.brand_color,
+        "cover_url": settings.cover_url,
+        "contact_email": settings.contact_email,
+        "contact_phone": settings.contact_phone,
+        "website": settings.website,
+        "social": {
+            "linkedin": settings.linkedin,
+            "twitter": settings.twitter,
+            "facebook": settings.facebook,
+            "instagram": settings.instagram,
+            "youtube": settings.youtube,
+        },
+        "show_share_buttons": settings.show_share_buttons,
+        "application_terms": settings.application_terms,
+        "privacy_policy": settings.privacy_policy,
+        "ga_measurement_id": settings.ga_measurement_id,
+    }
+
+
 @router.get("/list", response_model=list[JobRequirementResponse])
 async def list_active_jobs(
     session: DBSessionDep, company_id: UUID | None = None, company_slug: str | None = None
