@@ -215,13 +215,15 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         category=IntegrationCategory.ASSESSMENT,
         summary="Coding tests and technical interviews. Results are pulled, not pushed.",
         setup_steps=(
-            "In HackerRank, open the test and copy its candidate invite link. Croar sends that "
-            "same URL to everyone reaching the round.",
-            "Optionally generate an API token at Settings -> Integrations -> Generate API Token "
-            "(Company Admin only, at hackerrank.com/work/settings/api). It is shown once and "
-            "cannot be retrieved afterwards.",
-            "HackerRank has no results webhook — its API is pull-only — so nothing posts a score "
-            "back on its own. Record the result on the candidate once they have taken the test.",
+            "In HackerRank, open the test and copy its candidate invite link. That link is the "
+            "only field Croar needs — everyone reaching the round is sent the same URL.",
+            "Leave the API token blank unless you have one. HackerRank's Integrations page is a "
+            "marketplace of named partners (Ashby, Greenhouse, Lever) with no self-serve key, "
+            "and its REST API is gated by plan or partnership. If Settings -> Integrations shows "
+            "you no way to generate a token, your account does not have API access and nothing "
+            "here depends on it.",
+            "HackerRank has no results webhook, so no score comes back on its own. Record the "
+            "result on the candidate once they have taken the test.",
         ),
         docs_url="https://www.hackerrank.com/work/",
         what_it_does=(
@@ -229,13 +231,23 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         ),
         fields=(
             _INVITE_FIELD,
-            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+            IntegrationField(
+                name="api_key",
+                label="API key",
+                required=False,
+                help=(
+                    "Optional, and usually unavailable: HackerRank's Integrations page lists "
+                    "partner tools rather than offering a key, and API access is gated by plan. "
+                    "Croar does not call their API — the invite link above is what is sent."
+                ),
+            ),
         ),
         capabilities=_ASSESSMENT_CAPS,
         limitations=(
-            "HackerRank has no results webhook, so a score does not come back on its own — "
-            "unlike Testlify, where it does. Record it on the candidate after they take the test.",
-            "Croar does not create per-candidate tests through HackerRank's API yet.",
+            "No results webhook, so a score does not come back on its own — unlike Testlify, "
+            "where it does. Record it on the candidate after they take the test.",
+            "HackerRank's API is gated to plan tiers and named integration partners, so there is "
+            "usually no key to generate. The invite link is what makes this work.",
         ),
     ),
     IntegrationMeta(
