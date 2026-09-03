@@ -309,7 +309,12 @@ async def send_assessment_invitation(
     from app.router.enterprise.communication import send_smtp_email
 
     def do_send() -> None:
-        send_smtp_email(str(candidate.email), subject, body)
+        # send_smtp_email swallows its exception and reports failure in the return value.
+        # Discarding that value made every failure invisible: the EmailLog below is written
+        # unconditionally, so a candidate who was never emailed still showed as "sent".
+        ok, err = send_smtp_email(str(candidate.email), subject, body)
+        if not ok:
+            logger.error(f"email to {candidate.email} failed: {err}")
 
     if background_tasks:
         background_tasks.add_task(do_send)
@@ -385,7 +390,12 @@ async def send_automated_email(
     from app.router.enterprise.communication import send_smtp_email
 
     def do_send() -> None:
-        send_smtp_email(str(candidate.email), subject, body)
+        # send_smtp_email swallows its exception and reports failure in the return value.
+        # Discarding that value made every failure invisible: the EmailLog below is written
+        # unconditionally, so a candidate who was never emailed still showed as "sent".
+        ok, err = send_smtp_email(str(candidate.email), subject, body)
+        if not ok:
+            logger.error(f"email to {candidate.email} failed: {err}")
 
     if background_tasks:
         background_tasks.add_task(do_send)
