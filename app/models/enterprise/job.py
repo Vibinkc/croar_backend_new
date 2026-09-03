@@ -87,6 +87,21 @@ class JobRequirement(EnterpriseBase):
     deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
     status = relationship("JobStatus")
+
+    @property
+    def accepting_applications(self) -> bool:
+        """Whether this job's public page is live, and so whether any board could read it.
+
+        Matches on the status NAME, not status_id: the ids disagree across seeds (the edit UI
+        writes 3 for Closed while the seed calls 3 On Hold), which is why the public listing
+        has always filtered by name. Requires `status` to be loaded — every query that returns
+        a JobRequirementResponse selectinloads it.
+        """
+        from app.router.enterprise.public import ACCEPTING_STATUS_NAMES
+
+        name = getattr(self.status, "name", None)
+        return bool(name and name.strip().lower() in ACCEPTING_STATUS_NAMES)
+
     company = relationship("Company")
     owner = relationship("EnterpriseUser", foreign_keys=[owner_id], lazy="selectin")
     collaborators = relationship(

@@ -173,6 +173,11 @@ class JobRequirementResponse(JobRequirementCreate):
     metrics: JobMetrics | None = None
     stages: list[JobStageResponse] = []
 
+    # Whether the public job page is live, and so whether any board could reach it. Computed
+    # server-side from the status NAME: the ids disagree across seeds, so a client that worked
+    # it out from status_id would get it wrong for exactly the rows that matter.
+    accepting_applications: bool = False
+
     # Ownership / assignment (Team Management)
     owner: MemberBrief | None = None
     collaborators: list[MemberBrief] = Field(default=[], validation_alias="collaborator_users")

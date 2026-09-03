@@ -21,6 +21,7 @@ from app.models.enterprise.onboarding import OnboardingAutomation
 from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.constants import ModuleScope, PermissionAction
 from app.router.enterprise.job_portals import active_portal_connection
+from app.router.enterprise.public import is_accepting_applications
 from app.schemas.enterprise.jobs import (
     AssignJobRequest,
     JDGenerationRequest,
@@ -105,7 +106,12 @@ async def _get_scoped_job(session: Any, current_user: object, job_id: UUID) -> J
     cid = getattr(current_user, "company_id", None)
     is_consultancy = getattr(getattr(current_user, "company", None), "is_consultancy", False)
 
-    stmt = select(JobRequirement).where(JobRequirement.id == job_id, JobRequirement.deleted_at.is_(None))
+    stmt = (
+        select(JobRequirement)
+        .where(JobRequirement.id == job_id, JobRequirement.deleted_at.is_(None))
+        # The publish gate asks whether the public page is live, which reads the status.
+        .options(selectinload(JobRequirement.status))
+    )
     if is_consultancy:
         partner_ids = (
             (await session.execute(select(Company.id).where(Company.parent_id == cid))).scalars().all()
@@ -159,7 +165,13 @@ async def create_job(
     # Eager load for response
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+        .options(
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.company),
+            # accepting_applications reads the status name; without this it lazy-loads
+            # inside async and raises MissingGreenlet.
+            selectinload(JobRequirement.status),
+        )
         .where(JobRequirement.id == new_job.id)
     )
     result = await session.execute(stmt)
@@ -180,7 +192,13 @@ async def list_jobs(
 
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+        .options(
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.company),
+            # accepting_applications reads the status name; without this it lazy-loads
+            # inside async and raises MissingGreenlet.
+            selectinload(JobRequirement.status),
+        )
         .where(JobRequirement.deleted_at.is_(None))
     )
 
@@ -236,7 +254,13 @@ async def get_job(
 
     stmt = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+        .options(
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.company),
+            # accepting_applications reads the status name; without this it lazy-loads
+            # inside async and raises MissingGreenlet.
+            selectinload(JobRequirement.status),
+        )
         .where(JobRequirement.id == job_id, JobRequirement.deleted_at.is_(None))
     )
 
@@ -377,7 +401,13 @@ async def update_job(
     # not the caller's — otherwise a consultancy editing a partner job would fail the reload.
     stmt_reload = (
         select(JobRequirement)
-        .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+        .options(
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.company),
+            # accepting_applications reads the status name; without this it lazy-loads
+            # inside async and raises MissingGreenlet.
+            selectinload(JobRequirement.status),
+        )
         .where(JobRequirement.id == job_id)
     )
     result_reload = await session.execute(stmt_reload)
@@ -441,7 +471,13 @@ async def assign_job(
     reload = (
         await session.execute(
             select(JobRequirement)
-            .options(selectinload(JobRequirement.postings), selectinload(JobRequirement.company))
+            .options(
+                selectinload(JobRequirement.postings),
+                selectinload(JobRequirement.company),
+                # accepting_applications reads the status name; without this it lazy-loads
+                # inside async and raises MissingGreenlet.
+                selectinload(JobRequirement.status),
+            )
             .where(JobRequirement.id == job_id)
         )
     ).scalar_one()
@@ -537,6 +573,18 @@ async def publish_job(
     job = await _get_scoped_job(session, current_user, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # Every board here reads the public job page or the feed built from it. If the job is not
+    # publicly listed, none of them can see it — and the postings would come back LISTED, which
+    # reads like success. Refuse instead, and say what to change.
+    if not is_accepting_applications(job):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This job's public page is not live, so no board could read it. "
+                "Set the job's status to Active before publishing."
+            ),
+        )
 
     company = getattr(job, "company", None)
     if company is None and job.company_id:

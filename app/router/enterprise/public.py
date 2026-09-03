@@ -20,12 +20,19 @@ router = APIRouter(prefix="/public/jobs", tags=["Public Jobs"])
 # inconsistent across seeds ("Active" vs "OPEN"), and the edit UI writes
 # status_id=3 for "Closed" while seeds map 3→"On Hold"/4→"Closed" — so match by
 # lowercased status name (anything that isn't active/open is treated as closed).
+#
+# Lives here rather than in a shared module because this is where the rule is enforced; the
+# enterprise router imports it so there is one definition of "live", not two that can drift.
 ACCEPTING_STATUS_NAMES = {"active", "open"}
 
 
-def _is_accepting_applications(job: JobRequirement) -> bool:
+def is_accepting_applications(job: JobRequirement) -> bool:
     status = getattr(job, "status", None)
     return bool(status and (status.name or "").strip().lower() in ACCEPTING_STATUS_NAMES)
+
+
+# Kept for the existing call sites in this module.
+_is_accepting_applications = is_accepting_applications
 
 
 @router.get("/list", response_model=list[JobRequirementResponse])
@@ -43,7 +50,11 @@ async def list_active_jobs(
             func.lower(JobStatus.name).in_(sorted(ACCEPTING_STATUS_NAMES)),
             JobRequirement.deleted_at.is_(None),
         )
-        .options(selectinload(JobRequirement.company), selectinload(JobRequirement.postings))
+        .options(
+            selectinload(JobRequirement.company),
+            selectinload(JobRequirement.postings),
+            selectinload(JobRequirement.status),
+        )
     )
 
     if company_id:
