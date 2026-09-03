@@ -213,7 +213,16 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         brand_color="#00EA64",
         name="HackerRank",
         category=IntegrationCategory.ASSESSMENT,
-        summary="Coding tests and technical interviews.",
+        summary="Coding tests and technical interviews. Results are pulled, not pushed.",
+        setup_steps=(
+            "In HackerRank, open the test and copy its candidate invite link. Croar sends that "
+            "same URL to everyone reaching the round.",
+            "Optionally generate an API token at Settings -> Integrations -> Generate API Token "
+            "(Company Admin only, at hackerrank.com/work/settings/api). It is shown once and "
+            "cannot be retrieved afterwards.",
+            "HackerRank has no results webhook — its API is pull-only — so nothing posts a score "
+            "back on its own. Record the result on the candidate once they have taken the test.",
+        ),
         docs_url="https://www.hackerrank.com/work/",
         what_it_does=(
             "HackerRank runs coding tests and technical interviews. Connected here it becomes selectable on an assessment round, and candidates reaching that round are emailed the test link."
@@ -223,7 +232,11 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
             IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
         ),
         capabilities=_ASSESSMENT_CAPS,
-        limitations=_ASSESSMENT_LIMITS,
+        limitations=(
+            "HackerRank has no results webhook, so a score does not come back on its own — "
+            "unlike Testlify, where it does. Record it on the candidate after they take the test.",
+            "Croar does not create per-candidate tests through HackerRank's API yet.",
+        ),
     ),
     IntegrationMeta(
         key="testgorilla",
