@@ -216,14 +216,14 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         summary="Coding tests and technical interviews. Results are pulled, not pushed.",
         setup_steps=(
             "In HackerRank, open the test and copy its candidate invite link. That link is the "
-            "only field Croar needs — everyone reaching the round is sent the same URL.",
-            "Leave the API token blank unless you have one. HackerRank's Integrations page is a "
-            "marketplace of named partners (Ashby, Greenhouse, Lever) with no self-serve key, "
-            "and its REST API is gated by plan or partnership. If Settings -> Integrations shows "
-            "you no way to generate a token, your account does not have API access and nothing "
-            "here depends on it.",
-            "HackerRank has no results webhook, so no score comes back on its own. Record the "
-            "result on the candidate once they have taken the test.",
+            "only field Croar needs today — everyone reaching the round is sent the same URL.",
+            "An API key, if you have one, comes from HackerRank's Settings page "
+            "(hackerrank.com/work/settings/api, Company Admin). It is shown once. Croar does not "
+            "call their API yet, so this is groundwork rather than a requirement.",
+            "Results do not come back with an invite link. HackerRank's webhook is set per "
+            "invitation through their API (test_result_url), not as an account-wide setting, so "
+            "returning scores automatically would mean Croar inviting candidates through that "
+            "API. Until then, record the result on the candidate once they have taken the test.",
         ),
         docs_url="https://www.hackerrank.com/work/",
         what_it_does=(
@@ -244,10 +244,11 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         ),
         capabilities=_ASSESSMENT_CAPS,
         limitations=(
-            "No results webhook, so a score does not come back on its own — unlike Testlify, "
-            "where it does. Record it on the candidate after they take the test.",
-            "HackerRank's API is gated to plan tiers and named integration partners, so there is "
-            "usually no key to generate. The invite link is what makes this work.",
+            "A score does not come back on its own. HackerRank can post a report to a webhook, "
+            "but only one named per invitation via their API — there is no account-wide setting "
+            "to point at Croar, unlike Testlify. Record the result after the candidate sits it.",
+            "Croar does not invite candidates through HackerRank's API yet, which is what would "
+            "be needed to set that per-invite webhook.",
         ),
     ),
     IntegrationMeta(
