@@ -218,3 +218,4 @@ google_credentials.json
 # These were tracked, which put real Aadhaar/PAN/bank documents AND a Google
 # service-account key (uploaded through the onboarding form) into git history.
 uploads/
+e2e-report.json
