@@ -65,6 +65,13 @@ class IntegrationMeta:
     # Numbered steps for connecting, in the provider's own vocabulary. Generic advice sends
     # people hunting through a settings tree they have never seen.
     setup_steps: tuple[str, ...] = ()
+    # Whether someone can sign up and evaluate this without talking to sales. Separate from
+    # api_tier on purpose: a free plan and a free API are different things, and a tool can offer
+    # one without the other.
+    free_to_try: bool = False
+    # What the free tier actually is, in the provider's own words. "Free plan" and "14-day
+    # trial" lead to very different afternoons.
+    trial_note: str = ""
     # "free"   — the provider's API is usable at no cost, and Croar verifies the key on connect.
     # "paid"   — an API exists but is gated behind a paid/enterprise plan.
     # "link"   — no usable API for us; the integration is the invite link only.
@@ -87,6 +94,8 @@ class IntegrationMeta:
             "requires_consent": self.requires_consent,
             "supports_webhook": self.supports_webhook,
             "setup_steps": list(self.setup_steps),
+            "free_to_try": self.free_to_try,
+            "trial_note": self.trial_note,
             "api_tier": self.api_tier,
             "capabilities": list(self.capabilities),
             "limitations": list(self.limitations),
@@ -133,6 +142,8 @@ FREE_LIMITS = ("Croar does not pull scores back automatically yet — results st
 INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     IntegrationMeta(
         key="jotform",
+        free_to_try=True,
+        trial_note="Free Starter plan, and its API works on it — which is why Croar can verify the key.",
         name="Jotform",
         category=IntegrationCategory.ASSESSMENT,
         summary="Build a quiz or screening form. Free plan includes API access.",
@@ -162,6 +173,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="google_forms",
+        free_to_try=True,
+        trial_note="Free with any Google account. Its quiz scoring is free and unlimited.",
         name="Google Forms",
         category=IntegrationCategory.ASSESSMENT,
         summary="Use a Google Forms quiz as the test. The API is free to use.",
@@ -253,6 +266,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testgorilla",
+        free_to_try=True,
+        trial_note="Free plan: five skills tests and one seat. Enough to evaluate the flow.",
         api_tier="paid",
         icon_url="https://www.testgorilla.com/favicon.png",
         brand_color="#12B981",
@@ -272,6 +287,8 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
     ),
     IntegrationMeta(
         key="testlify",
+        free_to_try=True,
+        trial_note="Free trial. This is the one tool here whose results come back to Croar on their own.",
         api_tier="paid",
         icon_url="https://testlify.com/favicon.ico",
         brand_color="#6D28D9",
@@ -490,6 +507,64 @@ INTEGRATIONS: tuple[IntegrationMeta, ...] = (
         what_it_does=(
             "Screenify runs AI-led interviews so a large applicant pool can be screened without "
             "a recruiter on each call. Connect it to use it for an interview round."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="willo",
+        name="Willo",
+        category=IntegrationCategory.INTERVIEW,
+        summary="One-way video interviews. Free plan, and an API with webhooks.",
+        docs_url="https://www.willo.video/",
+        icon_url="https://www.willo.video/favicon.ico",
+        brand_color="#1E40AF",
+        api_tier="paid",
+        free_to_try=True,
+        trial_note="Free plan with a limited number of interviews — enough to test the flow.",
+        supports_webhook=False,
+        setup_steps=(
+            "Sign up at willo.video and create an interview. Copy its candidate link and paste it below.",
+            "Willo has a developer API and connects through Zapier, so results can be pushed "
+            "into Croar's result webhook. That is not wired up here yet — record the outcome on "
+            "the candidate for now.",
+        ),
+        what_it_does=(
+            "Willo collects recorded video answers so a first screen does not need a call. "
+            "Connected here it becomes the tool behind an interview round, and candidates "
+            "reaching that round are emailed its link."
+        ),
+        fields=(
+            _INVITE_FIELD,
+            IntegrationField(name="api_key", label="API key", required=False, help=_API_KEY_HELP),
+        ),
+        capabilities=_ASSESSMENT_CAPS,
+        limitations=_ASSESSMENT_LIMITS,
+    ),
+    IntegrationMeta(
+        key="vervoe",
+        name="Vervoe",
+        category=IntegrationCategory.ASSESSMENT,
+        summary="Skills assessments scored by AI on how candidates actually perform.",
+        docs_url="https://vervoe.com/",
+        icon_url="https://vervoe.com/favicon.ico",
+        brand_color="#0EA5E9",
+        api_tier="paid",
+        free_to_try=True,
+        trial_note="Free trial, and a low-cost pay-as-you-go tier below the annual plans.",
+        setup_steps=(
+            "Sign up at vervoe.com, build an assessment, and copy its candidate link.",
+            "Paste that link below. Results stay in Vervoe for now — record the outcome on the "
+            "candidate once they have taken it.",
+        ),
+        what_it_does=(
+            "Vervoe grades candidates on work samples rather than multiple choice, scoring how "
+            "they perform the tasks the role involves. Connected here it becomes a choice on any "
+            "assessment round."
         ),
         fields=(
             _INVITE_FIELD,
