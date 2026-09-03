@@ -29,7 +29,7 @@ router = APIRouter(prefix="/jobs", tags=["Public Job Feeds"])
 # points at.
 # "QUEUED" is the old name for CONNECTED_NO_PUSH and is kept so rows written before the rename
 # stay in the feed — dropping it would quietly remove already-published jobs from Indeed.
-_LIVE_STATUSES = ("PUBLISHED", "LISTED", "CONNECTED_NO_PUSH", "QUEUED")
+_LIVE_STATUSES = ("PUBLISHED", "LISTED", "FEED_READY", "CONNECTED_NO_PUSH", "QUEUED")
 
 
 def _job_url(job_id: object) -> str:

@@ -70,6 +70,32 @@ class StructuredDataProvider(JobDistributionProvider):
         )
 
 
+class AggregatorFeedProvider(JobDistributionProvider):
+    """Board ingests Croar's hosted XML feed once the employer has registered its URL.
+
+    Croar's half is done the moment the job is public: it is in the feed and the job page
+    carries schema.org markup. The other half — telling the board where the feed lives — is a
+    free one-time application the board wants from the publisher themselves, so the result
+    names the feed URL and the page to submit it on instead of claiming a push happened.
+    """
+
+    def __init__(self, meta: PortalMeta):
+        self.meta = meta
+
+    async def publish(self, ctx: PublishContext) -> DistributionResult:
+        feed_url = f"{ctx.feed_url_base}/api/v1/jobs/feed/indeed.xml"
+        where = self.meta.submit_url or self.meta.docs_url or self.meta.name
+        return DistributionResult(
+            platform=self.key,
+            status=DistributionStatus.FEED_READY,
+            url=feed_url,
+            message=(
+                f"In Croar's job feed. Register {feed_url} with {self.meta.name} once "
+                f"({where}) and every job published here appears automatically."
+            ),
+        )
+
+
 class IndeedFeedProvider(JobDistributionProvider):
     """Indeed ingests our hosted Job Sync XML feed + crawls the page's JSON-LD."""
 

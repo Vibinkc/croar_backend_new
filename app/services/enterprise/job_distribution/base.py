@@ -10,6 +10,8 @@ the right provider by key. Each provider declares *how* it reaches its board:
   (e.g. Google Indexing API) to speed up crawling.
 - ``FEED`` — the board pulls an XML/JSON feed we host (Indeed XML job feed).
 - ``API`` — a real per-company API push (e.g. Wanted's corporate-key ATS integration).
+- ``AGGREGATOR`` — a job search engine that ingests an XML feed. Free, but the employer
+  registers Croar's feed URL with the board once; until then nothing is claimed.
 - ``PARTNER`` — posting requires a signed B2B/console account with the board and cannot
   be done self-serve today (Saramin posting, JobKorea, Rikunabi, Mynavi, doda …). We
   record the intent and surface it honestly instead of pretending to post.
@@ -30,12 +32,17 @@ class IntegrationType(StrEnum):
     STRUCTURED = "structured"  # schema.org crawl (Google for Jobs, aggregators)
     FEED = "feed"  # XML/JSON feed the board pulls (Indeed)
     API = "api"  # real per-company API push (Wanted corporate key)
+    AGGREGATOR = "aggregator"  # ingests our hosted XML feed after a free one-time registration
     PARTNER = "partner"  # signed partnership / employer console required
 
 
 class DistributionStatus(StrEnum):
     PUBLISHED = "PUBLISHED"  # live push / indexing ping succeeded
     LISTED = "LISTED"  # structured-data / feed: discoverable, board crawls on its own
+    # The job is in Croar's hosted feed and ready for the board to ingest, but the employer
+    # still has to register that feed URL with the board once. Croar cannot do that step, so
+    # it must not be reported as a publish.
+    FEED_READY = "FEED_READY"
     # Connected, but Croar has no implemented push for this board. NOT a promise of a future
     # sync: nothing consumes this status, so it must not be worded as though something will.
     CONNECTED_NO_PUSH = "CONNECTED_NO_PUSH"
@@ -79,6 +86,8 @@ class PortalMeta:
     docs_url: str | None = None
     note: str | None = None  # honest one-liner on how/whether it works today
     logo: str | None = None  # brand logo URL
+    # Where the employer registers Croar's feed with this board (free, one-time).
+    submit_url: str | None = None
     connect_fields: list[ConnectField] = field(default_factory=list)  # per-portal connect form
 
     def as_dict(self) -> dict[str, Any]:
@@ -88,9 +97,15 @@ class PortalMeta:
             "country": self.country,
             "integration": self.integration.value,
             "requires_credentials": self.requires_credentials,
+            # Whether the board will take anything at all before you connect. Google for
+            # Jobs and Indeed have connect forms, but every field on them is optional —
+            # they list via crawl and feed regardless — so 'has a form' is the wrong test
+            # for whether setup is needed.
+            "setup_required": any(f.required for f in self.connect_fields),
             "docs_url": self.docs_url,
             "note": self.note,
             "logo": self.logo,
+            "submit_url": self.submit_url,
             "connect_fields": [f.as_dict() for f in self.connect_fields],
         }
 
