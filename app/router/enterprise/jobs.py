@@ -591,6 +591,63 @@ async def publish_job(
     return {"message": f"Distributed to {live} of {len(results)} portals.", "results": results}
 
 
+@router.delete("/{job_id}/publish/{platform}")
+async def unpublish_job(
+    job_id: UUID,
+    platform: str,
+    http_request: Request,
+    session: DBSessionDep,
+    current_user: Annotated[object, Depends(PermissionChecker(ModuleScope.jobs, PermissionAction.publish))],
+) -> dict[str, Any]:
+    """Take this job off one board and forget the posting.
+
+    How much can actually be recalled depends on the board: Google gets a URL_DELETED ping,
+    feed-based boards drop the job the next time they read the feed, and a partner board that
+    was never posted to has nothing to undo. The provider says which, and the row goes either
+    way — leaving it would keep claiming the job is live somewhere it is not.
+    """
+    job = await _get_scoped_job(session, current_user, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    key = job_distribution_service.resolve_key(platform)
+    posting = (
+        await session.execute(
+            select(JobPosting).where(JobPosting.job_requirement_id == job_id, JobPosting.platform == key)
+        )
+    ).scalar_one_or_none()
+    if not posting:
+        raise HTTPException(status_code=404, detail="This job is not published to that board.")
+
+    company = getattr(job, "company", None)
+    if company is None and job.company_id:
+        company = (
+            await session.execute(select(Company).where(Company.id == job.company_id))
+        ).scalar_one_or_none()
+
+    job_url = f"{settings.frontend_url}/jobs/{job_id}"
+    ctx = PublishContext(
+        job=job,
+        company=company,
+        job_url=job_url,
+        feed_url_base=str(http_request.base_url).rstrip("/"),
+        creds={},
+    )
+    provider = job_distribution_service.get(key)
+    message = "Removed."
+    if provider:
+        try:
+            message = (await provider.unpublish(ctx)).message or message
+        except Exception as exc:  # a board that will not take the recall must not block the row
+            logger.warning("unpublish %s for job %s failed: %s", key, job_id, exc)
+            message = f"Removed here, but {key} did not confirm: {exc}"
+
+    await session.delete(posting)
+    _log_job_activity(session, job, current_user, "unpublished", {"platform": key})
+    await session.commit()
+    return {"message": message, "platform": key}
+
+
 @router.post("/generate-jd")
 async def generate_jd_endpoint(
     request: JDGenerationRequest,

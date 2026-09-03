@@ -49,9 +49,18 @@ class GoogleForJobsProvider(JobDistributionProvider):
         )
 
     async def unpublish(self, ctx: PublishContext) -> DistributionResult:
-        await google_jobs_service.notify_job_update(ctx.job_url, "URL_DELETED")
+        # The ping is skipped entirely when no service account is configured, so reporting it
+        # as sent would describe a request that was never made. Either way the job page stops
+        # being served, and Google drops the listing on its next crawl.
+        pinged = await google_jobs_service.notify_job_update(ctx.job_url, "URL_DELETED")
         return DistributionResult(
-            platform=self.key, status=DistributionStatus.LISTED, message="Deindex ping sent"
+            platform=self.key,
+            status=DistributionStatus.LISTED,
+            message=(
+                "Deindex ping sent to Google."
+                if pinged
+                else "Removed here. No Indexing API credentials, so Google drops it on its next crawl."
+            ),
         )
 
 
