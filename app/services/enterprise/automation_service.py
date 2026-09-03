@@ -137,6 +137,12 @@ async def trigger_automations(
                 )
 
             # 3. Handle Auto-Move (if enabled)
+            #
+            # Only the MAIL automation's flag is read here, which is why ticking auto-move on
+            # an assessment round appeared to do nothing: an assessment moves a candidate when
+            # its result arrives and passes, not when its invitation goes out. That path is in
+            # external_results.record_result for a third-party tool, and in the attempt
+            # submission handler for Croar's own.
             if mail_auto.auto_move and mail_auto.is_immediate:
                 # Check if there are more stages
                 workflow = cast("list[dict[str, Any]]", job.workflow_stages) or []

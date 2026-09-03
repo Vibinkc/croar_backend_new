@@ -25,6 +25,7 @@ from app.middleware.request_logging import request_logging_middleware
 from app.middleware.request_size_limit import RequestSizeLimitMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 from app.router import agents, auth, enterprise, platform, public_feeds
+from app.router.enterprise import external_results
 from app.router.enterprise.payroll import router as payroll_router
 
 # Setup Logging
@@ -158,6 +159,7 @@ app.include_router(platform.router, prefix="/api/v1/super-admin", tags=["Platfor
 app.include_router(agents.router, prefix="/api/v1", tags=["Agent OS"])
 # Public job-syndication feeds (Indeed XML, schema.org JSON-LD) — no auth, crawled by boards
 app.include_router(public_feeds.router, prefix="/api/v1", tags=["Public Job Feeds"])
+app.include_router(external_results.router, prefix="/api/v1", tags=["Assessment results"])
 # Payroll/HR module (sub-routers carry absolute /api/v1/enterprise/... prefixes)
 app.include_router(payroll_router)
 
