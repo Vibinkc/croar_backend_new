@@ -1,221 +1,485 @@
-"""Reports — recruitment analytics across every job, not one at a time.
+"""Reports — a catalogue of named reports, in Manatal's four categories.
 
-Croar already reports per job (the Reports tab on a job). This is the company view Manatal puts
-under Settings & Analytics: how hiring is going overall, where candidates come from, and where
-the pipeline leaks.
+Manatal's Reports is not one dashboard. It is a hub of four categories (Candidates, Jobs, Hiring
+Performance, Leaderboard), each listing individually named reports you pick from — "Candidates
+by Source", "Offer-to-Hire Ratio", "Average time to hire". That shape matters more than any
+single chart: a recruiter opens Reports to answer one question, not to browse a wall of them.
 
-One rule runs through the whole file: report only what the data actually knows. Every figure
-here is computed from a real column, and where a metric would need a field that does not exist,
-it is absent rather than estimated. That is why there is no cost-per-hire and no offer-accept
-rate — nothing records an offer or a cost, and a plausible-looking number derived from neither
-is worse than a gap, because someone will put it in a board deck.
+Croar cannot support all ~35 of theirs, and the catalogue names the gaps rather than quietly
+omitting them. Three fields they have and Croar does not:
 
-Where a figure is thin, the response says so rather than leaving the reader to guess: counts
-carry their denominator, and time-to-hire reports how many hires it was averaged over.
+  · application channel and sourcing channel as SEPARATE fields — Croar records one `source`
+  · referrer — no field at all
+  · a per-application owner — Croar has a job owner, not a recruiter per candidate, so every
+    "by user" report and the whole Leaderboard category is unavailable
+
+Listing those as unavailable-with-a-reason is the point. A catalogue containing only the
+possible reports looks complete; one that names its gaps tells you what adding a `referrer`
+column would actually buy.
+
+A correction worth recording: the first version of this file asserted that Croar records no
+offer and no hire, and left the funnel to the per-job stage integer as a result. That was
+wrong. `application_statuses` is a real, maintained vocabulary — Applied, Screening,
+Interviewing, Offered, Hired, Rejected, Withdrawn — and the live database has rows in every one
+of them. The funnel, the stage ratios and time-to-hire are all computed from it, which is also
+better than the stage integer, because these names are shared across every job.
 """
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Integer, cast, func, select
+from sqlalchemy import Float, cast, func, select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
-from app.models.enterprise.candidate import Candidate, CandidateApplication
+from app.models.enterprise.candidate import ApplicationStatus, Candidate, CandidateApplication
 from app.models.enterprise.job import JobRequirement
 from app.models.shared.constants import ModuleScope, PermissionAction
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
-# Score bands, strongest first, matching the per-job Reports tab so the two screens agree.
-BANDS = [("strong", 80, 101), ("good", 60, 80), ("fair", 40, 60), ("weak", 0, 40)]
+# The canonical pipeline, in order. Shared across every job, unlike per-job stage names.
+APPLIED, SCREENING, INTERVIEWING, OFFERED, HIRED = 1, 2, 3, 4, 5
+FUNNEL_ORDER = [APPLIED, SCREENING, INTERVIEWING, OFFERED, HIRED]
+STAGE_NAMES = {
+    APPLIED: "Applied",
+    SCREENING: "Screening",
+    INTERVIEWING: "Interviewing",
+    OFFERED: "Offered",
+    HIRED: "Hired",
+}
+
+# Why a report is missing, so the catalogue can explain itself.
+NO_CHANNELS = "Croar records one `source` per application, not separate application and sourcing channels."
+NO_REFERRER = "Croar has no referrer field on a candidate."
+NO_OWNER = "Croar has a job owner but no per-candidate recruiter, so results cannot be split by user."
+
+CATALOGUE: list[dict[str, Any]] = [
+    # ── Candidates ───────────────────────────────────────────────────────────
+    {
+        "id": "candidates_created",
+        "category": "candidates",
+        "section": "Overview",
+        "name": "Candidates Created",
+        "description": "Candidates added to your database, by month.",
+    },
+    {
+        "id": "candidates_with_resumes",
+        "category": "candidates",
+        "section": "Overview",
+        "name": "Resumes Added",
+        "description": "Candidates with a CV attached, by month.",
+    },
+    {
+        "id": "candidates_by_source",
+        "category": "candidates",
+        "section": "Source",
+        "name": "Candidates by Source",
+        "description": "Candidates sorted by where they came from.",
+    },
+    {
+        "id": "candidates_by_source_over_time",
+        "category": "candidates",
+        "section": "Source over time",
+        "name": "Candidates by Source over time",
+        "description": "The same split, month by month.",
+    },
+    {
+        "id": "candidates_by_application_channel",
+        "category": "candidates",
+        "section": "Source",
+        "name": "Candidates by Application Channel",
+        "unavailable": NO_CHANNELS,
+    },
+    {
+        "id": "candidates_by_sourcing_channel",
+        "category": "candidates",
+        "section": "Source",
+        "name": "Candidates by Sourcing Channel",
+        "unavailable": NO_CHANNELS,
+    },
+    {
+        "id": "candidates_by_referrer",
+        "category": "candidates",
+        "section": "Source",
+        "name": "Candidates by Referrer",
+        "unavailable": NO_REFERRER,
+    },
+    # ── Jobs ─────────────────────────────────────────────────────────────────
+    {
+        "id": "jobs_by_status",
+        "category": "jobs",
+        "section": "Jobs",
+        "name": "Jobs by Status",
+        "description": "Jobs sorted by their current status.",
+    },
+    {
+        "id": "jobs_by_department",
+        "category": "jobs",
+        "section": "Jobs",
+        "name": "Job table by department",
+        "description": "Every job, grouped by department.",
+    },
+    # ── Hiring performance ───────────────────────────────────────────────────
+    {
+        "id": "hires_made",
+        "category": "hiring",
+        "section": "Overview",
+        "name": "Hires Made",
+        "description": "Applications that reached Hired, by month.",
+    },
+    {
+        "id": "matches_created",
+        "category": "hiring",
+        "section": "Overview",
+        "name": "Matches Created",
+        "description": "Candidate-job pairings created, by month.",
+    },
+    {
+        "id": "recruitment_funnel",
+        "category": "hiring",
+        "section": "Pipeline performance",
+        "name": "Recruitment Funnel",
+        "description": "Applications by pipeline status.",
+    },
+    {
+        "id": "performance_by_job",
+        "category": "hiring",
+        "section": "Pipeline performance",
+        "name": "Recruitment Performance by Job",
+        "description": "Applications by job and status.",
+    },
+    {
+        "id": "pipeline_ratios",
+        "category": "hiring",
+        "section": "Pipeline ratios",
+        "name": "Pipeline Ratios",
+        "description": "Conversion between each pair of pipeline stages.",
+    },
+    {
+        "id": "time_to_hire",
+        "category": "hiring",
+        "section": "Velocity",
+        "name": "Average time to hire",
+        "description": "Days from application to Hired.",
+    },
+    {
+        "id": "source_performance",
+        "category": "hiring",
+        "section": "Channel performance",
+        "name": "Source Performance",
+        "description": "Applications by source and how far they got.",
+    },
+    {
+        "id": "interview_ratio_by_source",
+        "category": "hiring",
+        "section": "Interview ratios",
+        "name": "Interview Ratio by Source",
+        "description": "Share of each source reaching Interviewing.",
+    },
+    {
+        "id": "referrer_performance",
+        "category": "hiring",
+        "section": "Channel performance",
+        "name": "Referrer Performance",
+        "unavailable": NO_REFERRER,
+    },
+    {
+        "id": "performance_by_owner",
+        "category": "hiring",
+        "section": "Pipeline performance",
+        "name": "Recruitment Performance by Match Owner",
+        "unavailable": NO_OWNER,
+    },
+    # ── Leaderboard ──────────────────────────────────────────────────────────
+    {
+        "id": "candidates_by_user",
+        "category": "leaderboard",
+        "section": "Candidate performance",
+        "name": "Candidates created by user",
+        "unavailable": NO_OWNER,
+    },
+    {
+        "id": "matches_by_user",
+        "category": "leaderboard",
+        "section": "Recruitment performance",
+        "name": "Matches by user",
+        "unavailable": NO_OWNER,
+    },
+    {
+        "id": "hires_by_user",
+        "category": "leaderboard",
+        "section": "Recruitment performance",
+        "name": "Hires by user",
+        "unavailable": NO_OWNER,
+    },
+]
+
+CATEGORIES = [
+    {"id": "candidates", "name": "Candidates", "description": "Reports about the people in your database."},
+    {"id": "jobs", "name": "Jobs", "description": "Reports about your open and closed roles."},
+    {"id": "hiring", "name": "Hiring Performance", "description": "Pipeline, conversion and velocity."},
+    {"id": "leaderboard", "name": "Leaderboard", "description": "Per-recruiter performance."},
+]
 
 
 def _since(days: int) -> datetime:
-    """Window start, as a NAIVE UTC datetime.
-
-    `applied_at` is TIMESTAMP WITHOUT TIME ZONE, so comparing it to an aware datetime makes
-    asyncpg refuse the parameter outright ("can't subtract offset-naive and offset-aware").
-    Stripping the tzinfo after computing in UTC keeps the arithmetic correct and the type
-    compatible with the column.
-    """
+    """Naive UTC. These columns are TIMESTAMP WITHOUT TIME ZONE, and an aware datetime makes
+    asyncpg refuse the parameter outright."""
     return (datetime.now(UTC) - timedelta(days=days)).replace(tzinfo=None)
 
 
+def _company(user: object) -> Any:
+    cid = getattr(user, "company_id", None)
+    if not cid:
+        raise HTTPException(status_code=404, detail="No company on this account.")
+    return cid
+
+
 @router.get("")
-async def recruitment_report(
+async def catalogue(
+    current_user: Annotated[
+        object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
+    ],
+) -> dict[str, Any]:
+    """Every report Croar offers, and every one it cannot, each with its reason."""
+    return {
+        "categories": CATEGORIES,
+        "reports": [{**r, "available": "unavailable" not in r} for r in CATALOGUE],
+    }
+
+
+@router.get("/run/{report_id}")
+async def run_report(
+    report_id: str,
     session: DBSessionDep,
     current_user: Annotated[
         object, Depends(PermissionChecker(ModuleScope.candidates, PermissionAction.read))
     ],
-    days: int = Query(90, ge=7, le=730),
+    days: int = Query(180, ge=7, le=1095),
 ) -> dict[str, Any]:
-    """Company-wide recruitment reporting over the last `days`.
+    """Run one report, returning rows in a shape the page renders as bars, a series or a table."""
+    meta = next((r for r in CATALOGUE if r["id"] == report_id), None)
+    if not meta:
+        raise HTTPException(status_code=404, detail="No such report.")
+    if "unavailable" in meta:
+        # 409 rather than 404: the report exists as a concept and is listed in the catalogue.
+        # It cannot be produced from this schema, and the reason travels with the refusal.
+        raise HTTPException(status_code=409, detail=meta["unavailable"])
 
-    The window applies to applications and to the trend, not to the job list: a role opened last
-    year that is still taking applicants belongs on this page.
-    """
-    company_id = getattr(current_user, "company_id", None)
-    if not company_id:
-        raise HTTPException(status_code=404, detail="No company on this account.")
-
+    cid = _company(current_user)
     since = _since(days)
-    app_scope = [CandidateApplication.company_id == company_id, CandidateApplication.deleted_at.is_(None)]
-    windowed = [*app_scope, CandidateApplication.applied_at >= since]
+    apps = [CandidateApplication.company_id == cid, CandidateApplication.deleted_at.is_(None)]
+    cands = [Candidate.company_id == cid, Candidate.deleted_at.is_(None)]
 
-    # ── headline counts ──────────────────────────────────────────────────────
-    jobs = list(
-        (
-            await session.execute(
-                select(JobRequirement)
-                .options(selectinload(JobRequirement.status))
-                .where(JobRequirement.company_id == company_id, JobRequirement.deleted_at.is_(None))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    open_jobs = [j for j in jobs if j.accepting_applications]
+    async def fetch(stmt) -> list[Any]:
+        return list((await session.execute(stmt)).all())
 
-    total_apps = (
-        await session.execute(select(func.count(CandidateApplication.id)).where(*windowed))
-    ).scalar_one()
-    total_candidates = (
-        await session.execute(
-            select(func.count(Candidate.id)).where(
-                Candidate.company_id == company_id, Candidate.deleted_at.is_(None)
-            )
-        )
-    ).scalar_one()
+    out: dict[str, Any] = {"id": report_id, "name": meta["name"], "window_days": days}
 
-    # ── pipeline funnel ──────────────────────────────────────────────────────
-    # Stage is an integer on the application; the stage NAMES live per job, so this reports the
-    # numeric stage rather than inventing a shared vocabulary the data does not have.
-    stage_rows = (
-        await session.execute(
-            select(CandidateApplication.current_stage, func.count(CandidateApplication.id))
-            .where(*windowed)
-            .group_by(CandidateApplication.current_stage)
-            .order_by(CandidateApplication.current_stage)
-        )
-    ).all()
-    funnel = [{"stage": int(s or 1), "count": c} for s, c in stage_rows]
-    max_stage = max((f["stage"] for f in funnel), default=0)
+    if report_id in ("candidates_created", "candidates_with_resumes"):
+        month = func.date_trunc("month", Candidate.created_at).label("m")
+        where = [*cands, Candidate.created_at >= since]
+        if report_id == "candidates_with_resumes":
+            where.append(Candidate.resume_file_path.is_not(None))
+        r = await fetch(select(month, func.count(Candidate.id)).where(*where).group_by(month).order_by(month))
+        out |= {"kind": "series", "rows": [{"label": m.date().isoformat(), "value": c} for m, c in r if m]}
 
-    # ── where candidates come from ───────────────────────────────────────────
-    # One expression object, reused in SELECT and GROUP BY. Building the coalesce twice renders
-    # two different bind parameters, so Postgres sees two unrelated expressions and rejects the
-    # grouping — "source must appear in the GROUP BY clause" even though it visibly does.
-    src_col = func.coalesce(CandidateApplication.source, "Unknown").label("src")
-    source_rows = (
-        await session.execute(
-            select(
-                src_col, func.count(CandidateApplication.id), func.avg(CandidateApplication.ai_match_score)
-            )
-            .where(*windowed)
-            .group_by(src_col)
-            .order_by(func.count(CandidateApplication.id).desc())
+    elif report_id == "candidates_by_source":
+        src = func.coalesce(Candidate.source_platform, "Unknown").label("src")
+        r = await fetch(
+            select(src, func.count(Candidate.id))
+            .where(*cands)
+            .group_by(src)
+            .order_by(func.count(Candidate.id).desc())
         )
-    ).all()
-    sources = [
-        {
-            "source": src,
-            "applications": count,
-            # Average quality per source is the number that decides where to spend next quarter,
-            # and it is null-safe: a source whose applicants were never scored reports null
-            # rather than zero, which would read as "this source sends bad people".
-            "avg_match_score": round(float(avg), 1) if avg is not None else None,
+        out |= {"kind": "bars", "rows": [{"label": s, "value": c} for s, c in r]}
+
+    elif report_id == "candidates_by_source_over_time":
+        src = func.coalesce(Candidate.source_platform, "Unknown").label("src")
+        month = func.date_trunc("month", Candidate.created_at).label("m")
+        r = await fetch(
+            select(month, src, func.count(Candidate.id))
+            .where(*cands, Candidate.created_at >= since)
+            .group_by(month, src)
+            .order_by(month)
+        )
+        out |= {
+            "kind": "grouped",
+            "rows": [{"period": m.date().isoformat(), "label": s, "value": c} for m, s, c in r if m],
         }
-        for src, count, avg in source_rows
-    ]
 
-    # ── match-quality distribution ───────────────────────────────────────────
-    scored_total = (
-        await session.execute(
-            select(func.count(CandidateApplication.id)).where(
-                *windowed, CandidateApplication.ai_match_score.is_not(None)
-            )
-        )
-    ).scalar_one()
-    quality = []
-    for key, lo, hi in BANDS:
-        n = (
-            await session.execute(
-                select(func.count(CandidateApplication.id)).where(
-                    *windowed,
-                    CandidateApplication.ai_match_score >= lo,
-                    CandidateApplication.ai_match_score < hi,
+    elif report_id in ("jobs_by_status", "jobs_by_department"):
+        jobs = list(
+            (
+                await session.execute(
+                    select(JobRequirement)
+                    .options(selectinload(JobRequirement.status))
+                    .where(JobRequirement.company_id == cid, JobRequirement.deleted_at.is_(None))
                 )
             )
-        ).scalar_one()
-        quality.append({"band": key, "min": lo, "max": hi, "count": n})
-
-    # ── applications over time ───────────────────────────────────────────────
-    trend_rows = (
-        await session.execute(
-            select(
-                func.date_trunc("week", CandidateApplication.applied_at).label("wk"),
-                func.count(CandidateApplication.id),
-            )
-            .where(*windowed)
-            .group_by("wk")
-            .order_by("wk")
+            .scalars()
+            .all()
         )
-    ).all()
-    trend = [{"week": wk.date().isoformat() if wk else None, "count": c} for wk, c in trend_rows if wk]
-
-    # ── per-job table ────────────────────────────────────────────────────────
-    per_job_rows = (
-        await session.execute(
-            select(
-                CandidateApplication.job_requirement_id,
-                func.count(CandidateApplication.id),
-                func.avg(CandidateApplication.ai_match_score),
-                func.max(cast(CandidateApplication.current_stage, Integer)),
-            )
-            .where(*app_scope)
-            .group_by(CandidateApplication.job_requirement_id)
-        )
-    ).all()
-    by_job = {jid: (cnt, avg, furthest) for jid, cnt, avg, furthest in per_job_rows}
-    job_table = []
-    for j in jobs:
-        cnt, avg, furthest = by_job.get(j.id, (0, None, None))
-        job_table.append(
-            {
-                "job_id": str(j.id),
-                "title": j.title,
-                "department": j.department,
-                "status": getattr(j.status, "name", None),
-                "open": j.accepting_applications,
-                "headcount": j.headcount,
-                "applications": cnt,
-                "avg_match_score": round(float(avg), 1) if avg is not None else None,
-                "furthest_stage": int(furthest) if furthest is not None else None,
-                "created_at": j.created_at.isoformat() if getattr(j, "created_at", None) else None,
+        if report_id == "jobs_by_status":
+            by_status: dict[str, int] = {}
+            for j in jobs:
+                key = getattr(j.status, "name", None) or "Unknown"
+                by_status[key] = by_status.get(key, 0) + 1
+            out |= {
+                "kind": "bars",
+                "rows": [{"label": k, "value": v} for k, v in sorted(by_status.items(), key=lambda x: -x[1])],
             }
-        )
-    job_table.sort(key=lambda r: r["applications"], reverse=True)
+        else:
+            out |= {
+                "kind": "table",
+                "columns": ["Department", "Job", "Status", "Openings"],
+                "rows": [
+                    {
+                        "cells": [
+                            j.department or "—",
+                            j.title,
+                            getattr(j.status, "name", None) or "—",
+                            j.headcount,
+                        ]
+                    }
+                    for j in sorted(jobs, key=lambda j: ((j.department or "~"), j.title))
+                ],
+            }
 
-    return {
-        "window_days": days,
-        "generated_at": datetime.now(UTC).isoformat(),
-        "totals": {
-            "jobs": len(jobs),
-            "open_jobs": len(open_jobs),
-            "candidates": total_candidates,
-            "applications": total_apps,
-        },
-        "funnel": funnel,
-        "max_stage": max_stage,
-        "sources": sources,
-        "quality": quality,
-        # Carried so the UI can say "of 12 scored" instead of implying the bands cover everyone.
-        "scored_applications": scored_total,
-        "trend": trend,
-        "jobs": job_table,
-        # Named explicitly rather than silently omitted, so nobody assumes these were computed
-        # and came out as zero.
-        "not_reported": ["time_to_hire", "offer_acceptance", "cost_per_hire"],
-    }
+    elif report_id in ("hires_made", "matches_created"):
+        month = func.date_trunc("month", CandidateApplication.applied_at).label("m")
+        where = [*apps, CandidateApplication.applied_at >= since]
+        if report_id == "hires_made":
+            where.append(CandidateApplication.status_id == HIRED)
+        r = await fetch(
+            select(month, func.count(CandidateApplication.id)).where(*where).group_by(month).order_by(month)
+        )
+        out |= {"kind": "series", "rows": [{"label": m.date().isoformat(), "value": c} for m, c in r if m]}
+
+    elif report_id == "recruitment_funnel":
+        r = await fetch(
+            select(ApplicationStatus.name, func.count(CandidateApplication.id))
+            .join(CandidateApplication, CandidateApplication.status_id == ApplicationStatus.id)
+            .where(*apps)
+            .group_by(ApplicationStatus.name, ApplicationStatus.id)
+            .order_by(ApplicationStatus.id)
+        )
+        out |= {"kind": "bars", "rows": [{"label": n, "value": c} for n, c in r]}
+
+    elif report_id == "performance_by_job":
+        r = await fetch(
+            select(JobRequirement.title, ApplicationStatus.name, func.count(CandidateApplication.id))
+            .join(CandidateApplication, CandidateApplication.job_requirement_id == JobRequirement.id)
+            .outerjoin(ApplicationStatus, ApplicationStatus.id == CandidateApplication.status_id)
+            .where(*apps)
+            .group_by(JobRequirement.title, ApplicationStatus.name)
+            .order_by(JobRequirement.title)
+        )
+        out |= {
+            "kind": "grouped",
+            "rows": [{"period": t, "label": s or "Unknown", "value": c} for t, s, c in r],
+        }
+
+    elif report_id == "pipeline_ratios":
+        counts: dict[int, int] = dict(
+            await fetch(
+                select(CandidateApplication.status_id, func.count(CandidateApplication.id))
+                .where(*apps)
+                .group_by(CandidateApplication.status_id)
+            )
+        )
+        # "Reached" is cumulative: someone Hired also passed through Interviewing. Counting each
+        # status in isolation would report a 0% interview ratio for a company that hired
+        # everyone it interviewed, which is the opposite of the truth.
+        reached = {s: sum(counts.get(x, 0) for x in FUNNEL_ORDER[i:]) for i, s in enumerate(FUNNEL_ORDER)}
+        pairs = [
+            (APPLIED, SCREENING),
+            (SCREENING, INTERVIEWING),
+            (INTERVIEWING, OFFERED),
+            (OFFERED, HIRED),
+            (APPLIED, HIRED),
+        ]
+        out |= {
+            "kind": "ratios",
+            "rows": [
+                {
+                    "label": f"{STAGE_NAMES[a]} → {STAGE_NAMES[b]}",
+                    "from": reached.get(a, 0),
+                    "to": reached.get(b, 0),
+                    "percent": round(100.0 * reached.get(b, 0) / reached[a], 1) if reached.get(a) else None,
+                }
+                for a, b in pairs
+            ],
+        }
+
+    elif report_id == "time_to_hire":
+        # `updated_at` is when the row last changed, which for a Hired application is the hire.
+        # Approximate, and flagged as such so the page can label it rather than imply precision.
+        r = await fetch(
+            select(
+                func.avg(
+                    cast(
+                        func.extract(
+                            "epoch", CandidateApplication.updated_at - CandidateApplication.applied_at
+                        ),
+                        Float,
+                    )
+                ),
+                func.count(CandidateApplication.id),
+            ).where(
+                *apps, CandidateApplication.status_id == HIRED, CandidateApplication.applied_at.is_not(None)
+            )
+        )
+        secs, n = r[0] if r else (None, 0)
+        out |= {
+            "kind": "single",
+            "unit": "days",
+            "sample": n,
+            "approximate": True,
+            "value": round(secs / 86400.0, 1) if secs else None,
+        }
+
+    elif report_id == "source_performance":
+        src = func.coalesce(CandidateApplication.source, "Unknown").label("src")
+        r = await fetch(
+            select(src, ApplicationStatus.name, func.count(CandidateApplication.id))
+            .outerjoin(ApplicationStatus, ApplicationStatus.id == CandidateApplication.status_id)
+            .where(*apps)
+            .group_by(src, ApplicationStatus.name)
+        )
+        out |= {
+            "kind": "grouped",
+            "rows": [{"period": s, "label": st or "Unknown", "value": c} for s, st, c in r],
+        }
+
+    elif report_id == "interview_ratio_by_source":
+        src = func.coalesce(CandidateApplication.source, "Unknown").label("src")
+        totals = dict(
+            await fetch(select(src, func.count(CandidateApplication.id)).where(*apps).group_by(src))
+        )
+        reached = dict(
+            await fetch(
+                select(src, func.count(CandidateApplication.id))
+                .where(*apps, CandidateApplication.status_id.in_([INTERVIEWING, OFFERED, HIRED]))
+                .group_by(src)
+            )
+        )
+        out |= {
+            "kind": "ratios",
+            "rows": [
+                {
+                    "label": s,
+                    "from": t,
+                    "to": reached.get(s, 0),
+                    "percent": round(100.0 * reached.get(s, 0) / t, 1) if t else None,
+                }
+                for s, t in sorted(totals.items(), key=lambda x: -x[1])
+            ],
+        }
+
+    else:
+        raise HTTPException(status_code=501, detail="That report is listed but not implemented yet.")
+
+    return out
