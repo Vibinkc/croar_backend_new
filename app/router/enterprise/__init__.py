@@ -33,6 +33,7 @@ from .simulation import router as simulation_router
 from .skill_assessment import router as skill_assessment_router
 from .sourcing import router as sourcing_router
 from .sourcing_chat import router as sourcing_chat_router
+from .sourcing_hub import router as sourcing_hub_router
 from .survey import router as survey_router
 from .team import router as team_router
 from .upload import router as upload_router
@@ -46,6 +47,7 @@ router.include_router(applications_router)
 router.include_router(dashboard_router)
 router.include_router(jobs_router)
 router.include_router(career_page_router)
+router.include_router(sourcing_hub_router)
 router.include_router(job_inbox_router)
 router.include_router(job_workspace_router)
 router.include_router(integrations_router)
