@@ -24,6 +24,7 @@ from .job_inbox import router as job_inbox_router
 from .job_portals import router as job_portals_router
 from .job_workspace import router as job_workspace_router
 from .jobs import router as jobs_router
+from .matches import router as matches_router
 from .onboarding import router as onboarding_router
 from .onboarding_automation import router as onboarding_automation_router
 from .onboarding_templates import router as onboarding_templates_router
@@ -31,6 +32,7 @@ from .projects import router as projects_router
 from .public import router as public_router
 from .public_assessment import router as public_assessment_router
 from .public_onboarding import router as public_onboarding_router
+from .reports import router as reports_router
 from .simulation import router as simulation_router
 from .skill_assessment import router as skill_assessment_router
 from .sourcing import router as sourcing_router
@@ -50,6 +52,8 @@ router.include_router(dashboard_router)
 router.include_router(jobs_router)
 router.include_router(career_page_router)
 router.include_router(folders_router)
+router.include_router(matches_router)
+router.include_router(reports_router)
 router.include_router(candidate_search_router)
 router.include_router(sourcing_hub_router)
 router.include_router(job_inbox_router)
