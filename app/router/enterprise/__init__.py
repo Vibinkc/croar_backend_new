@@ -7,6 +7,7 @@ from .audio import router as audio_router
 from .automation import router as automation_router
 from .candidate_assessment import router as candidate_assessment_router
 from .candidate_interview import router as candidate_interview_router
+from .candidate_search import router as candidate_search_router
 from .candidates import router as candidates_router
 from .career_page import router as career_page_router
 from .communication import router as communication_router
@@ -14,6 +15,7 @@ from .company import router as company_router
 from .credits import router as credits_router
 from .dashboard import router as dashboard_router
 from .employees import router as employees_router
+from .folders import router as folders_router
 from .hiring_agent import router as hiring_agent_router
 from .integrations import router as integrations_router
 from .interview_automation import router as interview_automation_router
@@ -47,6 +49,8 @@ router.include_router(applications_router)
 router.include_router(dashboard_router)
 router.include_router(jobs_router)
 router.include_router(career_page_router)
+router.include_router(folders_router)
+router.include_router(candidate_search_router)
 router.include_router(sourcing_hub_router)
 router.include_router(job_inbox_router)
 router.include_router(job_workspace_router)

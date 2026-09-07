@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     redis_password: str | None = Field(None, validation_alias="REDIS_PASSWORD")
 
     @property
+    def use_sample_sourcing(self) -> bool:
+        """Whether the hub should serve invented candidates.
+
+        Two gates, not one. Fake people reaching a real pipeline means someone gets emailed
+        who should not be, so the flag has to be set deliberately AND the environment has to
+        not be production — a stray env var on a prod box changes nothing.
+        """
+        return self.sourcing_sample_data and self.app_env.lower() not in ("production", "prod")
+
+    @property
     def celery_broker_url(self) -> str:
         if self.redis_password:
             return f"redis://:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
@@ -39,6 +49,10 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(None, validation_alias="OPENAI_API_KEY")
     anthropic_api_key: str | None = Field(None, validation_alias="ANTHROPIC_API_KEY")
     sourcing_model: str = Field("claude-sonnet-5", validation_alias="SOURCING_MODEL")
+    # Serve a fixed cast of invented candidates from the Sourcing Hub instead of calling a
+    # live provider, so the screen can be reviewed without an API balance. Read through
+    # `use_sample_sourcing`, never directly: production ignores it whatever it is set to.
+    sourcing_sample_data: bool = Field(False, validation_alias="SOURCING_SAMPLE_DATA")
     # Model used by Croar Pilot (the agent) + the shared generation helpers.
     anthropic_model: str = Field("claude-sonnet-5", validation_alias="ANTHROPIC_MODEL")
     openai_model: str = Field("gpt-4o-mini", validation_alias="OPENAI_MODEL")

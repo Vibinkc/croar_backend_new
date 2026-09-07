@@ -88,13 +88,44 @@ async def hub_search(
     if not query:
         raise HTTPException(status_code=422, detail="Add at least one filter before searching.")
 
+    from app.core.settings import get_settings
     from app.router.enterprise.sourcing import _search_single_platform, backfill_contacts, sanitize_profiles
+    from app.services.enterprise.sourcing.base import SourcingUnavailable
 
-    profiles = sanitize_profiles(await _search_single_platform("claude", query, location, page, page_size))
+    # Sample mode short-circuits the provider entirely rather than standing in for it when it
+    # fails. A fallback would hide the very outage the 503 below exists to report, and the
+    # reviewer would never learn their key had run dry.
+    if get_settings().use_sample_sourcing:
+        from app.services.enterprise.sourcing.sample_data import sample_profiles
+
+        return {
+            "query": query,
+            "unused_filters": ["radius"] if radius else [],
+            "page": page,
+            "page_size": page_size,
+            # The hub reads this to label every row. Without it, invented people are
+            # indistinguishable from sourced ones the moment someone takes a screenshot.
+            "sample": True,
+            "results": sample_profiles(query, location, page_size),
+        }
+
+    # strict: one provider IS this search. A swallowed failure would reach the recruiter as an
+    # empty result list, which the hub then explains as filters that were too narrow — sending
+    # them to loosen filters that were never the problem.
+    try:
+        raw = await _search_single_platform("claude", query, location, page, page_size, strict=True)
+    except SourcingUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Sourcing is unavailable right now, so no results could be fetched. {exc.reason}",
+        ) from exc
+
+    profiles = sanitize_profiles(raw)
     profiles = await backfill_contacts(profiles)
 
     return {
         "query": query,
+        "sample": False,
         # Radius has nowhere to go: a web search cannot be bounded by kilometres the way a
         # geocoded database can. Returned so the UI can say so rather than pretend it applied.
         "unused_filters": ["radius"] if radius else [],
@@ -115,9 +146,14 @@ class ImportProfile(BaseModel):
     profile_url: str | None = None
     avatar_url: str | None = None
     skills: list[str] = []
+    education: list[dict[str, str]] = []
+    experience: list[dict[str, str]] = []
     ai_summary: str | None = None
     # Optional: create the candidate and put them on this job in one step.
     job_id: UUID | None = None
+    # Optional: file them in a folder in the same step. Independent of job_id — a folder is
+    # a bookmark, a job is a process, and a recruiter may well want one without the other.
+    folder_id: UUID | None = None
 
 
 @router.post("/import", status_code=201)
@@ -168,6 +204,8 @@ async def import_profile(
                 "company": body.company,
                 "profile_url": body.profile_url,
                 "avatar_url": body.avatar_url,
+                "education": body.education,
+                "experience": body.experience,
                 "ai_summary": body.ai_summary,
             },
         )
@@ -213,9 +251,39 @@ async def import_profile(
             await session.flush()
             application_id = application.id
 
+    folder_added = False
+    if body.folder_id:
+        from app.models.enterprise.folder import CandidateFolder, CandidateFolderMember
+
+        folder = (
+            await session.execute(
+                select(CandidateFolder).where(
+                    CandidateFolder.id == body.folder_id, CandidateFolder.company_id == company_id
+                )
+            )
+        ).scalar_one_or_none()
+        if not folder:
+            raise HTTPException(status_code=404, detail="Folder not found")
+        member = (
+            await session.execute(
+                select(CandidateFolderMember).where(
+                    CandidateFolderMember.folder_id == folder.id,
+                    CandidateFolderMember.candidate_id == candidate.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if not member:
+            session.add(
+                CandidateFolderMember(
+                    folder_id=folder.id, candidate_id=candidate.id, added_by=getattr(current_user, "id", None)
+                )
+            )
+            folder_added = True
+
     await session.commit()
     return {
         "candidate_id": str(candidate.id),
+        "folder_added": folder_added,
         "created_candidate": created,
         "application_id": str(application_id) if application_id else None,
         "already_on_job": already_on_job,

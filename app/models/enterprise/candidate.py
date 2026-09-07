@@ -1,6 +1,17 @@
 import uuid
 
-from sqlalchemy import TIMESTAMP, Boolean, ForeignKey, Integer, Numeric, SmallInteger, String, Text, func
+from sqlalchemy import (
+    TIMESTAMP,
+    Boolean,
+    ForeignKey,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
@@ -19,6 +30,7 @@ class ApplicationStatus(EnterpriseBase):
 
 class Candidate(EnterpriseBase):
     __tablename__ = "candidates"
+    __table_args__ = (UniqueConstraint("company_id", "email", name="uq_candidates_company_email"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("uuid_generate_v4()")
@@ -26,7 +38,10 @@ class Candidate(EnterpriseBase):
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    # Unique per company, not globally — see migration b8e5d3a1c927. A global unique here
+    # meant the first tenant to record an address locked every other tenant out of that
+    # person for good.
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     total_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)

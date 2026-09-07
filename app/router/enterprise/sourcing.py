@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from app.core.anthropic_llm import SyncClaudeOpenAI
 from app.core.dependencies import get_optional_company_id
 from app.services.enterprise.sourcing import profile_store
+from app.services.enterprise.sourcing.base import SourcingUnavailable
 from app.services.enterprise.sourcing_service import sourcing_service
 
 router = APIRouter(prefix="/sourcing", tags=["Sourcing"])
@@ -111,15 +112,34 @@ _DEFAULT_ENRICH_PROMPT = (
 
 
 async def _search_single_platform(
-    platform_name: str, query: str, location: str | None, page: int, page_size: int
+    platform_name: str, query: str, location: str | None, page: int, page_size: int, *, strict: bool = False
 ) -> list[dict[str, Any]]:
-    """Run one provider's (blocking) search in a thread, bounded by PLATFORM_TIMEOUT."""
+    """Run one provider's (blocking) search in a thread, bounded by PLATFORM_TIMEOUT.
+
+    Failures are swallowed by default: in a fan-out across providers, one dead provider must
+    not sink the others. Callers that run a SINGLE provider pass ``strict=True`` — there, that
+    provider is the whole search, and returning [] would report an outage as "no matches".
+    """
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(sourcing_service.search, platform_name, query, location, page, page_size),
             timeout=PLATFORM_TIMEOUT,
         )
+    except SourcingUnavailable:
+        if strict:
+            raise
+        print(f"DEBUG: Sourcing platform '{platform_name}' unavailable")
+        return []
+    except TimeoutError:
+        if strict:
+            raise SourcingUnavailable(
+                f"The sourcing provider did not respond within {PLATFORM_TIMEOUT} seconds."
+            ) from None
+        print(f"DEBUG: Sourcing platform '{platform_name}' timed out")
+        return []
     except Exception as e:
+        if strict:
+            raise SourcingUnavailable(str(e)[:300]) from e
         print(f"DEBUG: Sourcing platform '{platform_name}' skipped: {e}")
         return []
 
@@ -484,6 +504,10 @@ class SourcingProfile(BaseModel):
     following: int | str | None = None
     hireable: bool | None = None
     skills: list[str] = []
+    # Loose dicts on purpose: providers differ on how much of a history they can see, and a
+    # strict shape here would drop a partial education row that is still worth showing.
+    education: list[dict[str, str]] = []
+    experience: list[dict[str, str]] = []
     social_links: list[dict[str, str]] = []
     ai_summary: str | None = None
     raw_data: dict[str, Any] = {}

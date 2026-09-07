@@ -23,7 +23,7 @@ from loguru import logger
 
 from app.core.settings import get_settings
 
-from .base import SourcingProvider
+from .base import SourcingProvider, SourcingUnavailable
 
 _MAX_RESULTS = 20
 _MIN_TARGET = 15  # aim for a healthy batch even when the caller's page size is small
@@ -81,6 +81,36 @@ def _extract_json_array(text: str) -> list[dict[str, Any]]:
         return _salvage_objects(raw)
 
 
+def _rows(value: Any, keys: tuple[str, ...]) -> list[dict[str, str]]:
+    """Keep only the shape the UI reads, so a model that improvises extra keys cannot widen it.
+
+    Anything that is not a list of objects is dropped rather than coerced: a half-parsed
+    education entry on a profile card is worse than an honest empty card.
+    """
+    if not isinstance(value, list):
+        return []
+    out: list[dict[str, str]] = []
+    for row in value[:8]:
+        if not isinstance(row, dict):
+            continue
+        kept = {k: str(row[k]).strip() for k in keys if row.get(k)}
+        if kept:
+            out.append(kept)
+    return out
+
+
+def _reason(exc: Exception) -> str:
+    """Pull the provider's own explanation out of an SDK error for the recruiter to read.
+
+    The API returns its message nested in a JSON error body that the SDK stringifies into the
+    exception. Surfacing that text beats a generic failure: "your credit balance is too low"
+    tells an admin exactly what to do, where "sourcing failed" starts a support ticket.
+    """
+    text = str(exc)
+    match = re.search(r"'message':\s*'([^']+)'", text) or re.search(r'"message":\s*"([^"]+)"', text)
+    return match.group(1) if match else text[:300]
+
+
 def _to_profile(item: dict[str, Any], location: str | None, ai_sourced: bool) -> dict[str, Any] | None:
     name = str(item.get("full_name") or item.get("name") or "").strip()
     url = str(item.get("profile_url") or item.get("url") or "").strip()
@@ -92,6 +122,11 @@ def _to_profile(item: dict[str, Any], location: str | None, ai_sourced: bool) ->
     return {
         "full_name": name,
         "platform": "Claude",
+        # Education and experience are what the drawer's two big cards show. Asked for
+        # separately from the headline because "Frontend Developer at Div Solutions" is one
+        # line of prose, not a history someone can read down.
+        "education": _rows(item.get("education"), ("school", "degree", "field", "years")),
+        "experience": _rows(item.get("experience"), ("title", "company", "years")),
         "profile_url": url,
         "headline": item.get("headline") or item.get("title"),
         "location": item.get("location") or location,
@@ -145,7 +180,8 @@ class ClaudeSourcingProvider(SourcingProvider):
             f"to reach {n} DISTINCT real people (include strong AND reasonable matches). For EACH person, "
             "on its own numbered line, give:\n"
             "full name — current role/headline — company — location — public profile URL "
-            "(a real GitHub / LinkedIn / portfolio link) — one short reason they fit."
+            "(a real GitHub / LinkedIn / portfolio link) — education (school and degree) if the "
+            "profile states one — one short reason they fit."
             f"{avoid}"
         )
 
@@ -154,7 +190,9 @@ class ClaudeSourcingProvider(SourcingProvider):
         prompt = (
             "Convert the candidate list below into a JSON array. Output ONLY the array. Each object: "
             '{"full_name","headline","location","company","skills":[...],"profile_url","email"(or null),'
-            '"ai_summary"}. Skip any entry without a real profile URL.\n\nLIST:\n' + listing
+            '"ai_summary","education":[{"school","degree","field","years"}],'
+            '"experience":[{"title","company","years"}]}. Use [] for education or experience you do not actually know — do not invent a school or an employer. Skip any entry without a real profile URL.\n\nLIST:\n'
+            + listing
         )
         return _extract_json_array(self._call(prompt, system=_SYSTEM_JSON, use_web_search=False))
 
@@ -176,7 +214,7 @@ class ClaudeSourcingProvider(SourcingProvider):
         settings = get_settings()
         if not settings.anthropic_api_key:
             logger.warning("ANTHROPIC_API_KEY not set — Claude sourcing disabled.")
-            return []
+            raise SourcingUnavailable("Sourcing is not configured: no Anthropic API key is set.")
         # We return one batch (page 1). Avoid duplicate fan-out on later pages.
         if page and page > 1:
             return []
@@ -187,11 +225,13 @@ class ClaudeSourcingProvider(SourcingProvider):
         # short. Splitting search from formatting keeps the JSON reliable; the top-up smooths the
         # variance in how many people one search surfaces.
         collected: dict[str, dict[str, Any]] = {}
+        last_error: str | None = None
         for rnd in range(_MAX_ROUNDS):
             need = max(target - len(collected), 5)
             try:
                 rows = self._round(need, query, location, [p["full_name"] for p in collected.values()])
             except Exception as exc:
+                last_error = _reason(exc)
                 logger.warning(f"Claude sourcing round {rnd + 1} failed ({exc}).")
                 continue  # a failed/empty round shouldn't end the search — try again
             added = 0
@@ -217,6 +257,11 @@ class ClaudeSourcingProvider(SourcingProvider):
                     collected[p["profile_url"].rstrip("/").lower()] = p
                 logger.info(f"Claude sourcing knowledge fallback: {len(collected)} result(s)")
             except Exception as exc:
+                last_error = _reason(exc)
                 logger.warning(f"Claude sourcing knowledge fallback failed ({exc}).")
+
+        # Nothing found AND every attempt errored: that is an outage, not an empty search.
+        if not collected and last_error:
+            raise SourcingUnavailable(last_error)
 
         return list(collected.values())

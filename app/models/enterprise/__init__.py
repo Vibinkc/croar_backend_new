@@ -4,6 +4,7 @@ from .candidate import ApplicationStatus, Candidate, CandidateApplication
 from .communication import EmailLog, EmailTemplate, MailAutomation
 from .company import Company
 from .employee import Department, Employee
+from .folder import CandidateFolder, CandidateFolderMember
 from .hiring_agent import HiringAgent
 from .interview import Interview, InterviewAttempt, InterviewAutomation, InterviewSchedule
 from .job import JobPosting, JobRequirement, JobStatus
@@ -39,6 +40,8 @@ __all__ = [
     "AssessmentTemplate",
     "Candidate",
     "CandidateApplication",
+    "CandidateFolder",
+    "CandidateFolderMember",
     "Company",
     "Department",
     "EmailLog",
