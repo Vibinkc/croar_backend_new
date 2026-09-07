@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
@@ -85,6 +85,15 @@ async def create_assessment_automation(
     if data.get("send_at") and data["send_at"].tzinfo:
         data["send_at"] = data["send_at"].replace(tzinfo=None)
     db_auto = AssessmentAutomation(**data, company_id=cast("UUID", company_id))
+    # One automation per job per stage. Re-saving a job arms its rounds again, and
+    # trigger_automations looks these up by (job, stage) — a second row for the same pair would
+    # mean the candidate is emailed twice and the older settings silently win half the time.
+    await db.execute(
+        delete(AssessmentAutomation).where(
+            AssessmentAutomation.job_requirement_id == automation_in.job_requirement_id,
+            AssessmentAutomation.stage_index == automation_in.stage_index,
+        )
+    )
     db.add(db_auto)
     await db.commit()
 

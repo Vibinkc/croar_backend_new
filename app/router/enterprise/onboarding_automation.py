@@ -2,7 +2,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import selectinload
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
@@ -63,6 +63,15 @@ async def create_onboarding_automation(
         raise HTTPException(status_code=404, detail="Job not found")
 
     new_automation = OnboardingAutomation(**automation_in.model_dump(), company_id=company_id)
+    # One automation per job per stage. Re-saving a job arms its rounds again, and
+    # trigger_automations looks these up by (job, stage) — a second row for the same pair would
+    # mean the candidate is emailed twice and the older settings silently win half the time.
+    await db.execute(
+        delete(OnboardingAutomation).where(
+            OnboardingAutomation.job_requirement_id == automation_in.job_requirement_id,
+            OnboardingAutomation.stage_index == automation_in.stage_index,
+        )
+    )
     db.add(new_automation)
     await db.commit()
     await db.refresh(new_automation)

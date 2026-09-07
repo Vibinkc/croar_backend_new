@@ -3,7 +3,7 @@ from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.core.dependencies import DBSessionDep, PermissionChecker
 from app.models.enterprise.communication import MailAutomation
@@ -58,6 +58,15 @@ async def create_automation(
         data["send_at"] = data["send_at"].astimezone(UTC).replace(tzinfo=None)
 
     automation = MailAutomation(**data, company_id=cast("UUID", company_id))
+    # One automation per job per stage. Re-saving a job arms its rounds again, and
+    # trigger_automations looks these up by (job, stage) — a second row for the same pair would
+    # mean the candidate is emailed twice and the older settings silently win half the time.
+    await session.execute(
+        delete(MailAutomation).where(
+            MailAutomation.job_requirement_id == request.job_requirement_id,
+            MailAutomation.stage_index == request.stage_index,
+        )
+    )
     session.add(automation)
     await session.commit()
     await session.refresh(automation)
