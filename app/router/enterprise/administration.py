@@ -71,30 +71,40 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Account",
+                "icon": "office-building-cog",
                 "description": "Edit the account displayed name and logo.",
                 "href": "/enterprise/administration/account-and-users/account",
             },
             {
                 "name": "Users",
+                "icon": "account-multiple",
                 "description": "Manage users under your account.",
                 "href": "/enterprise/administration/account-and-users/users",
             },
             {
                 "name": "Roles & Permissions",
+                "icon": "shield-account",
                 "description": "Manage roles and permissions for users.",
                 "href": "/enterprise/administration/account-and-users/roles",
             },
             {
                 "name": "Partner companies",
+                "icon": "handshake",
                 "description": "Client companies this consultancy recruits for.",
                 "href": "/enterprise/administration/account-and-users/partners",
             },
             {
                 "name": "Guests",
+                "icon": "account-eye",
                 "description": "Manage guests under each department.",
                 "unavailable": NO_GUESTS,
             },
-            {"name": "Groups", "description": "Arrange users into teams.", "unavailable": NO_GROUPS},
+            {
+                "name": "Groups",
+                "icon": "account-group",
+                "description": "Arrange users into teams.",
+                "unavailable": NO_GROUPS,
+            },
         ],
     },
     {
@@ -105,21 +115,25 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Logs",
+                "icon": "clipboard-text-clock",
                 "description": "View all actions taken by users on your account.",
                 "href": "/enterprise/administration/logs",
             },
             {
                 "name": "Archive Data",
+                "icon": "archive-arrow-down",
                 "description": "Archive, restore, or permanently delete records.",
                 "href": "/enterprise/administration/archive",
             },
             {
                 "name": "Data Import",
+                "icon": "database-import",
                 "description": "Import candidates from a CSV file.",
                 "href": "/enterprise/administration/data-management/import",
             },
             {
                 "name": "GDPR Tracking",
+                "icon": "shield-check",
                 "description": "Track candidate GDPR consent.",
                 "href": "/enterprise/administration/data-management/gdpr",
             },
@@ -133,11 +147,13 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Integrations",
+                "icon": "puzzle",
                 "description": "Assessment, interview and sourcing tools.",
                 "href": "/enterprise/administration/integrations/tools",
             },
             {
                 "name": "Mailboxes",
+                "icon": "email-sync",
                 "description": "Connect the mailbox that sequences send from.",
                 "href": "/enterprise/communication",
             },
@@ -151,16 +167,19 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Credits",
+                "icon": "wallet",
                 "description": "Wallet balance and the ledger of what spent it.",
                 "href": "/enterprise/administration/credits/wallet",
             },
             {
                 "name": "Plans & seats",
+                "icon": "card-account-details",
                 "description": "Subscription tiers and seat count.",
                 "unavailable": NO_SUBSCRIPTION,
             },
             {
                 "name": "Payment methods & invoices",
+                "icon": "credit-card-outline",
                 "description": "Billing history.",
                 "unavailable": NO_SUBSCRIPTION,
             },
@@ -174,16 +193,19 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Job Posts",
+                "icon": "briefcase-outline",
                 "description": "What appears on your public page.",
                 "href": "/enterprise/career-page",
             },
             {
                 "name": "Career Page Settings",
+                "icon": "web-plus",
                 "description": "Branding, description and visibility.",
                 "href": "/enterprise/career-page/settings",
             },
             {
                 "name": "Embed & Share",
+                "icon": "code-tags",
                 "description": "Embed the board on your own site.",
                 "href": "/enterprise/career-page/embed",
             },
@@ -197,21 +219,25 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Free Job Boards",
+                "icon": "share-variant",
                 "description": "Enable posting across a wide range of free job boards.",
                 "href": "/enterprise/administration/job-boards/portals",
             },
             {
                 "name": "Premium posting - Users",
+                "icon": "account-star",
                 "description": "Who may post to paid channels.",
                 "unavailable": NO_PREMIUM_BOARDS,
             },
             {
                 "name": "Premium posting - History",
+                "icon": "history",
                 "description": "Past paid postings.",
                 "unavailable": NO_PREMIUM_BOARDS,
             },
             {
                 "name": "My Own Contracts",
+                "icon": "file-sign",
                 "description": "Distribute via your own board contracts.",
                 "unavailable": NO_PREMIUM_BOARDS,
             },
@@ -225,16 +251,19 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "General",
+                "icon": "file-document-outline",
                 "description": "The default resume shown to guests.",
                 "unavailable": NO_RESUMES,
             },
             {
                 "name": "Branded Resume",
+                "icon": "palette-outline",
                 "description": "Add your logo and watermark.",
                 "unavailable": NO_RESUMES,
             },
             {
                 "name": "Custom Resume",
+                "icon": "file-cog-outline",
                 "description": "Edit custom resume settings.",
                 "unavailable": NO_RESUMES,
             },
@@ -248,40 +277,52 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Templates",
+                "icon": "file-multiple-outline",
                 "description": "Email, assessment, interview and onboarding templates.",
                 "href": "/enterprise/administration/customization/templates",
             },
             {
                 "name": "Jobs",
+                "icon": "briefcase-edit-outline",
                 "description": "Pipeline stages are set per job, on the Rounds tab.",
                 "href": "/enterprise/jobs",
             },
             {
                 "name": "Automations",
+                "icon": "robot-outline",
                 "description": "What fires automatically at each stage.",
                 "href": "/enterprise/automation",
             },
             {
                 "name": "Dashboard Widgets",
+                "icon": "view-dashboard-outline",
                 "description": "Customise what the dashboard shows.",
                 "unavailable": NO_DASHBOARD_WIDGETS,
             },
             {
                 "name": "Candidates",
+                "icon": "account-box-outline",
                 "description": "Custom fields, tags and industries.",
                 "unavailable": NO_CUSTOM_FIELDS,
             },
             {
                 "name": "Departments",
+                "icon": "sitemap-outline",
                 "description": "Department tags, visibility and custom fields.",
                 "unavailable": NO_DEPARTMENTS,
             },
             {
                 "name": "Contacts and Guests",
+                "icon": "card-account-mail-outline",
                 "description": "Contact and guest custom fields.",
                 "unavailable": NO_CONTACTS,
             },
-            {"name": "Matches", "description": "Custom fields for matches.", "unavailable": NO_CUSTOM_FIELDS},
+            {
+                "name": "Matches",
+                "icon": "target-variant",
+                "description": "Custom fields for matches.",
+                "unavailable": NO_CUSTOM_FIELDS,
+            },
         ],
     },
     {
@@ -292,98 +333,127 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Duplicate Management System",
+                "icon": "content-duplicate",
                 "description": "Identify and merge duplicate candidate profiles.",
                 "href": "/enterprise/administration/duplicates",
             },
             {
                 "name": "Candidate Matches",
+                "icon": "target-account",
                 "description": "Every candidate on every job, in one list.",
                 "href": "/enterprise/matches",
             },
             {
                 "name": "Employment Management System",
+                "icon": "badge-account-horizontal-outline",
                 "description": "Manage employed candidates.",
                 "href": "/enterprise/employees",
             },
-            {"name": "Reports", "description": "The reporting suite.", "href": "/enterprise/reports"},
+            {
+                "name": "Reports",
+                "icon": "chart-box-outline",
+                "description": "The reporting suite.",
+                "href": "/enterprise/reports",
+            },
             {
                 "name": "Automations",
+                "icon": "robot-outline",
                 "description": "Automate key actions with custom workflows.",
                 "href": "/enterprise/automation",
             },
             {
                 "name": "Applicant Email Automations",
+                "icon": "email-fast-outline",
                 "description": "Automated email to applicants.",
                 "href": "/enterprise/automation/mail",
             },
             {
                 "name": "AI Interviewer",
+                "icon": "microphone-message",
                 "description": "AI-powered interviews to assess candidates.",
                 "href": "/enterprise/automation/interview",
             },
             {
                 "name": "Croar AI",
+                "icon": "brain",
                 "description": "Croar Pilot and the AI that drafts, screens and scores.",
                 "href": "/enterprise/croar-pilot",
             },
             {
                 "name": "Email",
+                "icon": "email-outline",
                 "description": "Your inbox, email actions and candidate sharing.",
                 "href": "/enterprise/communication",
             },
             {
                 "name": "Mass Emailing",
+                "icon": "email-multiple-outline",
                 "description": "Sequences and campaigns to many candidates.",
                 "href": "/enterprise/sourcing/sequences",
             },
             {
                 "name": "Candidate Profile Enrichment",
+                "icon": "account-details",
                 "description": "Enrichment runs at import in the Sourcing Hub.",
                 "href": "/enterprise/sourcing/hub",
             },
             {
                 "name": "Find Contact Details",
+                "icon": "card-search-outline",
                 "description": "Contact backfill runs inside Sourcing Hub search.",
                 "href": "/enterprise/sourcing/hub",
             },
             {
                 "name": "Sourcing Hub credits",
+                "icon": "cash-multiple",
                 "description": "Track what sourcing has spent.",
                 "href": "/enterprise/administration/credits/wallet",
             },
             {
                 "name": "Vendor Management System",
+                "icon": "domain",
                 "description": "Collaborate with your vendors.",
                 "unavailable": NO_VENDORS,
             },
             {
                 "name": "Job Requisitions",
+                "icon": "clipboard-check-outline",
                 "description": "Requisition forms and approval.",
                 "unavailable": NO_REQUISITIONS,
             },
             {
                 "name": "Referral Management System",
+                "icon": "account-arrow-right",
                 "description": "Employee referrals.",
                 "unavailable": NO_REFERRAL,
             },
             {
                 "name": "Contacts and Guests Menu",
+                "icon": "contacts-outline",
                 "description": "Contacts and guests in one menu.",
                 "unavailable": NO_CONTACTS,
             },
-            {"name": "SMS", "description": "Send and receive SMS.", "unavailable": NO_SMS},
+            {
+                "name": "SMS",
+                "icon": "message-text-outline",
+                "description": "Send and receive SMS.",
+                "unavailable": NO_SMS,
+            },
             {
                 "name": "Open API",
+                "icon": "api",
                 "description": "Build your own custom integrations.",
                 "unavailable": NO_OPEN_API,
             },
             {
                 "name": "Candidate Scorecards",
+                "icon": "clipboard-list-outline",
                 "description": "Standardise interview reviews.",
                 "unavailable": NO_SCORECARDS,
             },
             {
                 "name": "Premium Guest Portal",
+                "icon": "account-key-outline",
                 "description": "White-label the guest portal.",
                 "unavailable": NO_GUESTS,
             },
@@ -397,11 +467,13 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "In-app guide",
+                "icon": "book-open-page-variant-outline",
                 "description": "The product guide, openable from any page.",
                 "href": "/enterprise/dashboard",
             },
             {
                 "name": "Grant support access",
+                "icon": "lifebuoy",
                 "description": "Let a support engineer into your account.",
                 "unavailable": NO_SUPPORT_ACCESS,
             },
