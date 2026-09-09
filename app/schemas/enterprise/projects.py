@@ -14,7 +14,10 @@ class ProjectBase(BaseModel):
 
 
 class ProjectCreate(ProjectBase):
-    company_id: UUID
+    # Optional, and ignored. The router sets this from the caller's token and discards
+    # whatever arrives in the body, so requiring it only forced every client to send a
+    # value that was thrown away — and made a 422 the first thing a new caller hit.
+    company_id: UUID | None = None
 
 
 class ProjectUpdate(BaseModel):
