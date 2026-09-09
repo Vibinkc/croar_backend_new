@@ -36,36 +36,52 @@ from app.models.shared.constants import ModuleScope, PermissionAction
 
 router = APIRouter(prefix="/administration", tags=["Administration"])
 
-NO_IMPORT = "Croar has no bulk importer yet. Candidates arrive via CV upload, the apply form, the job inbox or the Sourcing Hub."
-NO_GDPR = "Croar does not record a consent flag on a candidate, so there is nothing to track."
+# Reasons, written once and reused. Each says what is missing rather than "not supported",
+# because the gap is the useful part: it tells you what building it would take.
+NO_IMPORT = "Croar has no bulk importer. Candidates arrive via CV upload, the apply form, the job inbox or the Sourcing Hub."
+NO_GDPR = "Croar records no consent flag on a candidate, so there is nothing to track."
 NO_GUESTS = "Croar has team members and roles, but no external guest accounts scoped to a department."
-NO_SUBSCRIPTION = "Croar meters usage with a credit wallet rather than a subscription, so there are no plans or invoices to manage."
-NO_RESUME_BRANDING = "Croar stores the original CV; it does not re-render candidates onto a branded template."
-NO_ENRICH = "Profile enrichment runs inside the Sourcing Hub at import time, not as an account-level setting."
+NO_GROUPS = "Croar assigns roles to users individually; there are no user groups to arrange them into."
+NO_SUBSCRIPTION = "Croar meters usage with a credit wallet rather than seats and plans, so there is nothing to subscribe to."
+NO_PREMIUM_BOARDS = "Croar posts to free boards and feeds. There is no paid-posting contract, so no per-user permission or purchase history."
+NO_RESUMES = "Croar stores and shows the original CV. It does not re-render candidates onto a branded or custom template."
+NO_CUSTOM_FIELDS = "Croar has no custom-field system; candidate and job fields are fixed by the schema."
+NO_DASHBOARD_WIDGETS = "Croar dashboard is a fixed layout, not a widget board."
+NO_DEPARTMENTS = "Croar stores a department as free text on a job and as a table for employees, and the two are unrelated - there is no single department to customise."
+NO_CONTACTS = "Croar has candidates and team members, but no contacts or guests as separate record types."
 NO_REFERRAL = "Croar has no referral scheme, and no referrer field on a candidate."
+NO_SMS = "Croar reaches candidates by email only. There is no SMS gateway connected, so there is nothing to enable or bill."
+NO_OPEN_API = "Croar has no public API keys for customer-built integrations."
+NO_SCORECARDS = (
+    "Croar scores candidates through assessments and AI match scores, not structured interview scorecards."
+)
+NO_VENDORS = "The nearest equivalent is Partner companies, under Account and Users."
+NO_REQUISITIONS = "Croar creates jobs directly; there is no separate requisition form or approval step."
+NO_SUPPORT_ACCESS = "Croar has no mechanism to grant an external support team temporary access to an account."
 
-# Every item Manatal lists, mapped to the Croar page that already does it — or to the reason it
-# cannot be done. `href` is a frontend route; the page links straight through.
+# Manatal Administration, section for section and item for item - checked against their live
+# account rather than assumed. Each item points at the Croar screen that does the job, or says
+# why there is none.
 SECTIONS: list[dict[str, Any]] = [
     {
         "id": "account-and-users",
-        "name": "Account & Users",
-        "description": "Manage your account details, users, roles and permissions.",
+        "name": "Account and Users",
+        "description": "Manage your account details, users, groups and guests.",
         "icon": "account-cog",
         "items": [
             {
                 "name": "Account",
-                "description": "Edit your organisation's name, logo and defaults.",
+                "description": "Edit the account displayed name and logo.",
                 "href": "/enterprise/administration/account-and-users/account",
             },
             {
                 "name": "Users",
-                "description": "Manage the people with access to this account.",
+                "description": "Manage users under your account.",
                 "href": "/enterprise/administration/account-and-users/users",
             },
             {
                 "name": "Roles & Permissions",
-                "description": "Manage roles and what each one may do.",
+                "description": "Manage roles and permissions for users.",
                 "href": "/enterprise/administration/account-and-users/roles",
             },
             {
@@ -75,33 +91,34 @@ SECTIONS: list[dict[str, Any]] = [
             },
             {
                 "name": "Guests",
-                "description": "External guests scoped to a department.",
+                "description": "Manage guests under each department.",
                 "unavailable": NO_GUESTS,
             },
+            {"name": "Groups", "description": "Arrange users into teams.", "unavailable": NO_GROUPS},
         ],
     },
     {
         "id": "data-management",
         "name": "Data Management",
-        "description": "Audit logs, archived records, imports and consent.",
+        "description": "Track consent and view logs. Import candidates, jobs and more.",
         "icon": "database-cog",
         "items": [
             {
                 "name": "Logs",
-                "description": "Every action taken on your jobs and candidates.",
+                "description": "View all actions taken by users on your account.",
                 "href": "/enterprise/administration/logs",
             },
             {
                 "name": "Archive Data",
-                "description": "Restore or permanently delete archived jobs and candidates.",
+                "description": "Archive, restore, or permanently delete records.",
                 "href": "/enterprise/administration/archive",
             },
             {
                 "name": "Data Import",
-                "description": "Bulk-import candidates, jobs and more.",
+                "description": "Import candidates, jobs, departments and more.",
                 "unavailable": NO_IMPORT,
             },
-            {"name": "GDPR Tracking", "description": "Track candidate consent.", "unavailable": NO_GDPR},
+            {"name": "GDPR Tracking", "description": "Track candidate GDPR consent.", "unavailable": NO_GDPR},
         ],
     },
     {
@@ -112,30 +129,35 @@ SECTIONS: list[dict[str, Any]] = [
         "items": [
             {
                 "name": "Integrations",
-                "description": "Assessment, interview and mailbox connections.",
+                "description": "Assessment, interview and sourcing tools.",
                 "href": "/enterprise/administration/integrations/tools",
             },
             {
                 "name": "Mailboxes",
-                "description": "Connect the mailbox sequences send from.",
+                "description": "Connect the mailbox that sequences send from.",
                 "href": "/enterprise/communication",
             },
         ],
     },
     {
         "id": "subscription",
-        "name": "Credits & Usage",
-        "description": "Your credit wallet and what has been spent.",
+        "name": "Subscription",
+        "description": "Manage your subscription, payment methods, and access your invoices.",
         "icon": "wallet",
         "items": [
             {
                 "name": "Credits",
-                "description": "Wallet balance and the ledger of what used it.",
+                "description": "Wallet balance and the ledger of what spent it.",
                 "href": "/enterprise/administration/credits/wallet",
             },
             {
-                "name": "Plans & Invoices",
-                "description": "Subscription tiers and billing history.",
+                "name": "Plans & seats",
+                "description": "Subscription tiers and seat count.",
+                "unavailable": NO_SUBSCRIPTION,
+            },
+            {
+                "name": "Payment methods & invoices",
+                "description": "Billing history.",
                 "unavailable": NO_SUBSCRIPTION,
             },
         ],
@@ -166,33 +188,58 @@ SECTIONS: list[dict[str, Any]] = [
     {
         "id": "job-boards",
         "name": "Job Boards",
-        "description": "Manage the boards your jobs are distributed to.",
+        "description": "Manage your free job boards and premium posting.",
         "icon": "share-variant",
         "items": [
             {
-                "name": "Job Portals",
-                "description": "Free boards, feeds and partner-gated boards.",
+                "name": "Free Job Boards",
+                "description": "Enable posting across a wide range of free job boards.",
                 "href": "/enterprise/administration/job-boards/portals",
-            }
+            },
+            {
+                "name": "Premium posting - Users",
+                "description": "Who may post to paid channels.",
+                "unavailable": NO_PREMIUM_BOARDS,
+            },
+            {
+                "name": "Premium posting - History",
+                "description": "Past paid postings.",
+                "unavailable": NO_PREMIUM_BOARDS,
+            },
+            {
+                "name": "My Own Contracts",
+                "description": "Distribute via your own board contracts.",
+                "unavailable": NO_PREMIUM_BOARDS,
+            },
         ],
     },
     {
         "id": "resumes",
         "name": "Resumes",
-        "description": "How candidate CVs are stored and presented.",
+        "description": "Set up your candidate resumes via branded and custom resume features.",
         "icon": "file-document-outline",
         "items": [
             {
-                "name": "Branded resumes",
-                "description": "Re-render candidates onto your own template.",
-                "unavailable": NO_RESUME_BRANDING,
-            }
+                "name": "General",
+                "description": "The default resume shown to guests.",
+                "unavailable": NO_RESUMES,
+            },
+            {
+                "name": "Branded Resume",
+                "description": "Add your logo and watermark.",
+                "unavailable": NO_RESUMES,
+            },
+            {
+                "name": "Custom Resume",
+                "description": "Edit custom resume settings.",
+                "unavailable": NO_RESUMES,
+            },
         ],
     },
     {
         "id": "customization",
         "name": "Customization",
-        "description": "Customise jobs, templates and what the dashboard shows.",
+        "description": "Customize your jobs, departments, candidates and dashboard.",
         "icon": "tune",
         "items": [
             {
@@ -201,34 +248,141 @@ SECTIONS: list[dict[str, Any]] = [
                 "href": "/enterprise/administration/customization/templates",
             },
             {
-                "name": "Pipeline stages",
-                "description": "Stages are set per job, on the job's own Rounds tab.",
+                "name": "Jobs",
+                "description": "Pipeline stages are set per job, on the Rounds tab.",
                 "href": "/enterprise/jobs",
             },
             {
-                "name": "Automation",
+                "name": "Automations",
                 "description": "What fires automatically at each stage.",
                 "href": "/enterprise/automation",
             },
+            {
+                "name": "Dashboard Widgets",
+                "description": "Customise what the dashboard shows.",
+                "unavailable": NO_DASHBOARD_WIDGETS,
+            },
+            {
+                "name": "Candidates",
+                "description": "Custom fields, tags and industries.",
+                "unavailable": NO_CUSTOM_FIELDS,
+            },
+            {
+                "name": "Departments",
+                "description": "Department tags, visibility and custom fields.",
+                "unavailable": NO_DEPARTMENTS,
+            },
+            {
+                "name": "Contacts and Guests",
+                "description": "Contact and guest custom fields.",
+                "unavailable": NO_CONTACTS,
+            },
+            {"name": "Matches", "description": "Custom fields for matches.", "unavailable": NO_CUSTOM_FIELDS},
         ],
     },
     {
         "id": "features",
         "name": "Features",
-        "description": "Duplicate detection, enrichment and other account-level switches.",
+        "description": "Duplicate detection, AI, automations and other account-level capabilities.",
         "icon": "toggle-switch",
         "items": [
             {
-                "name": "Duplicate detection",
-                "description": "Find candidates that look like the same person.",
+                "name": "Duplicate Management System",
+                "description": "Identify and merge duplicate candidate profiles.",
                 "href": "/enterprise/administration/duplicates",
             },
             {
-                "name": "Profile enrichment",
-                "description": "Fill profiles from public sources.",
-                "unavailable": NO_ENRICH,
+                "name": "Candidate Matches",
+                "description": "Every candidate on every job, in one list.",
+                "href": "/enterprise/matches",
             },
-            {"name": "Referrals", "description": "Employee referral scheme.", "unavailable": NO_REFERRAL},
+            {
+                "name": "Employment Management System",
+                "description": "Manage employed candidates.",
+                "href": "/enterprise/employees",
+            },
+            {"name": "Reports", "description": "The reporting suite.", "href": "/enterprise/reports"},
+            {
+                "name": "Automations",
+                "description": "Automate key actions with custom workflows.",
+                "href": "/enterprise/automation",
+            },
+            {
+                "name": "Applicant Email Automations",
+                "description": "Automated email to applicants.",
+                "href": "/enterprise/automation/mail",
+            },
+            {
+                "name": "AI Interviewer",
+                "description": "AI-powered interviews to assess candidates.",
+                "href": "/enterprise/automation/interview",
+            },
+            {
+                "name": "Croar AI",
+                "description": "Croar Pilot and the AI that drafts, screens and scores.",
+                "href": "/enterprise/croar-pilot",
+            },
+            {
+                "name": "Email",
+                "description": "Your inbox, email actions and candidate sharing.",
+                "href": "/enterprise/communication",
+            },
+            {
+                "name": "Mass Emailing",
+                "description": "Sequences and campaigns to many candidates.",
+                "href": "/enterprise/sourcing/sequences",
+            },
+            {
+                "name": "Candidate Profile Enrichment",
+                "description": "Enrichment runs at import in the Sourcing Hub.",
+                "href": "/enterprise/sourcing/hub",
+            },
+            {
+                "name": "Find Contact Details",
+                "description": "Contact backfill runs inside Sourcing Hub search.",
+                "href": "/enterprise/sourcing/hub",
+            },
+            {
+                "name": "Sourcing Hub credits",
+                "description": "Track what sourcing has spent.",
+                "href": "/enterprise/administration/credits/wallet",
+            },
+            {
+                "name": "Vendor Management System",
+                "description": "Collaborate with your vendors.",
+                "unavailable": NO_VENDORS,
+            },
+            {
+                "name": "Job Requisitions",
+                "description": "Requisition forms and approval.",
+                "unavailable": NO_REQUISITIONS,
+            },
+            {
+                "name": "Referral Management System",
+                "description": "Employee referrals.",
+                "unavailable": NO_REFERRAL,
+            },
+            {
+                "name": "Contacts and Guests Menu",
+                "description": "Contacts and guests in one menu.",
+                "unavailable": NO_CONTACTS,
+            },
+            {"name": "SMS", "description": "Send and receive SMS.", "unavailable": NO_SMS},
+            {
+                "name": "Open API",
+                "description": "Build your own custom integrations.",
+                "unavailable": NO_OPEN_API,
+            },
+            {
+                "name": "Candidate Scorecards",
+                "description": "Standardise interview reviews.",
+                "unavailable": NO_SCORECARDS,
+            },
+            {
+                "name": "Premium Guest Portal",
+                "description": "White-label the guest portal.",
+                "unavailable": NO_GUESTS,
+            },
         ],
     },
     {
@@ -241,7 +395,12 @@ SECTIONS: list[dict[str, Any]] = [
                 "name": "In-app guide",
                 "description": "The product guide, openable from any page.",
                 "href": "/enterprise/dashboard",
-            }
+            },
+            {
+                "name": "Grant support access",
+                "description": "Let a support engineer into your account.",
+                "unavailable": NO_SUPPORT_ACCESS,
+            },
         ],
     },
 ]
