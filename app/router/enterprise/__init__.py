@@ -19,6 +19,8 @@ from .dashboard import router as dashboard_router
 from .data_management import router as data_management_router
 from .employees import router as employees_router
 from .folders import router as folders_router
+from .guests import portal as guest_portal_router
+from .guests import router as guests_router
 from .hiring_agent import router as hiring_agent_router
 from .integrations import router as integrations_router
 from .interview_automation import router as interview_automation_router
@@ -44,6 +46,7 @@ from .sourcing_hub import router as sourcing_hub_router
 from .survey import router as survey_router
 from .team import router as team_router
 from .upload import router as upload_router
+from .user_groups import router as user_groups_router
 from .x360 import router as x360_router
 
 router = APIRouter()
@@ -57,6 +60,9 @@ router.include_router(career_page_router)
 router.include_router(activities_router)
 router.include_router(administration_router)
 router.include_router(data_management_router)
+router.include_router(guests_router)
+router.include_router(guest_portal_router)
+router.include_router(user_groups_router)
 router.include_router(folders_router)
 router.include_router(matches_router)
 router.include_router(reports_router)

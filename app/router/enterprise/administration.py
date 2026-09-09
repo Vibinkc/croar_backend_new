@@ -40,8 +40,9 @@ router = APIRouter(prefix="/administration", tags=["Administration"])
 # because the gap is the useful part: it tells you what building it would take.
 NO_IMPORT = "Croar has no bulk importer. Candidates arrive via CV upload, the apply form, the job inbox or the Sourcing Hub."
 NO_GDPR = "Croar records no consent flag on a candidate, so there is nothing to track."
-NO_GUESTS = "Croar has team members and roles, but no external guest accounts scoped to a department."
-NO_GROUPS = "Croar assigns roles to users individually; there are no user groups to arrange them into."
+NO_GUEST_BRANDING = (
+    "Croar has a guest portal, but it is not white-labelled: guests see Croar chrome, not your own."
+)
 NO_SUBSCRIPTION = "Croar meters usage with a credit wallet rather than seats and plans, so there is nothing to subscribe to."
 NO_PREMIUM_BOARDS = "Croar posts to free boards and feeds. There is no paid-posting contract, so no per-user permission or purchase history."
 NO_RESUMES = "Croar stores and shows the original CV. It does not re-render candidates onto a branded or custom template."
@@ -97,13 +98,13 @@ SECTIONS: list[dict[str, Any]] = [
                 "name": "Guests",
                 "icon": "account-eye",
                 "description": "Manage guests under each department.",
-                "unavailable": NO_GUESTS,
+                "href": "/enterprise/administration/account-and-users/guests",
             },
             {
                 "name": "Groups",
                 "icon": "account-group",
                 "description": "Arrange users into teams.",
-                "unavailable": NO_GROUPS,
+                "href": "/enterprise/administration/account-and-users/groups",
             },
         ],
     },
@@ -455,7 +456,7 @@ SECTIONS: list[dict[str, Any]] = [
                 "name": "Premium Guest Portal",
                 "icon": "account-key-outline",
                 "description": "White-label the guest portal.",
-                "unavailable": NO_GUESTS,
+                "unavailable": NO_GUEST_BRANDING,
             },
         ],
     },

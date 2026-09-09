@@ -6,6 +6,7 @@ from .communication import EmailLog, EmailTemplate, MailAutomation
 from .company import Company
 from .employee import Department, Employee
 from .folder import CandidateFolder, CandidateFolderMember
+from .guest import GUEST_ACCESS_LEVELS, GUEST_STATUSES, Guest, guest_jobs
 from .hiring_agent import HiringAgent
 from .interview import Interview, InterviewAttempt, InterviewAutomation, InterviewSchedule
 from .job import JobPosting, JobRequirement, JobStatus
@@ -23,6 +24,7 @@ from .project import Project, project_members
 from .simulation import SimulationScenario, SimulationSession
 from .student import Student
 from .survey import SurveyInstance, SurveyInvite, SurveyQuestion, SurveyResponse, SurveyTemplate, SurveyType
+from .user_group import UserGroup, user_group_members, user_group_roles
 from .user_role import EnterpriseUser
 from .x360 import (
     X360AssessmentAssignment,
@@ -36,6 +38,8 @@ from .x360 import (
 
 __all__ = [
     "ACTIVITY_TYPES",
+    "GUEST_ACCESS_LEVELS",
+    "GUEST_STATUSES",
     "Activity",
     "ApplicationStatus",
     "AssessmentAttempt",
@@ -52,6 +56,7 @@ __all__ = [
     "Employee",
     "EnterpriseBase",
     "EnterpriseUser",
+    "Guest",
     "HiringAgent",
     "Interview",
     "InterviewAttempt",
@@ -79,6 +84,7 @@ __all__ = [
     "SurveyResponse",
     "SurveyTemplate",
     "SurveyType",
+    "UserGroup",
     "X360AssessmentAssignment",
     "X360AssessmentCycle",
     "X360AssessmentResponse",
@@ -87,7 +93,10 @@ __all__ = [
     "X360Question",
     "X360TemplateQuestion",
     "activity_assignees",
+    "guest_jobs",
     "project_members",
+    "user_group_members",
+    "user_group_roles",
 ]
 
 # Register payroll models so SQLAlchemy can resolve Employee.salary_structures

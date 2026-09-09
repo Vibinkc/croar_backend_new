@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db, get_db_connect
 from app.core.settings import get_settings
 from app.models.enterprise.company import Company
+from app.models.enterprise.user_group import UserGroup
 from app.models.enterprise.user_role import EnterpriseUser
 from app.models.shared.auth import Role
 from app.models.shared.constants import ModuleScope, PermissionAction
@@ -54,6 +55,10 @@ async def get_current_user(
         select(EnterpriseUser)
         .options(
             selectinload(EnterpriseUser.roles).selectinload(Role.permissions),
+            # Groups grant roles to everyone in them, so a permission check has to see both.
+            # Loaded here, once, rather than lazily inside the checker: a lazy load inside a
+            # sync __call__ on an async session raises rather than fetching.
+            selectinload(EnterpriseUser.groups).selectinload(UserGroup.roles).selectinload(Role.permissions),
             # Load the company AND its parent so a sub-org's login can be blocked
             # when its parent consultancy is deactivated (cascade).
             selectinload(EnterpriseUser.company).selectinload(Company.parent),
@@ -145,9 +150,19 @@ class PermissionChecker:
         # SuperAdmins with the SUPER_ADMIN role often bypass checks or have all perms
         # In our seed script, we assigned all perms to the SUPER_ADMIN role.
 
-        # Check all roles for the required permission
+        # A user's effective roles are their own, plus every role of every group they are in.
+        # This is a union and never a subtraction: a group can only add. Leaving one takes away
+        # what the group gave and nothing that was granted directly, so "why can this person not
+        # see X" stays answerable without simulating the whole membership graph.
+        #
+        # Deleted groups are skipped, which is what makes removing a group take effect on the
+        # very next request rather than whenever a cache happens to expire.
+        roles = list(cast("list[Role]", current_user.roles))
+        for group in getattr(current_user, "groups", None) or []:
+            if getattr(group, "deleted_at", None) is None:
+                roles.extend(group.roles)
+
         has_permission = False
-        roles = cast("list[Role]", current_user.roles)
         for role in roles:
             for perm in role.permissions:
                 if perm.module == self.module and perm.action == self.action:
