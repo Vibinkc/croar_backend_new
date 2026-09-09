@@ -4,6 +4,15 @@ from .base import EnterpriseBase
 from .candidate import ApplicationStatus, Candidate, CandidateApplication
 from .communication import EmailLog, EmailTemplate, MailAutomation
 from .company import Company
+from .customization import (
+    CUSTOM_FIELD_ENTITIES,
+    CUSTOM_FIELD_TYPES,
+    TAG_ENTITIES,
+    CustomFieldDefinition,
+    CustomFieldValue,
+    Tag,
+    tag_assignments,
+)
 from .employee import Department, Employee
 from .folder import CandidateFolder, CandidateFolderMember
 from .guest import GUEST_ACCESS_LEVELS, GUEST_STATUSES, Guest, guest_jobs
@@ -38,8 +47,11 @@ from .x360 import (
 
 __all__ = [
     "ACTIVITY_TYPES",
+    "CUSTOM_FIELD_ENTITIES",
+    "CUSTOM_FIELD_TYPES",
     "GUEST_ACCESS_LEVELS",
     "GUEST_STATUSES",
+    "TAG_ENTITIES",
     "Activity",
     "ApplicationStatus",
     "AssessmentAttempt",
@@ -50,6 +62,8 @@ __all__ = [
     "CandidateFolder",
     "CandidateFolderMember",
     "Company",
+    "CustomFieldDefinition",
+    "CustomFieldValue",
     "Department",
     "EmailLog",
     "EmailTemplate",
@@ -84,6 +98,7 @@ __all__ = [
     "SurveyResponse",
     "SurveyTemplate",
     "SurveyType",
+    "Tag",
     "UserGroup",
     "X360AssessmentAssignment",
     "X360AssessmentCycle",
@@ -95,6 +110,7 @@ __all__ = [
     "activity_assignees",
     "guest_jobs",
     "project_members",
+    "tag_assignments",
     "user_group_members",
     "user_group_roles",
 ]

@@ -45,10 +45,6 @@ NO_GUEST_BRANDING = (
 )
 NO_SUBSCRIPTION = "Croar meters usage with a credit wallet rather than seats and plans, so there is nothing to subscribe to."
 NO_PREMIUM_BOARDS = "Croar posts to free boards and feeds. There is no paid-posting contract, so no per-user permission or purchase history."
-NO_RESUMES = "Croar stores and shows the original CV. It does not re-render candidates onto a branded or custom template."
-NO_CUSTOM_FIELDS = "Croar has no custom-field system; candidate and job fields are fixed by the schema."
-NO_DASHBOARD_WIDGETS = "Croar dashboard is a fixed layout, not a widget board."
-NO_DEPARTMENTS = "Croar stores a department as free text on a job and as a table for employees, and the two are unrelated - there is no single department to customise."
 NO_CONTACTS = "Croar has candidates and team members, but no contacts or guests as separate record types."
 NO_REFERRAL = "Croar has no referral scheme, and no referrer field on a candidate."
 NO_SMS = "Croar reaches candidates by email only. There is no SMS gateway connected, so there is nothing to enable or bill."
@@ -253,20 +249,20 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "General",
                 "icon": "file-document-outline",
-                "description": "The default resume shown to guests.",
-                "unavailable": NO_RESUMES,
+                "description": "Which resume view opens first.",
+                "href": "/enterprise/administration/resumes/general",
             },
             {
                 "name": "Branded Resume",
                 "icon": "palette-outline",
                 "description": "Add your logo and watermark.",
-                "unavailable": NO_RESUMES,
+                "href": "/enterprise/administration/resumes/branded",
             },
             {
                 "name": "Custom Resume",
                 "icon": "file-cog-outline",
                 "description": "Edit custom resume settings.",
-                "unavailable": NO_RESUMES,
+                "href": "/enterprise/administration/resumes/custom",
             },
         ],
     },
@@ -285,8 +281,8 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Jobs",
                 "icon": "briefcase-edit-outline",
-                "description": "Pipeline stages are set per job, on the Rounds tab.",
-                "href": "/enterprise/jobs",
+                "description": "Custom fields, and where pipeline stages live.",
+                "href": "/enterprise/administration/customization/jobs",
             },
             {
                 "name": "Automations",
@@ -298,31 +294,31 @@ SECTIONS: list[dict[str, Any]] = [
                 "name": "Dashboard Widgets",
                 "icon": "view-dashboard-outline",
                 "description": "Customise what the dashboard shows.",
-                "unavailable": NO_DASHBOARD_WIDGETS,
+                "href": "/enterprise/administration/customization/dashboard",
             },
             {
                 "name": "Candidates",
                 "icon": "account-box-outline",
-                "description": "Custom fields, tags and industries.",
-                "unavailable": NO_CUSTOM_FIELDS,
+                "description": "Custom fields and tags for candidates.",
+                "href": "/enterprise/administration/customization/candidates",
             },
             {
                 "name": "Departments",
                 "icon": "sitemap-outline",
-                "description": "Department tags, visibility and custom fields.",
-                "unavailable": NO_DEPARTMENTS,
+                "description": "What you call them, and their custom fields.",
+                "href": "/enterprise/administration/customization/departments",
             },
             {
                 "name": "Contacts and Guests",
                 "icon": "card-account-mail-outline",
-                "description": "Contact and guest custom fields.",
-                "unavailable": NO_CONTACTS,
+                "description": "Custom fields for guests.",
+                "href": "/enterprise/administration/customization/guests",
             },
             {
                 "name": "Matches",
                 "icon": "target-variant",
                 "description": "Custom fields for matches.",
-                "unavailable": NO_CUSTOM_FIELDS,
+                "href": "/enterprise/administration/customization/matches",
             },
         ],
     },
