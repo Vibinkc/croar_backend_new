@@ -329,9 +329,18 @@ async def list_my_invites(
             SurveyInviteModel.status == SurveyInviteStatus.PENDING,
         )
         .options(
+            # SurveyInviteFull also renders instance.template.survey_type and employee. Both
+            # were missing here while the by-token endpoint loaded them, so this one raised
+            # MissingGreenlet on serialisation — a lazy load inside the response builder, where
+            # there is no greenlet to run it. The two endpoints share a response model, so they
+            # have to load the same graph.
             selectinload(SurveyInviteModel.instance)
             .selectinload(SurveyInstanceModel.template)
-            .selectinload(SurveyTemplateModel.questions)
+            .selectinload(SurveyTemplateModel.questions),
+            selectinload(SurveyInviteModel.instance)
+            .selectinload(SurveyInstanceModel.template)
+            .selectinload(SurveyTemplateModel.survey_type),
+            selectinload(SurveyInviteModel.employee),
         )
     )
     res = await db.execute(stmt)
