@@ -5,6 +5,7 @@ from .administration import router as administration_router
 from .applications import router as applications_router
 from .assessment import router as assessment_router
 from .assessment_templates import router as assessment_templates_router
+from .assets import router as assets_router
 from .audio import router as audio_router
 from .automation import router as automation_router
 from .candidate_assessment import router as candidate_assessment_router
@@ -31,6 +32,7 @@ from .job_portals import router as job_portals_router
 from .job_workspace import router as job_workspace_router
 from .jobs import router as jobs_router
 from .matches import router as matches_router
+from .offboarding import router as offboarding_router
 from .onboarding import router as onboarding_router
 from .onboarding_automation import router as onboarding_automation_router
 from .onboarding_templates import router as onboarding_templates_router
@@ -60,6 +62,8 @@ router.include_router(jobs_router)
 router.include_router(career_page_router)
 router.include_router(activities_router)
 router.include_router(administration_router)
+router.include_router(assets_router)
+router.include_router(offboarding_router)
 router.include_router(customization_router)
 router.include_router(data_management_router)
 router.include_router(guests_router)

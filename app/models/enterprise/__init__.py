@@ -1,5 +1,13 @@
 from .activity import ACTIVITY_TYPES, Activity, activity_assignees
 from .assessment import AssessmentAttempt, AssessmentAutomation, AssessmentTemplate
+from .asset import (
+    ASSET_CATEGORIES,
+    ASSET_OWNERSHIP,
+    ASSET_STATUSES,
+    RETURN_CONDITIONS,
+    Asset,
+    AssetAssignment,
+)
 from .base import EnterpriseBase
 from .candidate import ApplicationStatus, Candidate, CandidateApplication
 from .communication import EmailLog, EmailTemplate, MailAutomation
@@ -19,6 +27,14 @@ from .guest import GUEST_ACCESS_LEVELS, GUEST_STATUSES, Guest, guest_jobs
 from .hiring_agent import HiringAgent
 from .interview import Interview, InterviewAttempt, InterviewAutomation, InterviewSchedule
 from .job import JobPosting, JobRequirement, JobStatus
+from .offboarding import (
+    OFFBOARDING_REASONS,
+    OFFBOARDING_STATUSES,
+    OFFBOARDING_TYPES,
+    TASK_CATEGORIES,
+    Offboarding,
+    OffboardingTask,
+)
 from .onboarding import (
     Onboarding,
     OnboardingActivity,
@@ -47,16 +63,26 @@ from .x360 import (
 
 __all__ = [
     "ACTIVITY_TYPES",
+    "ASSET_CATEGORIES",
+    "ASSET_OWNERSHIP",
+    "ASSET_STATUSES",
     "CUSTOM_FIELD_ENTITIES",
     "CUSTOM_FIELD_TYPES",
     "GUEST_ACCESS_LEVELS",
     "GUEST_STATUSES",
+    "OFFBOARDING_REASONS",
+    "OFFBOARDING_STATUSES",
+    "OFFBOARDING_TYPES",
+    "RETURN_CONDITIONS",
     "TAG_ENTITIES",
+    "TASK_CATEGORIES",
     "Activity",
     "ApplicationStatus",
     "AssessmentAttempt",
     "AssessmentAutomation",
     "AssessmentTemplate",
+    "Asset",
+    "AssetAssignment",
     "Candidate",
     "CandidateApplication",
     "CandidateFolder",
@@ -80,6 +106,8 @@ __all__ = [
     "JobRequirement",
     "JobStatus",
     "MailAutomation",
+    "Offboarding",
+    "OffboardingTask",
     "Onboarding",
     "OnboardingActivity",
     "OnboardingAutomation",
