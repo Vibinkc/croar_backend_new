@@ -1,12 +1,13 @@
-"""Administration — Manatal's admin hub, and the two things behind it Croar could not do.
+"""Administration — Manatal's admin hub, and everything it holds.
 
 Their Administration is a hub of ten cards, each opening a sub-list of settings: Account &
 Users, Data Management, Integrations, Subscription, Career Page, Job Boards, Resumes,
 Customization, Features, Support.
 
 Most of what those cards hold, Croar already had — scattered across a "General" nav group where
-nobody looked for them. So the overview is mostly a map: every item Manatal lists, pointed at
-the Croar page that already does it. The value is the structure, not new code.
+nobody looked for them. Those pages now LIVE under /enterprise/administration rather than being
+linked out to, so clicking an item goes deeper with a breadcrumb instead of throwing you into a
+different part of the sidebar. The old paths redirect.
 
 Two items had no Croar equivalent and are built here for real:
 
@@ -55,17 +56,22 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Account",
                 "description": "Edit your organisation's name, logo and defaults.",
-                "href": "/enterprise/settings",
+                "href": "/enterprise/administration/account-and-users/account",
             },
             {
                 "name": "Users",
                 "description": "Manage the people with access to this account.",
-                "href": "/enterprise/team",
+                "href": "/enterprise/administration/account-and-users/users",
             },
             {
                 "name": "Roles & Permissions",
                 "description": "Manage roles and what each one may do.",
-                "href": "/enterprise/settings/roles",
+                "href": "/enterprise/administration/account-and-users/roles",
+            },
+            {
+                "name": "Partner companies",
+                "description": "Client companies this consultancy recruits for.",
+                "href": "/enterprise/administration/account-and-users/partners",
             },
             {
                 "name": "Guests",
@@ -107,7 +113,7 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Integrations",
                 "description": "Assessment, interview and mailbox connections.",
-                "href": "/enterprise/integrations",
+                "href": "/enterprise/administration/integrations/tools",
             },
             {
                 "name": "Mailboxes",
@@ -125,7 +131,7 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Credits",
                 "description": "Wallet balance and the ledger of what used it.",
-                "href": "/enterprise/credits",
+                "href": "/enterprise/administration/credits/wallet",
             },
             {
                 "name": "Plans & Invoices",
@@ -166,7 +172,7 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Job Portals",
                 "description": "Free boards, feeds and partner-gated boards.",
-                "href": "/enterprise/settings/job-portals",
+                "href": "/enterprise/administration/job-boards/portals",
             }
         ],
     },
@@ -192,7 +198,7 @@ SECTIONS: list[dict[str, Any]] = [
             {
                 "name": "Templates",
                 "description": "Email, assessment, interview and onboarding templates.",
-                "href": "/enterprise/templates",
+                "href": "/enterprise/administration/customization/templates",
             },
             {
                 "name": "Pipeline stages",
