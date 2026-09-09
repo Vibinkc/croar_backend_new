@@ -1,3 +1,4 @@
+from .activity import ACTIVITY_TYPES, Activity, activity_assignees
 from .assessment import AssessmentAttempt, AssessmentAutomation, AssessmentTemplate
 from .base import EnterpriseBase
 from .candidate import ApplicationStatus, Candidate, CandidateApplication
@@ -34,6 +35,8 @@ from .x360 import (
 )
 
 __all__ = [
+    "ACTIVITY_TYPES",
+    "Activity",
     "ApplicationStatus",
     "AssessmentAttempt",
     "AssessmentAutomation",
@@ -83,6 +86,7 @@ __all__ = [
     "X360EmployeeRaterMap",
     "X360Question",
     "X360TemplateQuestion",
+    "activity_assignees",
     "project_members",
 ]
 
