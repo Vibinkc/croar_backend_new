@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from .activities import router as activities_router
+from .administration import router as administration_router
 from .applications import router as applications_router
 from .assessment import router as assessment_router
 from .assessment_templates import router as assessment_templates_router
@@ -53,6 +54,7 @@ router.include_router(dashboard_router)
 router.include_router(jobs_router)
 router.include_router(career_page_router)
 router.include_router(activities_router)
+router.include_router(administration_router)
 router.include_router(folders_router)
 router.include_router(matches_router)
 router.include_router(reports_router)
