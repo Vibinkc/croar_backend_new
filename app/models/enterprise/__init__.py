@@ -8,6 +8,17 @@ from .asset import (
     Asset,
     AssetAssignment,
 )
+from .attendance import (
+    ATTENDANCE_SOURCES,
+    ATTENDANCE_STATUSES,
+    PUNCH_DIRECTIONS,
+    REGULARIZATION_STATUSES,
+    WORK_MODES,
+    AttendanceDay,
+    AttendancePunch,
+    AttendanceRegularization,
+    Shift,
+)
 from .base import EnterpriseBase
 from .candidate import ApplicationStatus, Candidate, CandidateApplication
 from .communication import EmailLog, EmailTemplate, MailAutomation
@@ -22,6 +33,16 @@ from .customization import (
     tag_assignments,
 )
 from .employee import Department, Employee
+from .expense import (
+    ADVANCE_STATUSES,
+    CLAIM_STATUSES,
+    PAYMENT_METHODS,
+    ExpenseAdvance,
+    ExpenseCategory,
+    ExpenseClaim,
+    ExpenseItem,
+    ExpensePayment,
+)
 from .folder import CandidateFolder, CandidateFolderMember
 from .guest import GUEST_ACCESS_LEVELS, GUEST_STATUSES, Guest, guest_jobs
 from .hiring_agent import HiringAgent
@@ -45,7 +66,32 @@ from .onboarding import (
     OnboardingTask,
     OnboardingTemplate,
 )
+from .performance import (
+    CYCLE_STATUSES,
+    OBJECTIVE_LEVELS,
+    OBJECTIVE_MEASURES,
+    OBJECTIVE_STATUSES,
+    REVIEW_STATUSES,
+    Objective,
+    ObjectiveCheckin,
+    ObjectiveTemplate,
+    Review,
+    ReviewCycle,
+)
 from .project import Project, project_members
+from .requests import (
+    CHANGE_STATUSES,
+    CHANGEABLE_FIELDS,
+    SIGNATURE_MODULES,
+    SIGNATURE_STATUSES,
+    TICKET_PRIORITIES,
+    TICKET_STATUSES,
+    ChangeRequest,
+    SignatureRequest,
+    Ticket,
+    TicketCategory,
+    TicketComment,
+)
 from .simulation import SimulationScenario, SimulationSession
 from .student import Student
 from .survey import SurveyInstance, SurveyInvite, SurveyQuestion, SurveyResponse, SurveyTemplate, SurveyType
@@ -63,19 +109,38 @@ from .x360 import (
 
 __all__ = [
     "ACTIVITY_TYPES",
+    "ADVANCE_STATUSES",
     "ASSET_CATEGORIES",
     "ASSET_OWNERSHIP",
     "ASSET_STATUSES",
+    "ATTENDANCE_SOURCES",
+    "ATTENDANCE_STATUSES",
+    "CHANGEABLE_FIELDS",
+    "CHANGE_STATUSES",
+    "CLAIM_STATUSES",
     "CUSTOM_FIELD_ENTITIES",
     "CUSTOM_FIELD_TYPES",
+    "CYCLE_STATUSES",
     "GUEST_ACCESS_LEVELS",
     "GUEST_STATUSES",
+    "OBJECTIVE_LEVELS",
+    "OBJECTIVE_MEASURES",
+    "OBJECTIVE_STATUSES",
     "OFFBOARDING_REASONS",
     "OFFBOARDING_STATUSES",
     "OFFBOARDING_TYPES",
+    "PAYMENT_METHODS",
+    "PUNCH_DIRECTIONS",
+    "REGULARIZATION_STATUSES",
     "RETURN_CONDITIONS",
+    "REVIEW_STATUSES",
+    "SIGNATURE_MODULES",
+    "SIGNATURE_STATUSES",
     "TAG_ENTITIES",
     "TASK_CATEGORIES",
+    "TICKET_PRIORITIES",
+    "TICKET_STATUSES",
+    "WORK_MODES",
     "Activity",
     "ApplicationStatus",
     "AssessmentAttempt",
@@ -83,10 +148,14 @@ __all__ = [
     "AssessmentTemplate",
     "Asset",
     "AssetAssignment",
+    "AttendanceDay",
+    "AttendancePunch",
+    "AttendanceRegularization",
     "Candidate",
     "CandidateApplication",
     "CandidateFolder",
     "CandidateFolderMember",
+    "ChangeRequest",
     "Company",
     "CustomFieldDefinition",
     "CustomFieldValue",
@@ -96,6 +165,11 @@ __all__ = [
     "Employee",
     "EnterpriseBase",
     "EnterpriseUser",
+    "ExpenseAdvance",
+    "ExpenseCategory",
+    "ExpenseClaim",
+    "ExpenseItem",
+    "ExpensePayment",
     "Guest",
     "HiringAgent",
     "Interview",
@@ -106,6 +180,9 @@ __all__ = [
     "JobRequirement",
     "JobStatus",
     "MailAutomation",
+    "Objective",
+    "ObjectiveCheckin",
+    "ObjectiveTemplate",
     "Offboarding",
     "OffboardingTask",
     "Onboarding",
@@ -117,6 +194,10 @@ __all__ = [
     "OnboardingTask",
     "OnboardingTemplate",
     "Project",
+    "Review",
+    "ReviewCycle",
+    "Shift",
+    "SignatureRequest",
     "SimulationScenario",
     "SimulationSession",
     "Student",
@@ -127,6 +208,9 @@ __all__ = [
     "SurveyTemplate",
     "SurveyType",
     "Tag",
+    "Ticket",
+    "TicketCategory",
+    "TicketComment",
     "UserGroup",
     "X360AssessmentAssignment",
     "X360AssessmentCycle",
