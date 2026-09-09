@@ -65,6 +65,23 @@ class Candidate(EnterpriseBase):
     updated_at: Mapped[TIMESTAMP] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
+    # ── GDPR consent ────────────────────────────────────────────────────────
+    # Three columns rather than one boolean, because "do we have consent" is not the question
+    # a regulator asks. They ask when it was given, how, and when it runs out — and a bare
+    # true/false can answer none of those.
+    #
+    # NULL status is not the same as refused: it means nobody has asked yet, which is the state
+    # every candidate sourced from the web starts in and is worth being able to find.
+    consent_status: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    consent_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    # How it was obtained — an apply form, a reply to a request, or someone recording it by hand.
+    # Kept because "they consented" is worth very little without being able to say where.
+    consent_source: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # When the lawful basis lapses. Retention periods are the part teams forget, so it is a
+    # column rather than a policy in someone's head.
+    consent_expires_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    consent_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
 
 

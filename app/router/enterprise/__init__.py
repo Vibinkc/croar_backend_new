@@ -16,6 +16,7 @@ from .communication import router as communication_router
 from .company import router as company_router
 from .credits import router as credits_router
 from .dashboard import router as dashboard_router
+from .data_management import router as data_management_router
 from .employees import router as employees_router
 from .folders import router as folders_router
 from .hiring_agent import router as hiring_agent_router
@@ -55,6 +56,7 @@ router.include_router(jobs_router)
 router.include_router(career_page_router)
 router.include_router(activities_router)
 router.include_router(administration_router)
+router.include_router(data_management_router)
 router.include_router(folders_router)
 router.include_router(matches_router)
 router.include_router(reports_router)

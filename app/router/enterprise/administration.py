@@ -115,10 +115,14 @@ SECTIONS: list[dict[str, Any]] = [
             },
             {
                 "name": "Data Import",
-                "description": "Import candidates, jobs, departments and more.",
-                "unavailable": NO_IMPORT,
+                "description": "Import candidates from a CSV file.",
+                "href": "/enterprise/administration/data-management/import",
             },
-            {"name": "GDPR Tracking", "description": "Track candidate GDPR consent.", "unavailable": NO_GDPR},
+            {
+                "name": "GDPR Tracking",
+                "description": "Track candidate GDPR consent.",
+                "href": "/enterprise/administration/data-management/gdpr",
+            },
         ],
     },
     {
