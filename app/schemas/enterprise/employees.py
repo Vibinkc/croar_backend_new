@@ -73,6 +73,19 @@ class EmployeeBase(BaseModel):
     skills: list[str] | None = []
     documents: list[dict[str, Any]] | None = []
 
+    # ----- Payroll identifiers -----
+    # These live on the Employee model but were absent from every schema, so
+    # there was no way to set them through the API at all: the payroll module
+    # shipped its own employee router, that router was dropped in favour of this
+    # one, and the fields came with the model but not the contract. Payroll
+    # needs them — without a bank account nobody can be paid, and PF/ESI compute
+    # against UAN/ESIC — so they belong on the employee record proper.
+    location: str | None = None
+    bank_account_no: str | None = None
+    uan: str | None = None
+    esic_number: str | None = None
+    date_of_joining: date | None = None
+
     @field_validator("*", mode="before")
     @classmethod
     def empty_string_to_none(cls, v: Any) -> Any:
@@ -126,6 +139,13 @@ class EmployeeUpdate(BaseModel):
     roles_responsibilities: str | None = None
     skills: list[str] | None = None
     documents: list[dict[str, Any]] | None = None
+
+    # Same payroll identifiers as EmployeeBase — see the note there.
+    location: str | None = None
+    bank_account_no: str | None = None
+    uan: str | None = None
+    esic_number: str | None = None
+    date_of_joining: date | None = None
 
     @field_validator("*", mode="before")
     @classmethod

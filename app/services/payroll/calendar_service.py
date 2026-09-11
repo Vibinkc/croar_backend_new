@@ -10,6 +10,7 @@ working days in the period (calendar days minus weekly-offs minus holidays).
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -134,3 +135,76 @@ async def delete_holiday(db: AsyncSession, company_id: uuid.UUID, holiday_id: uu
     except Exception:
         await db.rollback()
         raise
+
+
+async def import_holidays(
+    db: AsyncSession, company_id: uuid.UUID, rows: list[tuple[date, str]], *, replace: bool = False
+) -> dict[str, Any]:
+    """Bulk-create holidays, skipping dates that already have one.
+
+    Typing a year of public holidays one at a time is the kind of task people simply do not do,
+    and a work calendar with no holidays silently inflates every month's working days — which
+    under-pays anyone with loss-of-pay. So the import exists to make the calendar likely to be
+    filled in at all.
+
+    Duplicates are skipped rather than failing the batch. A spreadsheet of a whole year almost
+    always overlaps what is already there, and refusing the file over one clash would mean
+    hand-editing the file to import it.
+
+    ``replace`` clears the affected years first, for the case where the list itself was wrong
+    and the point is to start over. It is scoped to the years present in the file rather than
+    the whole table, so importing next year never erases this year.
+    """
+    if not rows:
+        return {"created": 0, "skipped": [], "replaced": 0}
+
+    replaced = 0
+    if replace:
+        years = {d.year for d, _ in rows}
+        existing = (
+            (
+                await db.execute(
+                    select(Holiday).where(Holiday.company_id == company_id, Holiday.deleted_at.is_(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for h in existing:
+            if h.holiday_date.year in years:
+                await db.delete(h)
+                replaced += 1
+        await db.flush()
+
+    taken = {
+        h.holiday_date
+        for h in (
+            (
+                await db.execute(
+                    select(Holiday).where(Holiday.company_id == company_id, Holiday.deleted_at.is_(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    }
+
+    created = 0
+    skipped: list[dict[str, str]] = []
+    # Deduplicate within the file too — a spreadsheet can list the same date twice, and the
+    # second one would otherwise trip the unique constraint and roll the whole batch back.
+    seen: set[date] = set()
+    for holiday_date, name in rows:
+        if holiday_date in taken or holiday_date in seen:
+            skipped.append({"date": holiday_date.isoformat(), "name": name, "reason": "already exists"})
+            continue
+        seen.add(holiday_date)
+        db.add(Holiday(company_id=company_id, holiday_date=holiday_date, name=name))
+        created += 1
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    return {"created": created, "skipped": skipped, "replaced": replaced}

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
@@ -78,26 +78,49 @@ async def create_employee(
         object, Depends(PermissionChecker(ModuleScope.employees, PermissionAction.create))
     ],
 ) -> Employee:
-    # Check for duplicate email (Global uniqueness as per schema)
-    email_stmt = select(Employee).where(Employee.email == request.email)
-    existing_email = await session.execute(email_stmt)
-    if existing_email.scalar_one_or_none():
+    company_id = getattr(current_user, "company_id", None)
+
+    # Both checks are scoped to this company and skip archived rows.
+    #
+    # They used to be global and to count soft-deleted records, which was wrong twice over. A
+    # global check refused an address already used by a *different* tenant, so one customer's
+    # sign-up could be blocked by another's — and the refusal itself confirmed the address was
+    # in use elsewhere. Counting archived rows meant deleting an employee locked their email and
+    # code out of that company permanently: the person could never be re-added after leaving and
+    # returning. The table's uniqueness is (company_id, email) among live rows, so that is what
+    # these now ask.
+    dupe_email = (
+        await session.execute(
+            select(Employee).where(
+                Employee.company_id == company_id,
+                func.lower(Employee.email) == request.email.lower(),
+                Employee.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if dupe_email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Employee with email '{request.email}' already exists.",
         )
 
-    # Check for duplicate employee_id (Global uniqueness as per schema)
-    id_stmt = select(Employee).where(Employee.employee_id == request.employee_id)
-    existing_id = await session.execute(id_stmt)
-    if existing_id.scalar_one_or_none():
+    dupe_code = (
+        await session.execute(
+            select(Employee).where(
+                Employee.company_id == company_id,
+                Employee.employee_id == request.employee_id,
+                Employee.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if dupe_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Employee with ID '{request.employee_id}' already exists.",
         )
 
     data = request.model_dump()
-    data["company_id"] = getattr(current_user, "company_id", None)
+    data["company_id"] = company_id
     employee = Employee(**data)
     session.add(employee)
     try:

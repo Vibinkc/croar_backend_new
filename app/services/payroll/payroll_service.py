@@ -844,6 +844,20 @@ async def run_payroll(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
         Decimal("0.00"),
     )
 
+    # Names for the skipped list. `employees` is the set this run considered, and
+    # every skip came from it, so no extra query is needed.
+    names_by_id = {e.id: f"{e.first_name} {e.last_name}".strip() for e in employees}
+    skipped_detail: list[dict[str, Any]] = []
+    for entry in skipped:
+        emp_id = entry.get("employee_id")
+        skipped_detail.append(
+            {
+                "employee_id": str(emp_id) if emp_id is not None else "",
+                "name": names_by_id.get(emp_id, "") if isinstance(emp_id, uuid.UUID) else "",
+                "reason": str(entry.get("reason", "")),
+            }
+        )
+
     cycle.totals = {
         "headcount": len(all_payslips),
         "gross": float(total_gross),
@@ -852,6 +866,11 @@ async def run_payroll(db: AsyncSession, cycle_id: uuid.UUID, company_id: uuid.UU
         # Employer-side statutory cost and total cost-to-company for the cycle.
         "employer_cost": float(total_employer),
         "total_cost": float(total_gross + total_employer),
+        # Who this run left out, and why. Returned to the caller anyway, but the
+        # answer is only useful later — "why wasn't this person paid?" gets asked
+        # days after the run, when the response body is long gone. The Skipped
+        # Summary report reads it from here.
+        "skipped": skipped_detail,
     }
     cycle.status = PayrollCycleStatus.PROCESSING.value
 

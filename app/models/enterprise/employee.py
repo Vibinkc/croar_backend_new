@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import TIMESTAMP, Date, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import TIMESTAMP, Date, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import text
@@ -35,8 +35,25 @@ class Employee(EnterpriseBase):
     # composite with company_id — a global unique constraint collides across tenants (every
     # company's first hire is EMP-1001, and the same person can be an employee at two orgs).
     __table_args__ = (
-        UniqueConstraint("company_id", "employee_id", name="uq_employees_company_employee_id"),
-        UniqueConstraint("company_id", "email", name="uq_employees_company_email"),
+        # Partial unique indexes, not plain constraints: uniqueness applies among *live*
+        # rows only. A flat UNIQUE(company_id, email) counts soft-deleted rows too, so
+        # archiving an employee held their address and code hostage forever — the same
+        # person could never be re-added after leaving and returning, and the API had no
+        # way around it. This matches the convention already used on salary_structures.
+        Index(
+            "uq_employees_company_employee_id",
+            "company_id",
+            "employee_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_employees_company_email",
+            "company_id",
+            "email",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

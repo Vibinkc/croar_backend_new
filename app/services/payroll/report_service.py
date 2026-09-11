@@ -153,6 +153,32 @@ async def payroll_summary_records(db: AsyncSession, company_id: uuid.UUID) -> li
 # ---------------------------------------------------------------------------
 # Serialisers
 # ---------------------------------------------------------------------------
+def _latin1(text: str) -> str:
+    """Make `text` safe for the core PDF fonts, which are Latin-1 only.
+
+    fpdf2's built-in Helvetica raises on any character outside Latin-1 rather
+    than substituting one, so a single Korean or Japanese name — both of which
+    Croar supports elsewhere — would fail the whole report instead of one cell.
+
+    Curly punctuation is folded to its ASCII equivalent because that is lossless
+    in practice; anything else becomes "?" so the row still renders and the gap
+    is visible. The real fix is an embedded Unicode font: that means shipping a
+    TTF, so it is deliberately left for when a CJK payroll actually needs it.
+    """
+    if text.isascii():
+        return text
+    folded = (
+        text.replace("‘", "'")
+        .replace("’", "'")
+        .replace("“", '"')
+        .replace("”", '"')
+        .replace("–", "-")
+        .replace("—", "-")
+        .replace("…", "...")
+    )
+    return folded.encode("latin-1", "replace").decode("latin-1")
+
+
 def _fmt(value: Any, numeric: bool) -> str:
     if numeric:
         return f"{float(value or 0):,.2f}" if isinstance(value, float) else str(value)
@@ -182,11 +208,14 @@ def _table_pdf(
     pdf.add_page()
 
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 8, title, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    # Title and subtitle skip _fit (they span the page), so they are sanitised
+    # here — a company name is the most likely place a non-Latin-1 character
+    # enters a report.
+    pdf.cell(0, 8, _latin1(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
     if subtitle:
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*_MUTED)
-        pdf.cell(0, 5, subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.cell(0, 5, _latin1(subtitle), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         pdf.set_text_color(0, 0, 0)
     pdf.ln(2)
 
@@ -198,10 +227,14 @@ def _table_pdf(
         """Truncate `text` to the cell's inner width, measured in the *current*
         font — so a value is clipped only when it genuinely doesn't fit (the old
         rough char budget over-truncated names/PAN that would have fit)."""
+        text = _latin1(text)
         avail = width - 2 * pdf.c_margin
         if not text or pdf.get_string_width(text) <= avail:
             return text
-        ellipsis = "…"
+        # ASCII, not "…": the core PDF fonts are Latin-1 only, and U+2026 is
+        # outside it. Appending it raised FPDFUnicodeEncodingException on every
+        # value long enough to need truncating, which took the whole report down.
+        ellipsis = "..."
         while text and pdf.get_string_width(text + ellipsis) > avail:
             text = text[:-1]
         return text + ellipsis if text else ellipsis

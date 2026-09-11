@@ -6,6 +6,7 @@ from .applications import router as applications_router
 from .assessment import router as assessment_router
 from .assessment_templates import router as assessment_templates_router
 from .assets import router as assets_router
+from .attendance import router as attendance_router
 from .audio import router as audio_router
 from .automation import router as automation_router
 from .candidate_assessment import router as candidate_assessment_router
@@ -63,6 +64,7 @@ router.include_router(career_page_router)
 router.include_router(activities_router)
 router.include_router(administration_router)
 router.include_router(assets_router)
+router.include_router(attendance_router)
 router.include_router(offboarding_router)
 router.include_router(customization_router)
 router.include_router(data_management_router)

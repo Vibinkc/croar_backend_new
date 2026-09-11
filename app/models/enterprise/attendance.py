@@ -23,7 +23,7 @@ path is letting people edit their own attendance, which makes the record worthle
 """
 
 import uuid
-from datetime import date, time
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     TIMESTAMP,
@@ -86,11 +86,11 @@ class Shift(EnterpriseBase):
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
-    deleted_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
 
 
 class AttendanceDay(EnterpriseBase):
@@ -119,8 +119,8 @@ class AttendanceDay(EnterpriseBase):
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="web")
 
     # Derived from the punches, stored so a month view is one query rather than one per day.
-    first_in: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
-    last_out: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    first_in: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    last_out: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     work_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     late_minutes: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
@@ -132,8 +132,8 @@ class AttendanceDay(EnterpriseBase):
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 
@@ -159,7 +159,7 @@ class AttendancePunch(EnterpriseBase):
         UUID(as_uuid=True), ForeignKey("attendance_days.id", ondelete="CASCADE"), nullable=False, index=True
     )
     direction: Mapped[str] = mapped_column(String(4), nullable=False)
-    punched_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, nullable=False)
+    punched_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False)
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="web")
     # Free text rather than coordinates: this is "Bangalore office" or "client site", which is
     # what anyone reviewing a log actually wants, and it avoids storing precise location.
@@ -169,7 +169,7 @@ class AttendancePunch(EnterpriseBase):
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
 
     day = relationship("AttendanceDay", back_populates="punches")
 
@@ -194,23 +194,23 @@ class AttendanceRegularization(EnterpriseBase):
 
     # What they are asking for. Applied to the day only once approved.
     requested_status: Mapped[str] = mapped_column(String(20), nullable=False)
-    requested_in: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
-    requested_out: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    requested_in: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
+    requested_out: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     requested_work_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="pending", index=True)
     requested_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    requested_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, nullable=False, server_default=func.now())
+    requested_at: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, server_default=func.now())
     decided_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    decided_at: Mapped[TIMESTAMP | None] = mapped_column(TIMESTAMP, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(TIMESTAMP, nullable=True)
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     company_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("companies.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    created_at: Mapped[TIMESTAMP] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
-    updated_at: Mapped[TIMESTAMP] = mapped_column(
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=func.now(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
         TIMESTAMP, default=func.now(), server_default=func.now(), onupdate=func.now()
     )
 

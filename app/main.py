@@ -85,6 +85,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers` governs what the browser may *send*; it does nothing for reading
+    # response headers back. Without this, JS could not see Content-Disposition, so every
+    # download fell back to guessing a name from the content type — and anything that was
+    # not CSV or PDF (the .docx payslip sample, for one) saved as "download.bin".
+    expose_headers=["Content-Disposition"],
 )
 
 # ----- Payroll activity-trail middleware (ported from the payroll module) -----
