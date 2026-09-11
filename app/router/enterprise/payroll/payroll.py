@@ -62,6 +62,24 @@ async def create_salary_structure(
     company_id: uuid.UUID = Depends(get_current_company_id),
     _: object = Depends(require_permission(Permission.PAYROLL_CONFIGURE)),
 ) -> SalaryStructure:
+    # Check the employee exists, and belongs to this company, before building the row.
+    #
+    # Without this the bad id reached Postgres, tripped the foreign key, and came back to the
+    # caller as a 500 "database error" — which reads as a broken server rather than a bad
+    # request. Scoping to company_id also stops a structure being attached to somebody else's
+    # employee: a 404 rather than a 403, so the response cannot confirm the id exists elsewhere.
+    employee = (
+        await db.execute(
+            select(Employee).where(
+                Employee.id == payload.employee_id,
+                Employee.company_id == company_id,
+                Employee.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if employee is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Employee not found.")
+
     if payload.is_active:
         existing = (
             await db.execute(

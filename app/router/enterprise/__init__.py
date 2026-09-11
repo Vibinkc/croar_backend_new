@@ -19,6 +19,7 @@ from .company import router as company_router
 from .credits import router as credits_router
 from .customization import router as customization_router
 from .dashboard import router as dashboard_router
+from .dashboard_overview import router as dashboard_overview_router
 from .data_management import router as data_management_router
 from .employees import router as employees_router
 from .folders import router as folders_router
@@ -65,6 +66,7 @@ router.include_router(activities_router)
 router.include_router(administration_router)
 router.include_router(assets_router)
 router.include_router(attendance_router)
+router.include_router(dashboard_overview_router)
 router.include_router(offboarding_router)
 router.include_router(customization_router)
 router.include_router(data_management_router)

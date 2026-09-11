@@ -1,4 +1,5 @@
 from fastapi import Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -33,9 +34,19 @@ def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
 
 
 def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    logger.warning(f"Validation Error | Path: {request.url.path} | Errors: {exc.errors()}")
+    """Report a bad request as 422, including on fields the stdlib cannot serialise.
+
+    ``exc.errors()`` echoes the offending value back under ``input``, and for a Decimal field
+    that value is a ``Decimal`` — which ``json.dumps`` refuses. The handler then raised inside
+    itself and the caller got a 500, so every money field in payroll turned a bad request into
+    what looked like a broken server. ``jsonable_encoder`` is what FastAPI's own default handler
+    uses; it knows Decimal, UUID, datetime and the rest.
+    """
+    errors = exc.errors()
+    logger.warning(f"Validation Error | Path: {request.url.path} | Errors: {errors}")
     return JSONResponse(
-        status_code=422, content={"success": False, "message": "Validation Failed", "detail": exc.errors()}
+        status_code=422,
+        content=jsonable_encoder({"success": False, "message": "Validation Failed", "detail": errors}),
     )
 
 
