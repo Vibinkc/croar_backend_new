@@ -25,7 +25,11 @@ class TestPasswordHashing:
         assert verify_password("wrong", h) is False
 
     def test_hash_is_salted_so_two_hashes_differ(self):
-        assert get_password_hash("same") != get_password_hash("same")
+        # Two separate calls, named so it is plain that this compares two hashes of the same
+        # password rather than an expression against itself — bcrypt salts each one.
+        first = get_password_hash("same")
+        second = get_password_hash("same")
+        assert first != second
 
     def test_hash_is_not_plaintext(self):
         assert get_password_hash("plaintext") != "plaintext"

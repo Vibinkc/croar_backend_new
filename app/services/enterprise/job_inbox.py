@@ -28,6 +28,7 @@ import uuid as _uuid
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, cast
 
+import aiofiles
 from loguru import logger
 from sqlalchemy import func, select
 
@@ -204,8 +205,10 @@ async def create_candidate_from_cv(
     try:
         os.makedirs(RESUME_DIR, exist_ok=True)
         stored = f"{_uuid.uuid4().hex[:8]}_{original}"
-        with open(os.path.join(RESUME_DIR, stored), "wb") as fh:
-            fh.write(data)
+        # aiofiles, not open(): this runs while polling a mailbox, so a slow disk here would
+        # block the event loop for every other request.
+        async with aiofiles.open(os.path.join(RESUME_DIR, stored), "wb") as fh:
+            await fh.write(data)
         resume_path = f"{RESUME_DIR}/{stored}"
     except OSError:
         pass

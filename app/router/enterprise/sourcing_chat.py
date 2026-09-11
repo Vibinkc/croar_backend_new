@@ -1331,7 +1331,12 @@ def _fill_merge_fields(text: str) -> str:
     # Bounded runs cap the backtracking an unclosed "{a|b|b|b..." can trigger. The limits are
     # far above any real spintax (200 chars per option, 20 alternatives), so the same strings
     # match and the same option is picked.
-    out = _re.sub(r"\{([^{}|]{1,200}(?:\|[^{}|]{1,200}){1,20})\}", lambda m: m.group(1).split("|")[0], out)
+    #
+    # The quantifiers are possessive on top of that. Options cannot contain "|", so the way a
+    # run splits into options is never ambiguous and there is nothing useful to backtrack into;
+    # saying so explicitly drops the nested-quantifier shape that reads as super-linear. Same
+    # language either way, checked exhaustively over every string up to length 6 on {,},|,a,b.
+    out = _re.sub(r"\{([^{}|]{1,200}+(?:\|[^{}|]{1,200}+){1,20}+)\}", lambda m: m.group(1).split("|")[0], out)
     # Any leftover {{...}} -> stripped braces
     out = _re.sub(r"\{\{\s*([^{}]+?)\s*\}\}", r"\1", out)
     return out

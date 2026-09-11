@@ -15,6 +15,7 @@ import uuid as uuid_lib
 from typing import Annotated, Any, cast
 from uuid import UUID
 
+import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import func, select
 
@@ -240,8 +241,10 @@ async def upload_job_attachment(
     # "brief.pdf" must not overwrite each other.
     stored = f"{uuid_lib.uuid4().hex}{ext}"
     try:
-        with open(os.path.join(JOB_ATTACHMENT_DIR, stored), "wb") as fh:
-            fh.write(data)
+        # aiofiles, not open(): a 20 MB write on the event loop stalls every other request in
+        # flight. Same pattern the public upload routes already use.
+        async with aiofiles.open(os.path.join(JOB_ATTACHMENT_DIR, stored), "wb") as fh:
+            await fh.write(data)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e!s}") from e
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import hmac
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, cast
 
@@ -42,6 +42,15 @@ _settings = get_settings()
 # number, and the two must agree — a candidate should not pass an internal test and fail an
 # external one on an identical score.
 DEFAULT_PASS_SCORE = 60
+
+
+def _utcnow() -> datetime:
+    """The naive UTC timestamp datetime.utcnow() used to return, without the deprecated call.
+
+    AssessmentAttempt.completed_at is a plain DateTime column, so the value must stay naive -
+    handing SQLAlchemy an aware datetime here would change what gets stored.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def company_token(company_id: Any) -> str:
@@ -189,7 +198,7 @@ async def record_result(
 
     attempt.score = numeric
     attempt.status = status
-    attempt.completed_at = cast("Any", datetime.utcnow())
+    attempt.completed_at = cast("Any", _utcnow())
     # The provider's payload verbatim. When a score looks wrong, the only way to tell a bad
     # mapping from a bad test is to have kept what they actually sent.
     attempt.answers = {
